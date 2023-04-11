@@ -13,10 +13,9 @@
 #include "qemu/osdep.h"
 
 #include "standard-headers/linux/virtio_config.h"
-#include "tests/qtest/libqos/libqtest.h"
+#include "tests/qtest/libqtest.h"
 #include "tests/qtest/libqos/virtio-net.h"
 #include "fuzz.h"
-#include "fork_fuzz.h"
 #include "qos_fuzz.h"
 
 
@@ -115,66 +114,33 @@ static void virtio_net_fuzz_multi(QTestState *s,
     }
 }
 
-static void virtio_net_fork_fuzz(QTestState *s,
-        const unsigned char *Data, size_t Size)
-{
-    if (fork() == 0) {
-        virtio_net_fuzz_multi(s, Data, Size, false);
-        flush_events(s);
-        _Exit(0);
-    } else {
-        flush_events(s);
-        wait(NULL);
-    }
-}
 
-static void virtio_net_fork_fuzz_check_used(QTestState *s,
+static void virtio_net_fuzz_check_used(QTestState *s,
         const unsigned char *Data, size_t Size)
 {
-    if (fork() == 0) {
-        virtio_net_fuzz_multi(s, Data, Size, true);
-        flush_events(s);
-        _Exit(0);
-    } else {
-        flush_events(s);
-        wait(NULL);
-    }
+    virtio_net_fuzz_multi(s, Data, Size, true);
+    flush_events(s);
+    fuzz_reset(s);
 }
 
 static void virtio_net_pre_fuzz(QTestState *s)
 {
     qos_init_path(s);
-    counter_shm_init();
 }
 
 static void *virtio_net_test_setup_socket(GString *cmd_line, void *arg)
 {
     int ret = socketpair(PF_UNIX, SOCK_STREAM, 0, sockfds);
     g_assert_cmpint(ret, !=, -1);
-    fcntl(sockfds[0], F_SETFL, O_NONBLOCK);
+    g_unix_set_fd_nonblocking(sockfds[0], true, NULL);
     sockfds_initialized = true;
     g_string_append_printf(cmd_line, " -netdev socket,fd=%d,id=hs0 ",
                            sockfds[1]);
     return arg;
 }
 
-static void *virtio_net_test_setup_user(GString *cmd_line, void *arg)
-{
-    g_string_append_printf(cmd_line, " -netdev user,id=hs0 ");
-    return arg;
-}
-
 static void register_virtio_net_fuzz_targets(void)
 {
-    fuzz_add_qos_target(&(FuzzTarget){
-            .name = "virtio-net-socket",
-            .description = "Fuzz the virtio-net virtual queues. Fuzz incoming "
-            "traffic using the socket backend",
-            .pre_fuzz = &virtio_net_pre_fuzz,
-            .fuzz = virtio_net_fork_fuzz,},
-            "virtio-net",
-            &(QOSGraphTestOptions){.before = virtio_net_test_setup_socket}
-            );
 
     fuzz_add_qos_target(&(FuzzTarget){
             .name = "virtio-net-socket-check-used",
@@ -182,19 +148,9 @@ static void register_virtio_net_fuzz_targets(void)
             "descriptors to be used. Timeout may indicate improperly handled "
             "input",
             .pre_fuzz = &virtio_net_pre_fuzz,
-            .fuzz = virtio_net_fork_fuzz_check_used,},
+            .fuzz = virtio_net_fuzz_check_used,},
             "virtio-net",
             &(QOSGraphTestOptions){.before = virtio_net_test_setup_socket}
-            );
-    fuzz_add_qos_target(&(FuzzTarget){
-            .name = "virtio-net-slirp",
-            .description = "Fuzz the virtio-net virtual queues with the slirp "
-            " backend. Warning: May result in network traffic emitted from the "
-            " process. Run in an isolated network environment.",
-            .pre_fuzz = &virtio_net_pre_fuzz,
-            .fuzz = virtio_net_fork_fuzz,},
-            "virtio-net",
-            &(QOSGraphTestOptions){.before = virtio_net_test_setup_user}
             );
 }
 

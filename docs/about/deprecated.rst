@@ -20,6 +20,20 @@ they were first deprecated in the 2.10.0 release.
 What follows is a list of all features currently marked as
 deprecated.
 
+Build options
+-------------
+
+``gprof`` builds (since 8.0)
+''''''''''''''''''''''''''''
+
+The ``--enable-gprof`` configure setting relies on compiler
+instrumentation to gather its data which can distort the generated
+profile. As other non-instrumenting tools are available that give a
+more holistic view of the system with non-instrumented binaries we are
+deprecating the build option and no longer defend it in CI. The
+``--enable-gcov`` build option remains for analysis test case
+coverage.
+
 System emulator command line arguments
 --------------------------------------
 
@@ -39,21 +53,6 @@ should specify an ``audiodev=`` property.  Additionally, when using
 vnc, you should specify an ``audiodev=`` property if you plan to
 transmit audio through the VNC protocol.
 
-Creating sound card devices using ``-soundhw`` (since 5.1)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-Sound card devices should be created using ``-device`` instead.  The
-names are the same for most devices.  The exceptions are ``hda`` which
-needs two devices (``-device intel-hda -device hda-duplex``) and
-``pcspk`` which can be activated using ``-machine
-pcspk-audiodev=<name>``.
-
-``-chardev`` backend aliases ``tty`` and ``parport`` (since 6.0)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-``tty`` and ``parport`` are aliases that will be removed. Instead, the
-actual backend names ``serial`` and ``parallel`` should be used.
-
 Short-form boolean options (since 6.0)
 ''''''''''''''''''''''''''''''''''''''
 
@@ -66,104 +65,6 @@ and will cause a warning.
 
 The replacement for the ``nodelay`` short-form boolean option is ``nodelay=on``
 rather than ``delay=off``.
-
-``--enable-fips`` (since 6.0)
-'''''''''''''''''''''''''''''
-
-This option restricts usage of certain cryptographic algorithms when
-the host is operating in FIPS mode.
-
-If FIPS compliance is required, QEMU should be built with the ``libgcrypt``
-library enabled as a cryptography provider.
-
-Neither the ``nettle`` library, or the built-in cryptography provider are
-supported on FIPS enabled hosts.
-
-``-writeconfig`` (since 6.0)
-'''''''''''''''''''''''''''''
-
-The ``-writeconfig`` option is not able to serialize the entire contents
-of the QEMU command line.  It is thus considered a failed experiment
-and deprecated, with no current replacement.
-
-Userspace local APIC with KVM (x86, since 6.0)
-''''''''''''''''''''''''''''''''''''''''''''''
-
-Using ``-M kernel-irqchip=off`` with x86 machine types that include a local
-APIC is deprecated.  The ``split`` setting is supported, as is using
-``-M kernel-irqchip=off`` with the ISA PC machine type.
-
-hexadecimal sizes with scaling multipliers (since 6.0)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-Input parameters that take a size value should only use a size suffix
-(such as 'k' or 'M') when the base is written in decimal, and not when
-the value is hexadecimal.  That is, '0x20M' is deprecated, and should
-be written either as '32M' or as '0x2000000'.
-
-``-spice password=string`` (since 6.0)
-''''''''''''''''''''''''''''''''''''''
-
-This option is insecure because the SPICE password remains visible in
-the process listing. This is replaced by the new ``password-secret``
-option which lets the password be securely provided on the command
-line using a ``secret`` object instance.
-
-``opened`` property of ``rng-*`` objects (since 6.0)
-''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-The only effect of specifying ``opened=on`` in the command line or QMP
-``object-add`` is that the device is opened immediately, possibly before all
-other options have been processed.  This will either have no effect (if
-``opened`` was the last option) or cause errors.  The property is therefore
-useless and should not be specified.
-
-``loaded`` property of ``secret`` and ``secret_keyring`` objects (since 6.0)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-The only effect of specifying ``loaded=on`` in the command line or QMP
-``object-add`` is that the secret is loaded immediately, possibly before all
-other options have been processed.  This will either have no effect (if
-``loaded`` was the last option) or cause options to be effectively ignored as
-if they were not given.  The property is therefore useless and should not be
-specified.
-
-``-display sdl,window_close=...`` (since 6.1)
-'''''''''''''''''''''''''''''''''''''''''''''
-
-Use ``-display sdl,window-close=...`` instead (i.e. with a minus instead of
-an underscore between "window" and "close").
-
-``-no-quit`` (since 6.1)
-''''''''''''''''''''''''
-
-The ``-no-quit`` is a synonym for ``-display ...,window-close=off`` which
-should be used instead.
-
-``-alt-grab`` and ``-display sdl,alt_grab=on`` (since 6.2)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-Use ``-display sdl,grab-mod=lshift-lctrl-lalt`` instead.
-
-``-ctrl-grab`` and ``-display sdl,ctrl_grab=on`` (since 6.2)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-Use ``-display sdl,grab-mod=rctrl`` instead.
-
-``-sdl`` (since 6.2)
-''''''''''''''''''''
-
-Use ``-display sdl`` instead.
-
-``-curses`` (since 6.2)
-'''''''''''''''''''''''
-
-Use ``-display curses`` instead.
-
-``-watchdog`` (since 6.2)
-'''''''''''''''''''''''''
-
-Use ``-device`` instead.
 
 ``-smp`` ("parameter=0" SMP configurations) (since 6.2)
 '''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -192,11 +93,23 @@ as short-form boolean values, and passed to plugins as ``arg_name=on``.
 However, short-form booleans are deprecated and full explicit ``arg_name=on``
 form is preferred.
 
-``-drive if=none`` for the sifive_u OTP device (since 6.2)
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+``-no-hpet`` (since 8.0)
+''''''''''''''''''''''''
 
-Using ``-drive if=none`` to configure the OTP device of the sifive_u
-RISC-V machine is deprecated. Use ``-drive if=pflash`` instead.
+The HPET setting has been turned into a machine property.
+Use ``-machine hpet=off`` instead.
+
+``-no-acpi`` (since 8.0)
+''''''''''''''''''''''''
+
+The ``-no-acpi`` setting has been turned into a machine property.
+Use ``-machine acpi=off`` instead.
+
+``-accel hax`` (since 8.0)
+''''''''''''''''''''''''''
+
+The HAXM project has been retired (see https://github.com/intel/haxm#status).
+Use "whpx" (on Windows) or "hvf" (on macOS) instead.
 
 
 QEMU Machine Protocol (QMP) commands
@@ -270,30 +183,37 @@ accepted incorrect commands will return an error. Users should make sure that
 all arguments passed to ``device_add`` are consistent with the documented
 property types.
 
-System accelerators
--------------------
+Host Architectures
+------------------
 
-MIPS ``Trap-and-Emul`` KVM support (since 6.0)
-''''''''''''''''''''''''''''''''''''''''''''''
+BE MIPS (since 7.2)
+'''''''''''''''''''
 
-The MIPS ``Trap-and-Emul`` KVM host and guest support has been removed
-from Linux upstream kernel, declare it deprecated.
+As Debian 10 ("Buster") moved into LTS the big endian 32 bit version of
+MIPS moved out of support making it hard to maintain our
+cross-compilation CI tests of the architecture. As we no longer have
+CI coverage support may bitrot away before the deprecation process
+completes. The little endian variants of MIPS (both 32 and 64 bit) are
+still a supported host architecture.
 
-System emulator CPUS
---------------------
+System emulation on 32-bit x86 hosts (since 8.0)
+''''''''''''''''''''''''''''''''''''''''''''''''
 
-``Icelake-Client`` CPU Model (since 5.2)
-''''''''''''''''''''''''''''''''''''''''
+Support for 32-bit x86 host deployments is increasingly uncommon in mainstream
+OS distributions given the widespread availability of 64-bit x86 hardware.
+The QEMU project no longer considers 32-bit x86 support for system emulation to
+be an effective use of its limited resources, and thus intends to discontinue
+it. Since all recent x86 hardware from the past >10 years is capable of the
+64-bit x86 extensions, a corresponding 64-bit OS should be used instead.
 
-``Icelake-Client`` CPU Models are deprecated. Use ``Icelake-Server`` CPU
-Models instead.
+System emulation on 32-bit arm hosts (since 8.0)
+''''''''''''''''''''''''''''''''''''''''''''''''
 
-MIPS ``I7200`` CPU Model (since 5.2)
-''''''''''''''''''''''''''''''''''''
-
-The ``I7200`` guest CPU relies on the nanoMIPS ISA, which is deprecated
-(the ISA has never been upstreamed to a compiler toolchain). Therefore
-this CPU is also deprecated.
+Since QEMU needs a strong host machine for running full system emulation, and
+all recent powerful arm hosts support 64-bit, the QEMU project deprecates the
+support for running any system emulation on 32-bit arm hosts in general. Use
+64-bit arm hosts for system emulation instead. (Note: "user" mode emulation
+continues to be supported on 32-bit arm hosts, too)
 
 
 QEMU API (QAPI) events
@@ -308,21 +228,21 @@ Use the more generic event ``DEVICE_UNPLUG_GUEST_ERROR`` instead.
 System emulator machines
 ------------------------
 
-Aspeed ``swift-bmc`` machine (since 6.1)
-''''''''''''''''''''''''''''''''''''''''
+Arm ``virt`` machine ``dtb-kaslr-seed`` property
+''''''''''''''''''''''''''''''''''''''''''''''''
 
-This machine is deprecated because we have enough AST2500 based OpenPOWER
-machines. It can be easily replaced by the ``witherspoon-bmc`` or the
-``romulus-bmc`` machines.
+The ``dtb-kaslr-seed`` property on the ``virt`` board has been
+deprecated; use the new name ``dtb-randomness`` instead. The new name
+better reflects the way this property affects all random data within
+the device tree blob, not just the ``kaslr-seed`` node.
 
-PPC 405 ``taihu`` machine (since 7.0)
-'''''''''''''''''''''''''''''''''''''
+``pc-i440fx-1.4`` up to ``pc-i440fx-1.7`` (since 7.0)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-The PPC 405 CPU is a system-on-a-chip, so all 405 machines are very similar,
-except for some external periphery. However, the periphery of the ``taihu``
-machine is hardly emulated at all (e.g. neither the LCD nor the USB part had
-been implemented), so there is not much value added by this board. Use the
-``ref405ep`` machine instead.
+These old machine types are quite neglected nowadays and thus might have
+various pitfalls with regards to live migration. Use a newer machine type
+instead.
+
 
 Backend options
 ---------------
@@ -358,14 +278,20 @@ full SCSI support.  Use virtio-scsi instead when SCSI passthrough is required.
 Note this also applies to ``-device virtio-blk-pci,scsi=on|off``, which is an
 alias.
 
-``-device sga`` (since 6.2)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
+``-device nvme-ns,eui64-default=on|off`` (since 7.1)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The ``sga`` device loads an option ROM for x86 targets which enables
-SeaBIOS to send messages to the serial console. SeaBIOS 1.11.0 onwards
-contains native support for this feature and thus use of the option
-ROM approach is obsolete. The native SeaBIOS support can be activated
-by using ``-machine graphics=off``.
+In QEMU versions 6.1, 6.2 and 7.0, the ``nvme-ns`` generates an EUI-64
+identifier that is not globally unique. If an EUI-64 identifier is required, the
+user must set it explicitly using the ``nvme-ns`` device parameter ``eui64``.
+
+``-device nvme,use-intel-id=on|off`` (since 7.1)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``nvme`` device originally used a PCI Vendor/Device Identifier combination
+from Intel that was not properly allocated. Since version 5.2, the controller
+has used a properly allocated identifier. Deprecate the ``use-intel-id``
+machine compatibility parameter.
 
 
 Block device options
@@ -393,22 +319,13 @@ The above, converted to the current supported format::
 
   json:{"file.driver":"rbd", "file.pool":"rbd", "file.image":"name"}
 
-linux-user mode CPUs
---------------------
+``iscsi,password=xxx`` (since 8.0)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``ppc64abi32`` CPUs (since 5.2)
-'''''''''''''''''''''''''''''''
-
-The ``ppc64abi32`` architecture has a number of issues which regularly
-trip up our CI testing and is suspected to be quite broken. For that
-reason the maintainers strongly suspect no one actually uses it.
-
-MIPS ``I7200`` CPU (since 5.2)
-''''''''''''''''''''''''''''''
-
-The ``I7200`` guest CPU relies on the nanoMIPS ISA, which is deprecated
-(the ISA has never been upstreamed to a compiler toolchain). Therefore
-this CPU is also deprecated.
+Specifying the iSCSI password in plain text on the command line using the
+``password`` option is insecure. The ``password-secret`` option should be
+used instead, to refer to a ``--object secret...`` instance that provides
+a password via a file, or encrypted.
 
 Backwards compatibility
 -----------------------
@@ -439,11 +356,20 @@ versions, aliases will point to newer CPU model versions
 depending on the machine type, so management software must
 resolve CPU model aliases before starting a virtual machine.
 
-Guest Emulator ISAs
--------------------
+QEMU guest agent
+----------------
 
-nanoMIPS ISA
-''''''''''''
+``--blacklist`` command line option (since 7.2)
+'''''''''''''''''''''''''''''''''''''''''''''''
 
-The ``nanoMIPS`` ISA has never been upstreamed to any compiler toolchain.
-As it is hard to generate binaries for it, declare it deprecated.
+``--blacklist`` has been replaced by ``--block-rpcs`` (which is a better
+wording for what this option does). The short form ``-b`` still stays
+the same and thus is the preferred way for scripts that should run with
+both, older and future versions of QEMU.
+
+``blacklist`` config file option (since 7.2)
+''''''''''''''''''''''''''''''''''''''''''''
+
+The ``blacklist`` config file option has been renamed to ``block-rpcs``
+(to be in sync with the renaming of the corresponding command line
+option).

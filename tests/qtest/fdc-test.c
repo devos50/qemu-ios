@@ -27,7 +27,6 @@
 
 #include "libqtest-single.h"
 #include "qapi/qmp/qdict.h"
-#include "qemu-common.h"
 
 /* TODO actually test the results and get rid of this */
 #define qmp_discard_response(...) qobject_unref(qmp(__VA_ARGS__))
@@ -69,7 +68,7 @@ enum {
     DSKCHG  = 0x80,
 };
 
-static char test_image[] = "/tmp/qtest.XXXXXX";
+static char *test_image;
 
 #define assert_bit_set(data, mask) g_assert_cmphex((data) & (mask), ==, (mask))
 #define assert_bit_clear(data, mask) g_assert_cmphex((data) & (mask), ==, 0)
@@ -551,7 +550,7 @@ static void fuzz_registers(void)
 
 static bool qtest_check_clang_sanitizer(void)
 {
-#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
+#ifdef QEMU_SANITIZE_ADDRESS
     return true;
 #else
     g_test_skip("QEMU not configured using --enable-sanitizers");
@@ -583,13 +582,33 @@ static void test_cve_2021_20196(void)
     qtest_quit(s);
 }
 
+static void test_cve_2021_3507(void)
+{
+    QTestState *s;
+
+    s = qtest_initf("-nographic -m 32M -nodefaults "
+                    "-drive file=%s,format=raw,if=floppy,snapshot=on",
+                    test_image);
+    qtest_outl(s, 0x9, 0x0a0206);
+    qtest_outw(s, 0x3f4, 0x1600);
+    qtest_outw(s, 0x3f4, 0x0000);
+    qtest_outw(s, 0x3f4, 0x0000);
+    qtest_outw(s, 0x3f4, 0x0000);
+    qtest_outw(s, 0x3f4, 0x0200);
+    qtest_outw(s, 0x3f4, 0x0200);
+    qtest_outw(s, 0x3f4, 0x0000);
+    qtest_outw(s, 0x3f4, 0x0000);
+    qtest_outw(s, 0x3f4, 0x0000);
+    qtest_quit(s);
+}
+
 int main(int argc, char **argv)
 {
     int fd;
     int ret;
 
     /* Create a temporary raw image */
-    fd = mkstemp(test_image);
+    fd = g_file_open_tmp("qtest.XXXXXX", &test_image, NULL);
     g_assert(fd >= 0);
     ret = ftruncate(fd, TEST_IMAGE_SIZE);
     g_assert(ret == 0);
@@ -598,7 +617,7 @@ int main(int argc, char **argv)
     /* Run the tests */
     g_test_init(&argc, &argv, NULL);
 
-    qtest_start("-device floppy,id=floppy0");
+    qtest_start("-machine pc -device floppy,id=floppy0");
     qtest_irq_intercept_in(global_qtest, "ioapic");
     qtest_add_func("/fdc/cmos", test_cmos);
     qtest_add_func("/fdc/no_media_on_start", test_no_media_on_start);
@@ -614,12 +633,14 @@ int main(int argc, char **argv)
     qtest_add_func("/fdc/read_no_dma_19", test_read_no_dma_19);
     qtest_add_func("/fdc/fuzz-registers", fuzz_registers);
     qtest_add_func("/fdc/fuzz/cve_2021_20196", test_cve_2021_20196);
+    qtest_add_func("/fdc/fuzz/cve_2021_3507", test_cve_2021_3507);
 
     ret = g_test_run();
 
     /* Cleanup */
     qtest_end();
     unlink(test_image);
+    g_free(test_image);
 
     return ret;
 }

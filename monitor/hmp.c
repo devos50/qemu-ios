@@ -27,7 +27,6 @@
 #include "hw/qdev-core.h"
 #include "monitor-internal.h"
 #include "monitor/hmp.h"
-#include "qapi/error.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qnum.h"
 #include "qemu/config-file.h"
@@ -37,7 +36,6 @@
 #include "qemu/option.h"
 #include "qemu/units.h"
 #include "sysemu/block-backend.h"
-#include "sysemu/runstate.h"
 #include "trace.h"
 
 static void monitor_command_cb(void *opaque, const char *cmdline,
@@ -274,7 +272,7 @@ static void help_cmd_dump(Monitor *mon, const HMPCommand *cmds,
     }
 }
 
-void help_cmd(Monitor *mon, const char *name)
+void hmp_help_cmd(Monitor *mon, const char *name)
 {
     char *args[MAX_ARGS];
     int nb_args = 0;
@@ -285,10 +283,15 @@ void help_cmd(Monitor *mon, const char *name)
         if (!strcmp(name, "log")) {
             const QEMULogItem *item;
             monitor_printf(mon, "Log items (comma separated):\n");
-            monitor_printf(mon, "%-10s %s\n", "none", "remove all logs");
+            monitor_printf(mon, "%-15s %s\n", "none", "remove all logs");
             for (item = qemu_log_items; item->mask != 0; item++) {
-                monitor_printf(mon, "%-10s %s\n", item->name, item->help);
+                monitor_printf(mon, "%-15s %s\n", item->name, item->help);
             }
+#ifdef CONFIG_TRACE_LOG
+            monitor_printf(mon, "trace:PATTERN   enable trace events\n");
+            monitor_printf(mon, "\nUse \"log trace:help\" to get a list of "
+                           "trace events.\n\n");
+#endif
             return;
         }
 
@@ -308,8 +311,8 @@ void help_cmd(Monitor *mon, const char *name)
 static const char *pch;
 static sigjmp_buf expr_env;
 
-static void GCC_FMT_ATTR(2, 3) QEMU_NORETURN
-expr_error(Monitor *mon, const char *fmt, ...)
+static G_NORETURN G_GNUC_PRINTF(2, 3)
+void expr_error(Monitor *mon, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -981,6 +984,7 @@ static QDict *monitor_parse_arguments(Monitor *mon,
             {
                 const char *tmp = p;
                 int skip_key = 0;
+                int ret;
                 /* option */
 
                 c = *typestr++;
@@ -1003,11 +1007,27 @@ static QDict *monitor_parse_arguments(Monitor *mon,
                     }
                     if (skip_key) {
                         p = tmp;
+                    } else if (*typestr == 's') {
+                        /* has option with string value */
+                        typestr++;
+                        tmp = p++;
+                        while (qemu_isspace(*p)) {
+                            p++;
+                        }
+                        ret = get_str(buf, sizeof(buf), &p);
+                        if (ret < 0) {
+                            monitor_printf(mon, "%s: value expected for -%c\n",
+                                           cmd->name, *tmp);
+                            goto fail;
+                        }
+                        qdict_put_str(qdict, key, buf);
                     } else {
-                        /* has option */
+                        /* has boolean option */
                         p++;
                         qdict_put_bool(qdict, key, true);
                     }
+                } else if (*typestr == 's') {
+                    typestr++;
                 }
             }
             break;
@@ -1072,7 +1092,7 @@ static void hmp_info_human_readable_text(Monitor *mon,
         return;
     }
 
-    monitor_printf(mon, "%s", info->human_readable_text);
+    monitor_puts(mon, info->human_readable_text);
 }
 
 static void handle_hmp_command_exec(Monitor *mon,
@@ -1169,9 +1189,7 @@ static void cmd_completion(MonitorHMP *mon, const char *name, const char *list)
         }
         memcpy(cmd, pstart, len);
         cmd[len] = '\0';
-        if (name[0] == '\0' || !strncmp(name, cmd, strlen(name))) {
-            readline_add_completion(mon->rs, cmd);
-        }
+        readline_add_completion_of(mon->rs, name, cmd);
         if (*p == '\0') {
             break;
         }
@@ -1250,7 +1268,7 @@ static void monitor_find_completion_by_table(MonitorHMP *mon,
 {
     const char *cmdname;
     int i;
-    const char *ptype, *old_ptype, *str, *name;
+    const char *ptype, *old_ptype, *str;
     const HMPCommand *cmd;
     BlockBackend *blk = NULL;
 
@@ -1315,11 +1333,7 @@ static void monitor_find_completion_by_table(MonitorHMP *mon,
             /* block device name completion */
             readline_set_completion_index(mon->rs, strlen(str));
             while ((blk = blk_next(blk)) != NULL) {
-                name = blk_name(blk);
-                if (str[0] == '\0' ||
-                    !strncmp(name, str, strlen(str))) {
-                    readline_add_completion(mon->rs, name);
-                }
+                readline_add_completion_of(mon->rs, str, blk_name(blk));
             }
             break;
         case 's':
@@ -1445,7 +1459,7 @@ static void monitor_event(void *opaque, QEMUChrEvent event)
  * These functions just adapt the readline interface in a typesafe way.  We
  * could cast function pointers but that discards compiler checks.
  */
-static void GCC_FMT_ATTR(2, 3) monitor_readline_printf(void *opaque,
+static void G_GNUC_PRINTF(2, 3) monitor_readline_printf(void *opaque,
                                                        const char *fmt, ...)
 {
     MonitorHMP *mon = opaque;

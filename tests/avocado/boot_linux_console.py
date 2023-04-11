@@ -15,6 +15,7 @@ import shutil
 
 from avocado import skip
 from avocado import skipUnless
+from avocado import skipIf
 from avocado_qemu import QemuSystemTest
 from avocado_qemu import exec_command
 from avocado_qemu import exec_command_and_wait_for_pattern
@@ -28,6 +29,11 @@ Round up to next power of 2
 """
 def pow2ceil(x):
     return 1 if x == 0 else 2**(x - 1).bit_length()
+
+def file_truncate(path, size):
+    if size != os.path.getsize(path):
+        with open(path, 'ab+') as fd:
+            fd.truncate(size)
 
 """
 Expand file size to next power of 2
@@ -325,31 +331,6 @@ class BootLinuxConsole(LinuxKernelTest):
         kernel_hash = '18d1c68f2e23429e266ca39ba5349ccd0aeb7180'
         self.do_test_mips_malta32el_nanomips(kernel_url, kernel_hash)
 
-    def test_aarch64_virt(self):
-        """
-        :avocado: tags=arch:aarch64
-        :avocado: tags=machine:virt
-        :avocado: tags=accel:tcg
-        :avocado: tags=cpu:cortex-a53
-        """
-        kernel_url = ('https://archives.fedoraproject.org/pub/archive/fedora'
-                      '/linux/releases/29/Everything/aarch64/os/images/pxeboot'
-                      '/vmlinuz')
-        kernel_hash = '8c73e469fc6ea06a58dc83a628fc695b693b8493'
-        kernel_path = self.fetch_asset(kernel_url, asset_hash=kernel_hash)
-
-        self.vm.set_console()
-        kernel_command_line = (self.KERNEL_COMMON_COMMAND_LINE +
-                               'console=ttyAMA0')
-        self.require_accelerator("tcg")
-        self.vm.add_args('-cpu', 'cortex-a53',
-                         '-accel', 'tcg',
-                         '-kernel', kernel_path,
-                         '-append', kernel_command_line)
-        self.vm.launch()
-        console_pattern = 'Kernel command line: %s' % kernel_command_line
-        self.wait_for_console_pattern(console_pattern)
-
     def test_aarch64_xlnx_versal_virt(self):
         """
         :avocado: tags=arch:aarch64
@@ -360,13 +341,13 @@ class BootLinuxConsole(LinuxKernelTest):
         """
         images_url = ('http://ports.ubuntu.com/ubuntu-ports/dists/'
                       'bionic-updates/main/installer-arm64/'
-                      '20101020ubuntu543.15/images/')
+                      '20101020ubuntu543.19/images/')
         kernel_url = images_url + 'netboot/ubuntu-installer/arm64/linux'
-        kernel_hash = '5bfc54cf7ed8157d93f6e5b0241e727b6dc22c50'
+        kernel_hash = 'e167757620640eb26de0972f578741924abb3a82'
         kernel_path = self.fetch_asset(kernel_url, asset_hash=kernel_hash)
 
         initrd_url = images_url + 'netboot/ubuntu-installer/arm64/initrd.gz'
-        initrd_hash = 'd385d3e88d53e2004c5d43cbe668b458a094f772'
+        initrd_hash = 'cab5cb3fcefca8408aa5aae57f24574bfce8bdb9'
         initrd_path = self.fetch_asset(initrd_url, asset_hash=initrd_hash)
 
         self.vm.set_console()
@@ -406,6 +387,8 @@ class BootLinuxConsole(LinuxKernelTest):
         :avocado: tags=u-boot
         :avocado: tags=accel:tcg
         """
+        self.require_netdev('user')
+
         uboot_url = ('https://raw.githubusercontent.com/'
                      'Subbaraya-Sundeep/qemu-test-binaries/'
                      'fe371d32e50ca682391e1e70ab98c2942aeffb01/u-boot')
@@ -416,6 +399,8 @@ class BootLinuxConsole(LinuxKernelTest):
                    'fe371d32e50ca682391e1e70ab98c2942aeffb01/spi.bin')
         spi_hash = '65523a1835949b6f4553be96dec1b6a38fb05501'
         spi_path = self.fetch_asset(spi_url, asset_hash=spi_hash)
+
+        file_truncate(spi_path, 16 << 20) # Spansion S25FL128SDPBHICO is 16 MiB
 
         self.vm.set_console()
         kernel_command_line = self.KERNEL_COMMON_COMMAND_LINE
@@ -512,7 +497,7 @@ class BootLinuxConsole(LinuxKernelTest):
                                                 'BCM2835')
         exec_command_and_wait_for_pattern(self, 'cat /proc/iomem',
                                                 '/soc/cprman@7e101000')
-        exec_command(self, 'halt')
+        exec_command_and_wait_for_pattern(self, 'halt', 'reboot: System halted')
         # Wait for VM to shut down gracefully
         self.vm.wait()
 
@@ -640,6 +625,53 @@ class BootLinuxConsole(LinuxKernelTest):
                                                 'Allwinner sun4i/sun5i')
         exec_command_and_wait_for_pattern(self, 'cat /proc/partitions',
                                                 'sda')
+        # cubieboard's reboot is not functioning; omit reboot test.
+
+    @skipUnless(os.getenv('AVOCADO_ALLOW_LARGE_STORAGE'), 'storage limited')
+    def test_arm_cubieboard_openwrt_22_03_2(self):
+        """
+        :avocado: tags=arch:arm
+        :avocado: tags=machine:cubieboard
+        :avocado: tags=device:sd
+        """
+
+        # This test download a 7.5 MiB compressed image and expand it
+        # to 126 MiB.
+        image_url = ('https://downloads.openwrt.org/releases/22.03.2/targets/'
+                     'sunxi/cortexa8/openwrt-22.03.2-sunxi-cortexa8-'
+                     'cubietech_a10-cubieboard-ext4-sdcard.img.gz')
+        image_hash = ('94b5ecbfbc0b3b56276e5146b899eafa'
+                      '2ac5dc2d08733d6705af9f144f39f554')
+        image_path_gz = self.fetch_asset(image_url, asset_hash=image_hash,
+                                         algorithm='sha256')
+        image_path = archive.extract(image_path_gz, self.workdir)
+        image_pow2ceil_expand(image_path)
+
+        self.vm.set_console()
+        self.vm.add_args('-drive', 'file=' + image_path + ',if=sd,format=raw',
+                         '-nic', 'user',
+                         '-no-reboot')
+        self.vm.launch()
+
+        kernel_command_line = (self.KERNEL_COMMON_COMMAND_LINE +
+                               'usbcore.nousb '
+                               'noreboot')
+
+        self.wait_for_console_pattern('U-Boot SPL')
+
+        interrupt_interactive_console_until_pattern(
+                self, 'Hit any key to stop autoboot:', '=>')
+        exec_command_and_wait_for_pattern(self, "setenv extraargs '" +
+                                                kernel_command_line + "'", '=>')
+        exec_command_and_wait_for_pattern(self, 'boot', 'Starting kernel ...');
+
+        self.wait_for_console_pattern(
+            'Please press Enter to activate this console.')
+
+        exec_command_and_wait_for_pattern(self, ' ', 'root@')
+
+        exec_command_and_wait_for_pattern(self, 'cat /proc/cpuinfo',
+                                                'Allwinner sun4i/sun5i')
         # cubieboard's reboot is not functioning; omit reboot test.
 
     @skipUnless(os.getenv('AVOCADO_TIMEOUT_EXPECTED'), 'Test might timeout')
@@ -804,6 +836,8 @@ class BootLinuxConsole(LinuxKernelTest):
         :avocado: tags=machine:orangepi-pc
         :avocado: tags=device:sd
         """
+        self.require_netdev('user')
+
         deb_url = ('https://apt.armbian.com/pool/main/l/'
                    'linux-5.10.16-sunxi/linux-image-current-sunxi_21.02.2_armhf.deb')
         deb_hash = '9fa84beda245cabf0b4fa84cf6eaa7738ead1da0'
@@ -813,8 +847,8 @@ class BootLinuxConsole(LinuxKernelTest):
         dtb_path = '/usr/lib/linux-image-current-sunxi/sun8i-h3-orangepi-pc.dtb'
         dtb_path = self.extract_from_deb(deb_path, dtb_path)
         rootfs_url = ('http://storage.kernelci.org/images/rootfs/buildroot/'
-                      'kci-2019.02/armel/base/rootfs.ext2.xz')
-        rootfs_hash = '692510cb625efda31640d1de0a8d60e26040f061'
+                      'buildroot-baseline/20221116.0/armel/rootfs.ext2.xz')
+        rootfs_hash = 'fae32f337c7b87547b10f42599acf109da8b6d9a'
         rootfs_path_xz = self.fetch_asset(rootfs_url, asset_hash=rootfs_hash)
         rootfs_path = os.path.join(self.workdir, 'rootfs.cpio')
         archive.lzma_uncompress(rootfs_path_xz, rootfs_path)
@@ -963,6 +997,7 @@ class BootLinuxConsole(LinuxKernelTest):
 
     def test_aarch64_raspi3_atf(self):
         """
+        :avocado: tags=accel:tcg
         :avocado: tags=arch:aarch64
         :avocado: tags=machine:raspi3b
         :avocado: tags=cpu:cortex-a53
@@ -1049,8 +1084,8 @@ class BootLinuxConsole(LinuxKernelTest):
         self.wait_for_console_pattern(console_pattern)
 
     def do_test_advcal_2018(self, day, tar_hash, kernel_name, console=0):
-        tar_url = ('https://www.qemu-advent-calendar.org'
-                   '/2018/download/day' + day + '.tar.xz')
+        tar_url = ('https://qemu-advcal.gitlab.io'
+                   '/qac-best-of-multiarch/download/day' + day + '.tar.xz')
         file_path = self.fetch_asset(tar_url, asset_hash=tar_hash)
         archive.extract(file_path, self.workdir)
         self.vm.set_console(console_index=console)
@@ -1068,64 +1103,21 @@ class BootLinuxConsole(LinuxKernelTest):
         self.vm.add_args('-dtb', self.workdir + '/day16/vexpress-v2p-ca9.dtb')
         self.do_test_advcal_2018('16', tar_hash, 'winter.zImage')
 
-    def test_arm_ast2400_palmetto_openbmc_v2_9_0(self):
-        """
-        :avocado: tags=arch:arm
-        :avocado: tags=machine:palmetto-bmc
-        """
-
-        image_url = ('https://github.com/openbmc/openbmc/releases/download/2.9.0/'
-                     'obmc-phosphor-image-palmetto.static.mtd')
-        image_hash = ('3e13bbbc28e424865dc42f35ad672b10f2e82cdb11846bb28fa625b48beafd0d')
-        image_path = self.fetch_asset(image_url, asset_hash=image_hash,
-                                      algorithm='sha256')
-
-        self.do_test_arm_aspeed(image_path)
-
-    def test_arm_ast2500_romulus_openbmc_v2_9_0(self):
-        """
-        :avocado: tags=arch:arm
-        :avocado: tags=machine:romulus-bmc
-        """
-
-        image_url = ('https://github.com/openbmc/openbmc/releases/download/2.9.0/'
-                     'obmc-phosphor-image-romulus.static.mtd')
-        image_hash = ('820341076803f1955bc31e647a512c79f9add4f5233d0697678bab4604c7bb25')
-        image_path = self.fetch_asset(image_url, asset_hash=image_hash,
-                                      algorithm='sha256')
-
-        self.do_test_arm_aspeed(image_path)
-
-    def do_test_arm_aspeed(self, image):
-        self.vm.set_console()
-        self.vm.add_args('-drive', 'file=' + image + ',if=mtd,format=raw',
-                         '-net', 'nic')
-        self.vm.launch()
-
-        self.wait_for_console_pattern("U-Boot 2016.07")
-        self.wait_for_console_pattern("## Loading kernel from FIT Image at 20080000")
-        self.wait_for_console_pattern("Starting kernel ...")
-        self.wait_for_console_pattern("Booting Linux on physical CPU 0x0")
-        self.wait_for_console_pattern(
-                "aspeed-smc 1e620000.spi: read control register: 203b0641")
-        self.wait_for_console_pattern("ftgmac100 1e660000.ethernet eth0: irq ")
-        self.wait_for_console_pattern("systemd[1]: Set hostname to")
-
     def test_arm_ast2600_debian(self):
         """
         :avocado: tags=arch:arm
-        :avocado: tags=machine:tacoma-bmc
+        :avocado: tags=machine:rainier-bmc
         """
         deb_url = ('http://snapshot.debian.org/archive/debian/'
-                   '20210302T203551Z/'
+                   '20220606T211338Z/'
                    'pool/main/l/linux/'
-                   'linux-image-5.10.0-3-armmp_5.10.13-1_armhf.deb')
-        deb_hash = 'db40d32fe39255d05482bea48d72467b67d6225bb2a2a4d6f618cb8976f1e09e'
+                   'linux-image-5.17.0-2-armmp_5.17.6-1%2Bb1_armhf.deb')
+        deb_hash = '8acb2b4439faedc2f3ed4bdb2847ad4f6e0491f73debaeb7f660c8abe4dcdc0e'
         deb_path = self.fetch_asset(deb_url, asset_hash=deb_hash,
                                     algorithm='sha256')
-        kernel_path = self.extract_from_deb(deb_path, '/boot/vmlinuz-5.10.0-3-armmp')
+        kernel_path = self.extract_from_deb(deb_path, '/boot/vmlinuz-5.17.0-2-armmp')
         dtb_path = self.extract_from_deb(deb_path,
-                '/usr/lib/linux-image-5.10.0-3-armmp/aspeed-bmc-opp-tacoma.dtb')
+                '/usr/lib/linux-image-5.17.0-2-armmp/aspeed-bmc-ibm-rainier.dtb')
 
         self.vm.set_console()
         self.vm.add_args('-kernel', kernel_path,
@@ -1165,11 +1157,14 @@ class BootLinuxConsole(LinuxKernelTest):
         :avocado: tags=arch:ppc64
         :avocado: tags=machine:ppce500
         :avocado: tags=cpu:e5500
+        :avocado: tags=accel:tcg
         """
+        self.require_accelerator("tcg")
         tar_hash = '6951d86d644b302898da2fd701739c9406527fe1'
         self.do_test_advcal_2018('19', tar_hash, 'uImage')
 
     def do_test_ppc64_powernv(self, proc):
+        self.require_accelerator("tcg")
         images_url = ('https://github.com/open-power/op-build/releases/download/v2.7/')
 
         kernel_url = images_url + 'zImage.epapr'
@@ -1194,6 +1189,7 @@ class BootLinuxConsole(LinuxKernelTest):
         """
         :avocado: tags=arch:ppc64
         :avocado: tags=machine:powernv8
+        :avocado: tags=accel:tcg
         """
         self.do_test_ppc64_powernv('P8')
 
@@ -1201,6 +1197,7 @@ class BootLinuxConsole(LinuxKernelTest):
         """
         :avocado: tags=arch:ppc64
         :avocado: tags=machine:powernv9
+        :avocado: tags=accel:tcg
         """
         self.do_test_ppc64_powernv('P9')
 
@@ -1208,7 +1205,13 @@ class BootLinuxConsole(LinuxKernelTest):
         """
         :avocado: tags=arch:ppc
         :avocado: tags=machine:g3beige
+        :avocado: tags=accel:tcg
         """
+        # TODO: g3beige works with kvm_pr but we don't have a
+        # reliable way ATM (e.g. looking at /proc/modules) to detect
+        # whether we're running kvm_hv or kvm_pr. For now let's
+        # disable this test if we don't have TCG support.
+        self.require_accelerator("tcg")
         tar_hash = 'e0b872a5eb8fdc5bed19bd43ffe863900ebcedfc'
         self.vm.add_args('-M', 'graphics=off')
         self.do_test_advcal_2018('15', tar_hash, 'invaders.elf')
@@ -1217,11 +1220,21 @@ class BootLinuxConsole(LinuxKernelTest):
         """
         :avocado: tags=arch:ppc
         :avocado: tags=machine:mac99
+        :avocado: tags=accel:tcg
         """
+        # TODO: mac99 works with kvm_pr but we don't have a
+        # reliable way ATM (e.g. looking at /proc/modules) to detect
+        # whether we're running kvm_hv or kvm_pr. For now let's
+        # disable this test if we don't have TCG support.
+        self.require_accelerator("tcg")
         tar_hash = 'e0b872a5eb8fdc5bed19bd43ffe863900ebcedfc'
         self.vm.add_args('-M', 'graphics=off')
         self.do_test_advcal_2018('15', tar_hash, 'invaders.elf')
 
+    # This test has a 6-10% failure rate on various hosts that look
+    # like issues with a buggy kernel. As a result we don't want it
+    # gating releases on Gitlab.
+    @skipIf(os.getenv('GITLAB_CI'), 'Running on GitLab')
     def test_sh4_r2d(self):
         """
         :avocado: tags=arch:sh4

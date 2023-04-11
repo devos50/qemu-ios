@@ -1,5 +1,5 @@
 /*
- *  Copyright(c) 2021 Qualcomm Innovation Center, Inc. All Rights Reserved.
+ *  Copyright(c) 2021-2022 Qualcomm Innovation Center, Inc. All Rights Reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <limits.h>
 
 int err;
 
@@ -432,6 +433,183 @@ TEST_PRED_OP2(pred_and, and, &, "")
 TEST_PRED_OP2(pred_and_n, and, &, "!")
 TEST_PRED_OP2(pred_xor, xor, ^, "")
 
+static void test_vadduwsat(void)
+{
+    /*
+     * Test for saturation by adding two numbers that add to more than UINT_MAX
+     * and make sure the result saturates to UINT_MAX
+     */
+    const uint32_t x = 0xffff0000;
+    const uint32_t y = 0x000fffff;
+
+    memset(expect, 0x12, sizeof(MMVector));
+    memset(output, 0x34, sizeof(MMVector));
+
+    asm volatile ("v10 = vsplat(%0)\n\t"
+                  "v11 = vsplat(%1)\n\t"
+                  "v21.uw = vadd(v11.uw, v10.uw):sat\n\t"
+                  "vmem(%2+#0) = v21\n\t"
+                  : /* no outputs */
+                  : "r"(x), "r"(y), "r"(output)
+                  : "v10", "v11", "v21", "memory");
+
+    for (int j = 0; j < MAX_VEC_SIZE_BYTES / 4; j++) {
+        expect[0].uw[j] = UINT_MAX;
+    }
+
+    check_output_w(__LINE__, 1);
+}
+
+static void test_vsubuwsat_dv(void)
+{
+    /*
+     * Test for saturation by subtracting two numbers where the result is
+     * negative and make sure the result saturates to zero
+     *
+     * vsubuwsat_dv operates on an HVX register pair, so we'll have a
+     * pair of subtractions
+     *     w - x < 0
+     *     y - z < 0
+     */
+    const uint32_t w = 0x000000b7;
+    const uint32_t x = 0xffffff4e;
+    const uint32_t y = 0x31fe88e7;
+    const uint32_t z = 0x7fffff79;
+
+    memset(expect, 0x12, sizeof(MMVector) * 2);
+    memset(output, 0x34, sizeof(MMVector) * 2);
+
+    asm volatile ("v16 = vsplat(%0)\n\t"
+                  "v17 = vsplat(%1)\n\t"
+                  "v26 = vsplat(%2)\n\t"
+                  "v27 = vsplat(%3)\n\t"
+                  "v25:24.uw = vsub(v17:16.uw, v27:26.uw):sat\n\t"
+                  "vmem(%4+#0) = v24\n\t"
+                  "vmem(%4+#1) = v25\n\t"
+                  : /* no outputs */
+                  : "r"(w), "r"(y), "r"(x), "r"(z), "r"(output)
+                  : "v16", "v17", "v24", "v25", "v26", "v27", "memory");
+
+    for (int j = 0; j < MAX_VEC_SIZE_BYTES / 4; j++) {
+        expect[0].uw[j] = 0x00000000;
+        expect[1].uw[j] = 0x00000000;
+    }
+
+    check_output_w(__LINE__, 2);
+}
+
+static void test_vshuff(void)
+{
+    /* Test that vshuff works when the two operands are the same register */
+    const uint32_t splat = 0x089be55c;
+    const uint32_t shuff = 0x454fa926;
+    MMVector v0, v1;
+
+    memset(expect, 0x12, sizeof(MMVector));
+    memset(output, 0x34, sizeof(MMVector));
+
+    asm volatile("v25 = vsplat(%0)\n\t"
+                 "vshuff(v25, v25, %1)\n\t"
+                 "vmem(%2 + #0) = v25\n\t"
+                 : /* no outputs */
+                 : "r"(splat), "r"(shuff), "r"(output)
+                 : "v25", "memory");
+
+    /*
+     * The semantics of Hexagon are the operands are pass-by-value, so create
+     * two copies of the vsplat result.
+     */
+    for (int i = 0; i < MAX_VEC_SIZE_BYTES / 4; i++) {
+        v0.uw[i] = splat;
+        v1.uw[i] = splat;
+    }
+    /* Do the vshuff operation */
+    for (int offset = 1; offset < MAX_VEC_SIZE_BYTES; offset <<= 1) {
+        if (shuff & offset) {
+            for (int k = 0; k < MAX_VEC_SIZE_BYTES; k++) {
+                if (!(k & offset)) {
+                    uint8_t tmp = v0.ub[k];
+                    v0.ub[k] = v1.ub[k + offset];
+                    v1.ub[k + offset] = tmp;
+                }
+            }
+        }
+    }
+    /* Put the result in the expect buffer for verification */
+    expect[0] = v1;
+
+    check_output_b(__LINE__, 1);
+}
+
+static void test_load_tmp_predicated(void)
+{
+    void *p0 = buffer0;
+    void *p1 = buffer1;
+    void *pout = output;
+    bool pred = true;
+
+    for (int i = 0; i < BUFSIZE; i++) {
+        /*
+         * Load into v12 as .tmp with a predicate
+         * When the predicate is true, we get the vector from buffer1[i]
+         * When the predicate is false, we get a vector of all 1's
+         * Regardless of the predicate, the next packet should have
+         * a vector of all 1's
+         */
+        asm("v3 = vmem(%0 + #0)\n\t"
+            "r1 = #1\n\t"
+            "v12 = vsplat(r1)\n\t"
+            "p1 = !cmp.eq(%3, #0)\n\t"
+            "{\n\t"
+            "    if (p1) v12.tmp = vmem(%1 + #0)\n\t"
+            "    v4.w = vadd(v12.w, v3.w)\n\t"
+            "}\n\t"
+            "v4.w = vadd(v4.w, v12.w)\n\t"
+            "vmem(%2 + #0) = v4\n\t"
+            : : "r"(p0), "r"(p1), "r"(pout), "r"(pred)
+            : "r1", "p1", "v12", "v3", "v4", "v6", "memory");
+        p0 += sizeof(MMVector);
+        p1 += sizeof(MMVector);
+        pout += sizeof(MMVector);
+
+        for (int j = 0; j < MAX_VEC_SIZE_BYTES / 4; j++) {
+            expect[i].w[j] =
+                pred ? buffer0[i].w[j] + buffer1[i].w[j] + 1
+                     : buffer0[i].w[j] + 2;
+        }
+        pred = !pred;
+    }
+
+    check_output_w(__LINE__, BUFSIZE);
+}
+
+static void test_load_cur_predicated(void)
+{
+    bool pred = true;
+    for (int i = 0; i < BUFSIZE; i++) {
+        asm volatile("p0 = !cmp.eq(%3, #0)\n\t"
+                     "v3 = vmem(%0+#0)\n\t"
+                     /*
+                      * Preload v4 to make sure that the assignment from the
+                      * packet below is not being ignored when pred is false.
+                      */
+                     "r0 = #0x01237654\n\t"
+                     "v4 = vsplat(r0)\n\t"
+                     "{\n\t"
+                     "    if (p0) v3.cur = vmem(%1+#0)\n\t"
+                     "    v4 = v3\n\t"
+                     "}\n\t"
+                     "vmem(%2+#0) = v4\n\t"
+                     :
+                     : "r"(&buffer0[i]), "r"(&buffer1[i]),
+                       "r"(&output[i]), "r"(pred)
+                     : "r0", "p0", "v3", "v4", "memory");
+        expect[i] = pred ? buffer1[i] : buffer0[i];
+        pred = !pred;
+    }
+    check_output_w(__LINE__, BUFSIZE);
+}
+
 int main()
 {
     init_buffers();
@@ -463,6 +641,14 @@ int main()
     test_pred_and(false);
     test_pred_and_n(true);
     test_pred_xor(false);
+
+    test_vadduwsat();
+    test_vsubuwsat_dv();
+
+    test_vshuff();
+
+    test_load_tmp_predicated();
+    test_load_cur_predicated();
 
     puts(err ? "FAIL" : "PASS");
     return err ? 1 : 0;

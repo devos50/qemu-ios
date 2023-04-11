@@ -704,8 +704,8 @@ static void gen_ldst_multiple(DisasContext *ctx, uint32_t opc, int reglist,
 
     gen_base_offset_addr(ctx, t0, base, offset);
 
-    t1 = tcg_const_tl(reglist);
-    t2 = tcg_const_i32(ctx->mem_idx);
+    t1 = tcg_constant_tl(reglist);
+    t2 = tcg_constant_i32(ctx->mem_idx);
 
     save_cpu_state(ctx, 1);
     switch (opc) {
@@ -724,9 +724,6 @@ static void gen_ldst_multiple(DisasContext *ctx, uint32_t opc, int reglist,
         break;
 #endif
     }
-    tcg_temp_free(t0);
-    tcg_temp_free(t1);
-    tcg_temp_free_i32(t2);
 }
 
 
@@ -822,11 +819,11 @@ static void gen_pool16c_insn(DisasContext *ctx)
         gen_HILO(ctx, OPC_MFLO, 0, uMIPS_RS5(ctx->opcode));
         break;
     case BREAK16:
-        generate_exception_end(ctx, EXCP_BREAK);
+        generate_exception_break(ctx, extract32(ctx->opcode, 0, 4));
         break;
     case SDBBP16:
-        if (is_uhi(extract32(ctx->opcode, 0, 4))) {
-            gen_helper_do_semihosting(cpu_env);
+        if (is_uhi(ctx, extract32(ctx->opcode, 0, 4))) {
+            ctx->base.is_jmp = DISAS_SEMIHOST;
         } else {
             /*
              * XXX: not clear which exception should be raised
@@ -937,12 +934,12 @@ static void gen_pool16c_r6_insn(DisasContext *ctx)
             break;
         case R6_BREAK16:
             /* BREAK16 */
-            generate_exception(ctx, EXCP_BREAK);
+            generate_exception_break(ctx, extract32(ctx->opcode, 6, 4));
             break;
         case R6_SDBBP16:
             /* SDBBP16 */
-            if (is_uhi(extract32(ctx->opcode, 6, 4))) {
-                gen_helper_do_semihosting(cpu_env);
+            if (is_uhi(ctx, extract32(ctx->opcode, 6, 4))) {
+                ctx->base.is_jmp = DISAS_SEMIHOST;
             } else {
                 if (ctx->hflags & MIPS_HFLAG_SBRI) {
                     generate_exception(ctx, EXCP_RI);
@@ -1001,25 +998,23 @@ static void gen_ldst_pair(DisasContext *ctx, uint32_t opc, int rd,
             gen_reserved_instruction(ctx);
             return;
         }
-        tcg_gen_qemu_ld_tl(t1, t0, ctx->mem_idx, MO_TEQ);
+        tcg_gen_qemu_ld_tl(t1, t0, ctx->mem_idx, MO_TEUQ);
         gen_store_gpr(t1, rd);
         tcg_gen_movi_tl(t1, 8);
         gen_op_addr_add(ctx, t0, t0, t1);
-        tcg_gen_qemu_ld_tl(t1, t0, ctx->mem_idx, MO_TEQ);
+        tcg_gen_qemu_ld_tl(t1, t0, ctx->mem_idx, MO_TEUQ);
         gen_store_gpr(t1, rd + 1);
         break;
     case SDP:
         gen_load_gpr(t1, rd);
-        tcg_gen_qemu_st_tl(t1, t0, ctx->mem_idx, MO_TEQ);
+        tcg_gen_qemu_st_tl(t1, t0, ctx->mem_idx, MO_TEUQ);
         tcg_gen_movi_tl(t1, 8);
         gen_op_addr_add(ctx, t0, t0, t1);
         gen_load_gpr(t1, rd + 1);
-        tcg_gen_qemu_st_tl(t1, t0, ctx->mem_idx, MO_TEQ);
+        tcg_gen_qemu_st_tl(t1, t0, ctx->mem_idx, MO_TEUQ);
         break;
 #endif
     }
-    tcg_temp_free(t0);
-    tcg_temp_free(t1);
 }
 
 static void gen_pool32axf(CPUMIPSState *env, DisasContext *ctx, int rt, int rs)
@@ -1047,7 +1042,7 @@ static void gen_pool32axf(CPUMIPSState *env, DisasContext *ctx, int rt, int rs)
     case TNE:
         mips32_op = OPC_TNE;
     do_trap:
-        gen_trap(ctx, mips32_op, rs, rt, -1);
+        gen_trap(ctx, mips32_op, rs, rt, -1, extract32(ctx->opcode, 12, 4));
         break;
 #ifndef CONFIG_USER_ONLY
     case MFC0:
@@ -1067,7 +1062,6 @@ static void gen_pool32axf(CPUMIPSState *env, DisasContext *ctx, int rt, int rs)
 
             gen_load_gpr(t0, rt);
             gen_mtc0(ctx, t0, rs, (ctx->opcode >> 11) & 0x7);
-            tcg_temp_free(t0);
         }
         break;
 #endif
@@ -1276,7 +1270,6 @@ static void gen_pool32axf(CPUMIPSState *env, DisasContext *ctx, int rt, int rs)
                  * mode.
                  */
                 ctx->base.is_jmp = DISAS_STOP;
-                tcg_temp_free(t0);
             }
             break;
         case EI:
@@ -1293,7 +1286,6 @@ static void gen_pool32axf(CPUMIPSState *env, DisasContext *ctx, int rt, int rs)
                  */
                 gen_save_pc(ctx->base.pc_next + 4);
                 ctx->base.is_jmp = DISAS_EXIT;
-                tcg_temp_free(t0);
             }
             break;
         default:
@@ -1310,8 +1302,8 @@ static void gen_pool32axf(CPUMIPSState *env, DisasContext *ctx, int rt, int rs)
             generate_exception_end(ctx, EXCP_SYSCALL);
             break;
         case SDBBP:
-            if (is_uhi(extract32(ctx->opcode, 16, 10))) {
-                gen_helper_do_semihosting(cpu_env);
+            if (is_uhi(ctx, extract32(ctx->opcode, 16, 10))) {
+                ctx->base.is_jmp = DISAS_SEMIHOST;
             } else {
                 check_insn(ctx, ISA_MIPS_R1);
                 if (ctx->hflags & MIPS_HFLAG_SBRI) {
@@ -1812,7 +1804,7 @@ static void decode_micromips32_opc(CPUMIPSState *env, DisasContext *ctx)
             gen_pool32axf(env, ctx, rt, rs);
             break;
         case BREAK32:
-            generate_exception_end(ctx, EXCP_BREAK);
+            generate_exception_break(ctx, extract32(ctx->opcode, 6, 20));
             break;
         case SIGRIE:
             check_insn(ctx, ISA_MIPS_R6);
@@ -2439,7 +2431,7 @@ static void decode_micromips32_opc(CPUMIPSState *env, DisasContext *ctx)
             check_insn_opc_removed(ctx, ISA_MIPS_R6);
             mips32_op = OPC_TEQI;
         do_trapi:
-            gen_trap(ctx, mips32_op, rs, -1, imm);
+            gen_trap(ctx, mips32_op, rs, -1, imm, 0);
             break;
 
         case BNEZC:
@@ -2578,7 +2570,7 @@ static void decode_micromips32_opc(CPUMIPSState *env, DisasContext *ctx)
         case SCD:
             check_insn(ctx, ISA_MIPS3);
             check_mips_64(ctx);
-            gen_st_cond(ctx, rt, rs, offset, MO_TEQ, false);
+            gen_st_cond(ctx, rt, rs, offset, MO_TEUQ, false);
             break;
 #endif
         case LD_EVA:

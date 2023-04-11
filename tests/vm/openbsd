@@ -22,8 +22,8 @@ class OpenBSDVM(basevm.BaseVM):
     name = "openbsd"
     arch = "x86_64"
 
-    link = "https://cdn.openbsd.org/pub/OpenBSD/7.0/amd64/install70.iso"
-    csum = "1882f9a23c9800e5dba3dbd2cf0126f552605c915433ef4c5bb672610a4ca3a4"
+    link = "https://cdn.openbsd.org/pub/OpenBSD/7.2/amd64/install72.iso"
+    csum = "0369ef40a3329efcb978c578c7fdc7bda71e502aecec930a74b44160928c91d3"
     size = "20G"
     pkgs = [
         # tools
@@ -48,13 +48,17 @@ class OpenBSDVM(basevm.BaseVM):
         "jpeg",
         "png",
 
-	# libs: ui
+        # libs: ui
+        "capstone",
         "sdl2",
         "gtk+3",
         "libxkbcommon",
 
         # libs: migration
         "zstd",
+
+        # libs: networking
+        "libslirp",
     ]
 
     BUILD_SCRIPT = """
@@ -81,7 +85,6 @@ class OpenBSDVM(basevm.BaseVM):
 
         self.print_step("Booting installer")
         self.boot(img_tmp, extra_args = [
-            "-bios", "pc-bios/bios-256k.bin",
             "-machine", "graphics=off",
             "-device", "VGA",
             "-cdrom", iso
@@ -103,8 +106,7 @@ class OpenBSDVM(basevm.BaseVM):
         self.console_wait("Password for root account")
         self.console_send("%s\n" % self._config["root_pass"])
         self.console_wait_send("Start sshd(8)",           "yes\n")
-        self.console_wait_send("X Window System",         "\n")
-        self.console_wait_send("xenodm",                  "\n")
+        self.console_wait_send("X Window System",         "no\n")
         self.console_wait_send("console to com0",         "\n")
         self.console_wait_send("Which speed",             "\n")
 
@@ -121,7 +123,32 @@ class OpenBSDVM(basevm.BaseVM):
         self.console_wait_send("timezone",                "UTC\n")
         self.console_wait_send("root disk",               "\n")
         self.console_wait_send("(W)hole disk",            "\n")
-        self.console_wait_send("(A)uto layout",           "\n")
+        self.console_wait_send("(A)uto layout",           "c\n")
+
+        # 4000 MB / as /dev/sd0a, at start of disk
+        self.console_wait_send("sd0>", "a a\n")
+        self.console_wait_send("offset:", "\n")
+        self.console_wait_send("size:", "4000M\n")
+        self.console_wait_send("FS type", "4.2BSD\n")
+        self.console_wait_send("mount point:", "/\n")
+
+        # 256 MB swap as /dev/sd0b
+        self.console_wait_send("sd0*>", "a b\n")
+        self.console_wait_send("offset:", "\n")
+        self.console_wait_send("size:", "256M\n")
+        self.console_wait_send("FS type", "swap\n")
+
+        # All remaining space for /home as /dev/sd0d
+        # NB, 'c' isn't allowed to be used.
+        self.console_wait_send("sd0*>", "a d\n")
+        self.console_wait_send("offset:", "\n")
+        self.console_wait_send("size:", "\n")
+        self.console_wait_send("FS type", "4.2BSD\n")
+        self.console_wait_send("mount point:", "/home\n")
+
+        self.console_wait_send("sd0*>", "q\n")
+        self.console_wait_send("Write new label?:", "y\n")
+
         self.console_wait_send("Location of sets",        "cd0\n")
         self.console_wait_send("Pathname to the sets",    "\n")
         self.console_wait_send("Set name(s)",             "\n")

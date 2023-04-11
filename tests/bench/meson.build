@@ -3,6 +3,12 @@ qht_bench = executable('qht-bench',
                        sources: 'qht-bench.c',
                        dependencies: [qemuutil])
 
+if have_system
+xbzrle_bench = executable('xbzrle-bench',
+                       sources: 'xbzrle-bench.c',
+                       dependencies: [qemuutil,migration])
+endif
+
 executable('atomic_add-bench',
            sources: files('atomic_add-bench.c'),
            dependencies: [qemuutil],
@@ -20,6 +26,7 @@ if have_block
      'benchmark-crypto-hash': [crypto],
      'benchmark-crypto-hmac': [crypto],
      'benchmark-crypto-cipher': [crypto],
+     'benchmark-crypto-akcipher': [crypto],
   }
 endif
 

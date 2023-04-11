@@ -12,6 +12,7 @@
 #ifdef CONFIG_TCG
 #include "tcg/tcg-internal.h"
 #endif
+#include "cpu.h"
 
 /*
  * MMU types, the first four entries have the same layout as the
@@ -46,6 +47,15 @@ struct mips_def_t {
     target_ulong CP0_LLAddr_rw_bitmask;
     int CP0_LLAddr_shift;
     int32_t SYNCI_Step;
+    /*
+     * @CCRes: rate at which the coprocessor 0 counter increments
+     *
+     * The Count register acts as a timer, incrementing at a constant rate,
+     * whether or not an instruction is executed, retired, or any forward
+     * progress is made through the pipeline. The rate at which the counter
+     * increments is implementation dependent, and is a function of the
+     * pipeline clock of the processor, not the issue width of the processor.
+     */
     int32_t CCRes;
     int32_t CP0_Status_rw_bitmask;
     int32_t CP0_TCStatus_rw_bitmask;
@@ -89,9 +99,6 @@ int mips_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
 #define KSEG2_BASE      ((target_ulong)(int32_t)0xC0000000UL)
 #define KSEG3_BASE      ((target_ulong)(int32_t)0xE0000000UL)
 
-#define KVM_KSEG0_BASE  ((target_ulong)(int32_t)0x40000000UL)
-#define KVM_KSEG2_BASE  ((target_ulong)(int32_t)0x60000000UL)
-
 #if !defined(CONFIG_USER_ONLY)
 
 enum {
@@ -133,14 +140,14 @@ struct r4k_tlb_t {
 struct CPUMIPSTLBContext {
     uint32_t nb_tlb;
     uint32_t tlb_in_use;
-    int (*map_address)(struct CPUMIPSState *env, hwaddr *physical, int *prot,
+    int (*map_address)(CPUMIPSState *env, hwaddr *physical, int *prot,
                        target_ulong address, MMUAccessType access_type);
-    void (*helper_tlbwi)(struct CPUMIPSState *env);
-    void (*helper_tlbwr)(struct CPUMIPSState *env);
-    void (*helper_tlbp)(struct CPUMIPSState *env);
-    void (*helper_tlbr)(struct CPUMIPSState *env);
-    void (*helper_tlbinv)(struct CPUMIPSState *env);
-    void (*helper_tlbinvf)(struct CPUMIPSState *env);
+    void (*helper_tlbwi)(CPUMIPSState *env);
+    void (*helper_tlbwr)(CPUMIPSState *env);
+    void (*helper_tlbp)(CPUMIPSState *env);
+    void (*helper_tlbr)(CPUMIPSState *env);
+    void (*helper_tlbinv)(CPUMIPSState *env);
+    void (*helper_tlbinvf)(CPUMIPSState *env);
     union {
         struct {
             r4k_tlb_t tlb[MIPS_TLB_MAX];

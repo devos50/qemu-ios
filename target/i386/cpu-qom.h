@@ -30,8 +30,7 @@
 #define TYPE_X86_CPU "i386-cpu"
 #endif
 
-OBJECT_DECLARE_TYPE(X86CPU, X86CPUClass,
-                    X86_CPU)
+OBJECT_DECLARE_CPU_TYPE(X86CPU, X86CPUClass, X86_CPU)
 
 typedef struct X86CPUModel X86CPUModel;
 
@@ -43,7 +42,7 @@ typedef struct X86CPUModel X86CPUModel;
  * @migration_safe: See CpuDefinitionInfo::migration_safe
  * @static_model: See CpuDefinitionInfo::static
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * An x86 CPU model or family.
  */
@@ -68,7 +67,7 @@ struct X86CPUClass {
 
     DeviceRealize parent_realize;
     DeviceUnrealize parent_unrealize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
 };
 
 

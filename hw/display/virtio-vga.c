@@ -47,15 +47,14 @@ static void virtio_vga_base_text_update(void *opaque, console_ch_t *chardata)
     }
 }
 
-static int virtio_vga_base_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
+static void virtio_vga_base_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
 {
     VirtIOVGABase *vvga = opaque;
     VirtIOGPUBase *g = vvga->vgpu;
 
     if (g->hw_ops->ui_info) {
-        return g->hw_ops->ui_info(g, idx, info);
+        g->hw_ops->ui_info(g, idx, info);
     }
-    return -1;
 }
 
 static void virtio_vga_base_gl_block(void *opaque, bool block)
@@ -108,7 +107,9 @@ static void virtio_vga_base_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
 
     /* init vga compat bits */
     vga->vram_size_mb = 8;
-    vga_common_init(vga, OBJECT(vpci_dev));
+    if (!vga_common_init(vga, OBJECT(vpci_dev), errp)) {
+        return;
+    }
     vga_init(vga, OBJECT(vpci_dev), pci_address_space(&vpci_dev->pci_dev),
              pci_address_space_io(&vpci_dev->pci_dev), true);
     pci_register_bar(&vpci_dev->pci_dev, 0,
@@ -164,13 +165,15 @@ static void virtio_vga_base_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
     }
 }
 
-static void virtio_vga_base_reset(DeviceState *dev)
+static void virtio_vga_base_reset_hold(Object *obj)
 {
-    VirtIOVGABaseClass *klass = VIRTIO_VGA_BASE_GET_CLASS(dev);
-    VirtIOVGABase *vvga = VIRTIO_VGA_BASE(dev);
+    VirtIOVGABaseClass *klass = VIRTIO_VGA_BASE_GET_CLASS(obj);
+    VirtIOVGABase *vvga = VIRTIO_VGA_BASE(obj);
 
     /* reset virtio-gpu */
-    klass->parent_reset(dev);
+    if (klass->parent_phases.hold) {
+        klass->parent_phases.hold(obj);
+    }
 
     /* reset vga */
     vga_common_reset(&vvga->vga);
@@ -202,13 +205,14 @@ static void virtio_vga_base_class_init(ObjectClass *klass, void *data)
     VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);
     VirtIOVGABaseClass *v = VIRTIO_VGA_BASE_CLASS(klass);
     PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     device_class_set_props(dc, virtio_vga_base_properties);
     dc->vmsd = &vmstate_virtio_vga_base;
     dc->hotpluggable = false;
-    device_class_set_parent_reset(dc, virtio_vga_base_reset,
-                                  &v->parent_reset);
+    resettable_class_set_parent_phases(rc, NULL, virtio_vga_base_reset_hold,
+                                       NULL, &v->parent_phases);
 
     k->realize = virtio_vga_base_realize;
     pcidev_k->romfile = "vgabios-virtio.bin";
@@ -220,7 +224,7 @@ static void virtio_vga_base_class_init(ObjectClass *klass, void *data)
                                    virtio_vga_set_big_endian_fb);
 }
 
-static TypeInfo virtio_vga_base_info = {
+static const TypeInfo virtio_vga_base_info = {
     .name          = TYPE_VIRTIO_VGA_BASE,
     .parent        = TYPE_VIRTIO_PCI,
     .instance_size = sizeof(VirtIOVGABase),
@@ -229,6 +233,7 @@ static TypeInfo virtio_vga_base_info = {
     .abstract      = true,
 };
 module_obj(TYPE_VIRTIO_VGA_BASE);
+module_kconfig(VIRTIO_VGA);
 
 #define TYPE_VIRTIO_VGA "virtio-vga"
 

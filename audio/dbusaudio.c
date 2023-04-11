@@ -43,6 +43,7 @@
 
 typedef struct DBusAudio {
     GDBusObjectManagerServer *server;
+    bool p2p;
     GDBusObjectSkeleton *audio;
     QemuDBusDisplay1Audio *iface;
     GHashTable *out_listeners;
@@ -82,7 +83,7 @@ static void *dbus_get_buffer_out(HWVoiceOut *hw, size_t *size)
     }
 
     *size = MIN(vo->buf_size - vo->buf_pos, *size);
-    *size = audio_rate_get_bytes(&hw->info, &vo->rate, *size);
+    *size = audio_rate_get_bytes(&vo->rate, &hw->info, *size);
 
     return vo->buf + vo->buf_pos;
 
@@ -122,7 +123,7 @@ static size_t dbus_put_buffer_out(HWVoiceOut *hw, void *buf, size_t size)
     return size;
 }
 
-#ifdef HOST_WORDS_BIGENDIAN
+#if HOST_BIG_ENDIAN
 #define AUDIO_HOST_BE TRUE
 #else
 #define AUDIO_HOST_BE FALSE
@@ -343,7 +344,7 @@ dbus_read(HWVoiceIn *hw, void *buf, size_t size)
 
     trace_dbus_audio_read(size);
 
-    /* size = audio_rate_get_bytes(&hw->info, &vo->rate, size); */
+    /* size = audio_rate_get_bytes(&vo->rate, &hw->info, size); */
 
     g_hash_table_iter_init(&iter, da->in_listeners);
     while (g_hash_table_iter_next(&iter, NULL, (void **)&listener)) {
@@ -448,7 +449,8 @@ dbus_audio_register_listener(AudioState *s,
                              bool out)
 {
     DBusAudio *da = s->drv_opaque;
-    const char *sender = g_dbus_method_invocation_get_sender(invocation);
+    const char *sender =
+        da->p2p ? "p2p" : g_dbus_method_invocation_get_sender(invocation);
     g_autoptr(GDBusConnection) listener_conn = NULL;
     g_autoptr(GError) err = NULL;
     g_autoptr(GSocket) socket = NULL;
@@ -591,7 +593,7 @@ dbus_audio_register_in_listener(AudioState *s,
 }
 
 static void
-dbus_audio_set_server(AudioState *s, GDBusObjectManagerServer *server)
+dbus_audio_set_server(AudioState *s, GDBusObjectManagerServer *server, bool p2p)
 {
     DBusAudio *da = s->drv_opaque;
 
@@ -599,6 +601,7 @@ dbus_audio_set_server(AudioState *s, GDBusObjectManagerServer *server)
     g_assert(!da->server);
 
     da->server = g_object_ref(server);
+    da->p2p = p2p;
 
     da->audio = g_dbus_object_skeleton_new(DBUS_DISPLAY1_AUDIO_PATH);
     da->iface = qemu_dbus_display1_audio_skeleton_new();

@@ -27,7 +27,7 @@ Options
 .. program:: qemu-nbd
 
 *filename* is a disk image filename, or a set of block
-driver options if ``--image-opts`` is specified.
+driver options if :option:`--image-opts` is specified.
 
 *dev* is an NBD device.
 
@@ -139,8 +139,7 @@ driver options if ``--image-opts`` is specified.
 .. option:: -e, --shared=NUM
 
   Allow up to *NUM* clients to share the device (default
-  ``1``), 0 for unlimited. Safe for readers, but for now,
-  consistency is not guaranteed between multiple writers.
+  ``1``), 0 for unlimited.
 
 .. option:: -t, --persistent
 
@@ -165,9 +164,22 @@ driver options if ``--image-opts`` is specified.
 .. option:: --tls-creds=ID
 
   Enable mandatory TLS encryption for the server by setting the ID
-  of the TLS credentials object previously created with the --object
-  option; or provide the credentials needed for connecting as a client
-  in list mode.
+  of the TLS credentials object previously created with the
+  :option:`--object` option; or provide the credentials needed for
+  connecting as a client in list mode.
+
+.. option:: --tls-hostname=hostname
+
+  When validating an x509 certificate received over a TLS connection,
+  the hostname that the NBD client used to connect will be checked
+  against information in the server provided certificate. Sometimes
+  it might be required to override the hostname used to perform this
+  check. For example, if the NBD client is using a tunnel from localhost
+  to connect to the remote server, the :option:`--tls-hostname` option should
+  be used to set the officially expected hostname of the remote NBD
+  server. This can also be used if accessing NBD over a UNIX socket
+  where there is no inherent hostname available. This is only permitted
+  when acting as a NBD client with the :option:`--list` option.
 
 .. option:: --fork
 
@@ -213,7 +225,7 @@ disconnects:
   qemu-nbd -f qcow2 file.qcow2
 
 Start a long-running server listening with encryption on port 10810,
-and whitelist clients with a specific X.509 certificate to connect to
+and allow clients with a specific X.509 certificate to connect to
 a 1 megabyte subset of a raw file, using the export name 'subset':
 
 ::

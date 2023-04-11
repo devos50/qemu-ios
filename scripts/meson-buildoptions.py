@@ -26,14 +26,34 @@ import shlex
 import sys
 
 SKIP_OPTIONS = {
-    "audio_drv_list",
     "default_devices",
-    "docdir",
     "fuzzing_engine",
-    "qemu_firmwarepath",
     "qemu_suffix",
-    "sphinx_build",
-    "trace_file",
+    "smbd",
+}
+
+OPTION_NAMES = {
+    "b_coverage": "gcov",
+    "b_lto": "lto",
+    "malloc": "enable-malloc",
+    "pkgversion": "with-pkgversion",
+    "qemu_firmwarepath": "firmwarepath",
+    "trace_backends": "enable-trace-backends",
+    "trace_file": "with-trace-file",
+}
+
+BUILTIN_OPTIONS = {
+    "b_coverage",
+    "b_lto",
+    "datadir",
+    "includedir",
+    "libdir",
+    "libexecdir",
+    "localedir",
+    "localstatedir",
+    "mandir",
+    "strip",
+    "sysconfdir",
 }
 
 LINE_WIDTH = 76
@@ -41,7 +61,10 @@ LINE_WIDTH = 76
 
 # Convert the default value of an option to the string used in
 # the help message
-def value_to_help(value):
+def get_help(opt):
+    if opt["name"] == "libdir":
+        return 'system default'
+    value = opt["value"]
     if isinstance(value, list):
         return ",".join(value)
     if isinstance(value, bool):
@@ -68,8 +91,8 @@ def sh_print(line=""):
 def help_line(left, opt, indent, long):
     right = f'{opt["description"]}'
     if long:
-        value = value_to_help(opt["value"])
-        if value != "auto":
+        value = get_help(opt)
+        if value != "auto" and value != "":
             right += f" [{value}]"
     if "choices" in opt and long:
         choices = "/".join(sorted(opt["choices"]))
@@ -90,31 +113,74 @@ def allow_arg(opt):
     return not (set(opt["choices"]) <= {"auto", "disabled", "enabled"})
 
 
+# Return whether the option (a dictionary) can be used without
+# arguments.  Booleans can only be used without arguments;
+# combos require an argument if they accept neither "enabled"
+# nor "disabled"
+def require_arg(opt):
+    if opt["type"] == "boolean":
+        return False
+    if opt["type"] != "combo":
+        return True
+    return not ({"enabled", "disabled"}.intersection(opt["choices"]))
+
+
+def filter_options(json):
+    if ":" in json["name"]:
+        return False
+    if json["section"] == "user":
+        return json["name"] not in SKIP_OPTIONS
+    else:
+        return json["name"] in BUILTIN_OPTIONS
+
+
 def load_options(json):
-    json = [
-        x
-        for x in json
-        if x["section"] == "user"
-        and ":" not in x["name"]
-        and x["name"] not in SKIP_OPTIONS
-    ]
+    json = [x for x in json if filter_options(x)]
     return sorted(json, key=lambda x: x["name"])
+
+
+def cli_option(opt):
+    name = opt["name"]
+    if name in OPTION_NAMES:
+        return OPTION_NAMES[name]
+    return name.replace("_", "-")
+
+
+def cli_help_key(opt):
+    key = cli_option(opt)
+    if require_arg(opt):
+        return key
+    if opt["type"] == "boolean" and opt["value"]:
+        return f"disable-{key}"
+    return f"enable-{key}"
+
+
+def cli_metavar(opt):
+    if opt["type"] == "string":
+        return "VALUE"
+    if opt["type"] == "array":
+        return "CHOICES" if "choices" in opt else "VALUES"
+    return "CHOICE"
 
 
 def print_help(options):
     print("meson_options_help() {")
-    for opt in options:
-        key = opt["name"].replace("_", "-")
+    for opt in sorted(options, key=cli_help_key):
+        key = cli_help_key(opt)
         # The first section includes options that have an arguments,
         # and booleans (i.e., only one of enable/disable makes sense)
-        if opt["type"] == "boolean":
-            left = f"--disable-{key}" if opt["value"] else f"--enable-{key}"
+        if require_arg(opt):
+            metavar = cli_metavar(opt)
+            left = f"--{key}={metavar}"
+            help_line(left, opt, 27, True)
+        elif opt["type"] == "boolean":
+            left = f"--{key}"
             help_line(left, opt, 27, False)
         elif allow_arg(opt):
             if opt["type"] == "combo" and "enabled" in opt["choices"]:
-                left = f"--enable-{key}[=CHOICE]"
+                left = f"--{key}[=CHOICE]"
             else:
-                left = f"--enable-{key}=CHOICE"
+                left = f"--{key}=CHOICE"
             help_line(left, opt, 27, True)
 
     sh_print()
@@ -133,9 +199,14 @@ def print_parse(options):
     print("_meson_option_parse() {")
     print("  case $1 in")
     for opt in options:
-        key = opt["name"].replace("_", "-")
+        key = cli_option(opt)
         name = opt["name"]
-        if opt["type"] == "boolean":
+        if require_arg(opt):
+            if opt["type"] == "array" and not "choices" in opt:
+                print(f'    --{key}=*) quote_sh "-D{name}=$(meson_option_build_array $2)" ;;')
+            else:
+                print(f'    --{key}=*) quote_sh "-D{name}=$2" ;;')
+        elif opt["type"] == "boolean":
             print(f'    --enable-{key}) printf "%s" -D{name}=true ;;')
             print(f'    --disable-{key}) printf "%s" -D{name}=false ;;')
         else:

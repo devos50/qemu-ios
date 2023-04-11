@@ -24,6 +24,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/qmp/qjson.h"
 
 #include "sysemu/block-backend.h"
 #include "qemu/cutils.h"
@@ -31,25 +32,80 @@
 #include "block/block_int.h"
 #include "block/qdict.h"
 #include "block/block-copy.h"
+#include "block/dirty-bitmap.h"
 
 #include "block/copy-before-write.h"
+#include "block/reqlist.h"
+
+#include "qapi/qapi-visit-block-core.h"
 
 typedef struct BDRVCopyBeforeWriteState {
     BlockCopyState *bcs;
     BdrvChild *target;
+    OnCbwError on_cbw_error;
+    uint32_t cbw_timeout_ns;
+
+    /*
+     * @lock: protects access to @access_bitmap, @done_bitmap and
+     * @frozen_read_reqs
+     */
+    CoMutex lock;
+
+    /*
+     * @access_bitmap: represents areas allowed for reading by fleecing user.
+     * Reading from non-dirty areas leads to -EACCES.
+     */
+    BdrvDirtyBitmap *access_bitmap;
+
+    /*
+     * @done_bitmap: represents areas that was successfully copied to @target by
+     * copy-before-write operations.
+     */
+    BdrvDirtyBitmap *done_bitmap;
+
+    /*
+     * @frozen_read_reqs: current read requests for fleecing user in bs->file
+     * node. These areas must not be rewritten by guest.
+     */
+    BlockReqList frozen_read_reqs;
+
+    /*
+     * @snapshot_error is normally zero. But on first copy-before-write failure
+     * when @on_cbw_error == ON_CBW_ERROR_BREAK_SNAPSHOT, @snapshot_error takes
+     * value of this error (<0). After that all in-flight and further
+     * snapshot-API requests will fail with that error.
+     */
+    int snapshot_error;
 } BDRVCopyBeforeWriteState;
 
-static coroutine_fn int cbw_co_preadv(
-        BlockDriverState *bs, int64_t offset, int64_t bytes,
-        QEMUIOVector *qiov, BdrvRequestFlags flags)
+static int coroutine_fn GRAPH_RDLOCK
+cbw_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
+              QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     return bdrv_co_preadv(bs->file, offset, bytes, qiov, flags);
 }
 
+static void block_copy_cb(void *opaque)
+{
+    BlockDriverState *bs = opaque;
+
+    bdrv_dec_in_flight(bs);
+}
+
+/*
+ * Do copy-before-write operation.
+ *
+ * On failure guest request must be failed too.
+ *
+ * On success, we also wait for all in-flight fleecing read requests in source
+ * node, and it's guaranteed that after cbw_do_copy_before_write() successful
+ * return there are no such requests and they will never appear.
+ */
 static coroutine_fn int cbw_do_copy_before_write(BlockDriverState *bs,
         uint64_t offset, uint64_t bytes, BdrvRequestFlags flags)
 {
     BDRVCopyBeforeWriteState *s = bs->opaque;
+    int ret;
     uint64_t off, end;
     int64_t cluster_size = block_copy_cluster_size(s->bcs);
 
@@ -57,14 +113,44 @@ static coroutine_fn int cbw_do_copy_before_write(BlockDriverState *bs,
         return 0;
     }
 
+    if (s->snapshot_error) {
+        return 0;
+    }
+
     off = QEMU_ALIGN_DOWN(offset, cluster_size);
     end = QEMU_ALIGN_UP(offset + bytes, cluster_size);
 
-    return block_copy(s->bcs, off, end - off, true);
+    /*
+     * Increase in_flight, so that in case of timed-out block-copy, the
+     * remaining background block_copy() request (which can't be immediately
+     * cancelled by timeout) is presented in bs->in_flight. This way we are
+     * sure that on bs close() we'll previously wait for all timed-out but yet
+     * running block_copy calls.
+     */
+    bdrv_inc_in_flight(bs);
+    ret = block_copy(s->bcs, off, end - off, true, s->cbw_timeout_ns,
+                     block_copy_cb, bs);
+    if (ret < 0 && s->on_cbw_error == ON_CBW_ERROR_BREAK_GUEST_WRITE) {
+        return ret;
+    }
+
+    WITH_QEMU_LOCK_GUARD(&s->lock) {
+        if (ret < 0) {
+            assert(s->on_cbw_error == ON_CBW_ERROR_BREAK_SNAPSHOT);
+            if (!s->snapshot_error) {
+                s->snapshot_error = ret;
+            }
+        } else {
+            bdrv_set_dirty_bitmap(s->done_bitmap, off, end - off);
+        }
+        reqlist_wait_all(&s->frozen_read_reqs, off, end - off, &s->lock);
+    }
+
+    return 0;
 }
 
-static int coroutine_fn cbw_co_pdiscard(BlockDriverState *bs,
-                                        int64_t offset, int64_t bytes)
+static int coroutine_fn GRAPH_RDLOCK
+cbw_co_pdiscard(BlockDriverState *bs, int64_t offset, int64_t bytes)
 {
     int ret = cbw_do_copy_before_write(bs, offset, bytes, 0);
     if (ret < 0) {
@@ -74,8 +160,9 @@ static int coroutine_fn cbw_co_pdiscard(BlockDriverState *bs,
     return bdrv_co_pdiscard(bs->file, offset, bytes);
 }
 
-static int coroutine_fn cbw_co_pwrite_zeroes(BlockDriverState *bs,
-        int64_t offset, int64_t bytes, BdrvRequestFlags flags)
+static int coroutine_fn GRAPH_RDLOCK
+cbw_co_pwrite_zeroes(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                     BdrvRequestFlags flags)
 {
     int ret = cbw_do_copy_before_write(bs, offset, bytes, flags);
     if (ret < 0) {
@@ -85,11 +172,9 @@ static int coroutine_fn cbw_co_pwrite_zeroes(BlockDriverState *bs,
     return bdrv_co_pwrite_zeroes(bs->file, offset, bytes, flags);
 }
 
-static coroutine_fn int cbw_co_pwritev(BlockDriverState *bs,
-                                       int64_t offset,
-                                       int64_t bytes,
-                                       QEMUIOVector *qiov,
-                                       BdrvRequestFlags flags)
+static coroutine_fn GRAPH_RDLOCK
+int cbw_co_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                   QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     int ret = cbw_do_copy_before_write(bs, offset, bytes, flags);
     if (ret < 0) {
@@ -99,13 +184,155 @@ static coroutine_fn int cbw_co_pwritev(BlockDriverState *bs,
     return bdrv_co_pwritev(bs->file, offset, bytes, qiov, flags);
 }
 
-static int coroutine_fn cbw_co_flush(BlockDriverState *bs)
+static int coroutine_fn GRAPH_RDLOCK cbw_co_flush(BlockDriverState *bs)
 {
     if (!bs->file) {
         return 0;
     }
 
     return bdrv_co_flush(bs->file->bs);
+}
+
+/*
+ * If @offset not accessible - return NULL.
+ *
+ * Otherwise, set @pnum to some bytes that accessible from @file (@file is set
+ * to bs->file or to s->target). Return newly allocated BlockReq object that
+ * should be than passed to cbw_snapshot_read_unlock().
+ *
+ * It's guaranteed that guest writes will not interact in the region until
+ * cbw_snapshot_read_unlock() called.
+ */
+static coroutine_fn BlockReq *
+cbw_snapshot_read_lock(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                       int64_t *pnum, BdrvChild **file)
+{
+    BDRVCopyBeforeWriteState *s = bs->opaque;
+    BlockReq *req = g_new(BlockReq, 1);
+    bool done;
+
+    QEMU_LOCK_GUARD(&s->lock);
+
+    if (s->snapshot_error) {
+        g_free(req);
+        return NULL;
+    }
+
+    if (bdrv_dirty_bitmap_next_zero(s->access_bitmap, offset, bytes) != -1) {
+        g_free(req);
+        return NULL;
+    }
+
+    done = bdrv_dirty_bitmap_status(s->done_bitmap, offset, bytes, pnum);
+    if (done) {
+        /*
+         * Special invalid BlockReq, that is handled in
+         * cbw_snapshot_read_unlock(). We don't need to lock something to read
+         * from s->target.
+         */
+        *req = (BlockReq) {.offset = -1, .bytes = -1};
+        *file = s->target;
+    } else {
+        reqlist_init_req(&s->frozen_read_reqs, req, offset, bytes);
+        *file = bs->file;
+    }
+
+    return req;
+}
+
+static coroutine_fn void
+cbw_snapshot_read_unlock(BlockDriverState *bs, BlockReq *req)
+{
+    BDRVCopyBeforeWriteState *s = bs->opaque;
+
+    if (req->offset == -1 && req->bytes == -1) {
+        g_free(req);
+        return;
+    }
+
+    QEMU_LOCK_GUARD(&s->lock);
+
+    reqlist_remove_req(req);
+    g_free(req);
+}
+
+static int coroutine_fn GRAPH_RDLOCK
+cbw_co_preadv_snapshot(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                       QEMUIOVector *qiov, size_t qiov_offset)
+{
+    BlockReq *req;
+    BdrvChild *file;
+    int ret;
+
+    /* TODO: upgrade to async loop using AioTask */
+    while (bytes) {
+        int64_t cur_bytes;
+
+        req = cbw_snapshot_read_lock(bs, offset, bytes, &cur_bytes, &file);
+        if (!req) {
+            return -EACCES;
+        }
+
+        ret = bdrv_co_preadv_part(file, offset, cur_bytes,
+                                  qiov, qiov_offset, 0);
+        cbw_snapshot_read_unlock(bs, req);
+        if (ret < 0) {
+            return ret;
+        }
+
+        bytes -= cur_bytes;
+        offset += cur_bytes;
+        qiov_offset += cur_bytes;
+    }
+
+    return 0;
+}
+
+static int coroutine_fn GRAPH_RDLOCK
+cbw_co_snapshot_block_status(BlockDriverState *bs,
+                             bool want_zero, int64_t offset, int64_t bytes,
+                             int64_t *pnum, int64_t *map,
+                             BlockDriverState **file)
+{
+    BDRVCopyBeforeWriteState *s = bs->opaque;
+    BlockReq *req;
+    int ret;
+    int64_t cur_bytes;
+    BdrvChild *child;
+
+    req = cbw_snapshot_read_lock(bs, offset, bytes, &cur_bytes, &child);
+    if (!req) {
+        return -EACCES;
+    }
+
+    ret = bdrv_block_status(child->bs, offset, cur_bytes, pnum, map, file);
+    if (child == s->target) {
+        /*
+         * We refer to s->target only for areas that we've written to it.
+         * And we can not report unallocated blocks in s->target: this will
+         * break generic block-status-above logic, that will go to
+         * copy-before-write filtered child in this case.
+         */
+        assert(ret & BDRV_BLOCK_ALLOCATED);
+    }
+
+    cbw_snapshot_read_unlock(bs, req);
+
+    return ret;
+}
+
+static int coroutine_fn GRAPH_RDLOCK
+cbw_co_pdiscard_snapshot(BlockDriverState *bs, int64_t offset, int64_t bytes)
+{
+    BDRVCopyBeforeWriteState *s = bs->opaque;
+
+    WITH_QEMU_LOCK_GUARD(&s->lock) {
+        bdrv_reset_dirty_bitmap(s->access_bitmap, offset, bytes);
+    }
+
+    block_copy_reset(s->bcs, offset, bytes);
+
+    return bdrv_co_pdiscard(s->target, offset, bytes);
 }
 
 static void cbw_refresh_filename(BlockDriverState *bs)
@@ -145,17 +372,58 @@ static void cbw_child_perm(BlockDriverState *bs, BdrvChild *c,
     }
 }
 
+static BlockdevOptions *cbw_parse_options(QDict *options, Error **errp)
+{
+    BlockdevOptions *opts = NULL;
+    Visitor *v = NULL;
+
+    qdict_put_str(options, "driver", "copy-before-write");
+
+    v = qobject_input_visitor_new_flat_confused(options, errp);
+    if (!v) {
+        goto out;
+    }
+
+    visit_type_BlockdevOptions(v, NULL, &opts, errp);
+    if (!opts) {
+        goto out;
+    }
+
+    /*
+     * Delete options which we are going to parse through BlockdevOptions
+     * object for original options.
+     */
+    qdict_extract_subqdict(options, NULL, "bitmap");
+    qdict_del(options, "on-cbw-error");
+    qdict_del(options, "cbw-timeout");
+
+out:
+    visit_free(v);
+    qdict_del(options, "driver");
+
+    return opts;
+}
+
 static int cbw_open(BlockDriverState *bs, QDict *options, int flags,
                     Error **errp)
 {
     BDRVCopyBeforeWriteState *s = bs->opaque;
-    BdrvDirtyBitmap *copy_bitmap;
+    BdrvDirtyBitmap *bitmap = NULL;
+    int64_t cluster_size;
+    g_autoptr(BlockdevOptions) full_opts = NULL;
+    BlockdevOptionsCbw *opts;
+    int ret;
 
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
-                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
-                               false, errp);
-    if (!bs->file) {
+    full_opts = cbw_parse_options(options, errp);
+    if (!full_opts) {
         return -EINVAL;
+    }
+    assert(full_opts->driver == BLOCKDEV_DRIVER_COPY_BEFORE_WRITE);
+    opts = &full_opts->u.copy_before_write;
+
+    ret = bdrv_open_file_child(NULL, options, "file", bs, errp);
+    if (ret < 0) {
+        return ret;
     }
 
     s->target = bdrv_open_child(NULL, options, "target", bs, &child_of_bds,
@@ -164,6 +432,18 @@ static int cbw_open(BlockDriverState *bs, QDict *options, int flags,
         return -EINVAL;
     }
 
+    if (opts->bitmap) {
+        bitmap = block_dirty_bitmap_lookup(opts->bitmap->node,
+                                           opts->bitmap->name, NULL, errp);
+        if (!bitmap) {
+            return -EINVAL;
+        }
+    }
+    s->on_cbw_error = opts->has_on_cbw_error ? opts->on_cbw_error :
+            ON_CBW_ERROR_BREAK_GUEST_WRITE;
+    s->cbw_timeout_ns = opts->has_cbw_timeout ?
+        opts->cbw_timeout * NANOSECONDS_PER_SECOND : 0;
+
     bs->total_sectors = bs->file->bs->total_sectors;
     bs->supported_write_flags = BDRV_REQ_WRITE_UNCHANGED |
             (BDRV_REQ_FUA & bs->file->bs->supported_write_flags);
@@ -171,14 +451,32 @@ static int cbw_open(BlockDriverState *bs, QDict *options, int flags,
             ((BDRV_REQ_FUA | BDRV_REQ_MAY_UNMAP | BDRV_REQ_NO_FALLBACK) &
              bs->file->bs->supported_zero_flags);
 
-    s->bcs = block_copy_state_new(bs->file, s->target, errp);
+    s->bcs = block_copy_state_new(bs->file, s->target, bitmap, errp);
     if (!s->bcs) {
         error_prepend(errp, "Cannot create block-copy-state: ");
         return -EINVAL;
     }
 
-    copy_bitmap = block_copy_dirty_bitmap(s->bcs);
-    bdrv_set_dirty_bitmap(copy_bitmap, 0, bdrv_dirty_bitmap_size(copy_bitmap));
+    cluster_size = block_copy_cluster_size(s->bcs);
+
+    s->done_bitmap = bdrv_create_dirty_bitmap(bs, cluster_size, NULL, errp);
+    if (!s->done_bitmap) {
+        return -EINVAL;
+    }
+    bdrv_disable_dirty_bitmap(s->done_bitmap);
+
+    /* s->access_bitmap starts equal to bcs bitmap */
+    s->access_bitmap = bdrv_create_dirty_bitmap(bs, cluster_size, NULL, errp);
+    if (!s->access_bitmap) {
+        return -EINVAL;
+    }
+    bdrv_disable_dirty_bitmap(s->access_bitmap);
+    bdrv_dirty_bitmap_merge_internal(s->access_bitmap,
+                                     block_copy_dirty_bitmap(s->bcs), NULL,
+                                     true);
+
+    qemu_co_mutex_init(&s->lock);
+    QLIST_INIT(&s->frozen_read_reqs);
 
     return 0;
 }
@@ -186,6 +484,9 @@ static int cbw_open(BlockDriverState *bs, QDict *options, int flags,
 static void cbw_close(BlockDriverState *bs)
 {
     BDRVCopyBeforeWriteState *s = bs->opaque;
+
+    bdrv_release_dirty_bitmap(s->access_bitmap);
+    bdrv_release_dirty_bitmap(s->done_bitmap);
 
     block_copy_state_free(s->bcs);
     s->bcs = NULL;
@@ -204,6 +505,10 @@ BlockDriver bdrv_cbw_filter = {
     .bdrv_co_pdiscard           = cbw_co_pdiscard,
     .bdrv_co_flush              = cbw_co_flush,
 
+    .bdrv_co_preadv_snapshot       = cbw_co_preadv_snapshot,
+    .bdrv_co_pdiscard_snapshot     = cbw_co_pdiscard_snapshot,
+    .bdrv_co_snapshot_block_status = cbw_co_snapshot_block_status,
+
     .bdrv_refresh_filename      = cbw_refresh_filename,
 
     .bdrv_child_perm            = cbw_child_perm,
@@ -217,12 +522,12 @@ BlockDriverState *bdrv_cbw_append(BlockDriverState *source,
                                   BlockCopyState **bcs,
                                   Error **errp)
 {
-    ERRP_GUARD();
     BDRVCopyBeforeWriteState *state;
     BlockDriverState *top;
     QDict *opts;
 
     assert(source->total_sectors == target->total_sectors);
+    GLOBAL_STATE_CODE();
 
     opts = qdict_new();
     qdict_put_str(opts, "driver", "copy-before-write");
@@ -245,6 +550,7 @@ BlockDriverState *bdrv_cbw_append(BlockDriverState *source,
 
 void bdrv_cbw_drop(BlockDriverState *bs)
 {
+    GLOBAL_STATE_CODE();
     bdrv_drop_filter(bs, &error_abort);
     bdrv_unref(bs);
 }

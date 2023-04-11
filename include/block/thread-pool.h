@@ -18,7 +18,9 @@
 #ifndef QEMU_THREAD_POOL_H
 #define QEMU_THREAD_POOL_H
 
-#include "block/block.h"
+#include "block/aio.h"
+
+#define THREAD_POOL_MAX_THREADS_DEFAULT         64
 
 typedef int ThreadPoolFunc(void *opaque);
 
@@ -33,5 +35,6 @@ BlockAIOCB *thread_pool_submit_aio(ThreadPool *pool,
 int coroutine_fn thread_pool_submit_co(ThreadPool *pool,
         ThreadPoolFunc *func, void *arg);
 void thread_pool_submit(ThreadPool *pool, ThreadPoolFunc *func, void *arg);
+void thread_pool_update_params(ThreadPool *pool, struct AioContext *ctx);
 
 #endif

@@ -284,6 +284,12 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    /* cpuclk must be connected; refclk is optional */
+    if (!clock_has_source(s->cpuclk)) {
+        error_setg(errp, "armv7m: cpuclk must be connected");
+        return;
+    }
+
     memory_region_add_subregion_overlap(&s->container, 0, s->board_memory, -1);
 
     s->cpu = ARM_CPU(object_new_with_props(s->cpu_type, OBJECT(s), "cpu",
@@ -420,8 +426,18 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
                                     &s->sysreg_ns_mem);
     }
 
-    /* Create and map the systick devices */
-    qdev_connect_clock_in(DEVICE(&s->systick[M_REG_NS]), "refclk", s->refclk);
+    /*
+     * Create and map the systick devices. Note that we only connect
+     * refclk if it has been connected to us; otherwise the systick
+     * device gets the wrong answer for clock_has_source(refclk), because
+     * it has an immediate source (the ARMv7M's clock object) but not
+     * an ultimate source, and then it won't correctly auto-select the
+     * CPU clock as its only possible clock source.
+     */
+    if (clock_has_source(s->refclk)) {
+        qdev_connect_clock_in(DEVICE(&s->systick[M_REG_NS]), "refclk",
+                              s->refclk);
+    }
     qdev_connect_clock_in(DEVICE(&s->systick[M_REG_NS]), "cpuclk", s->cpuclk);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->systick[M_REG_NS]), errp)) {
         return;
@@ -438,8 +454,10 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
          */
         object_initialize_child(OBJECT(dev), "systick-reg-s",
                                 &s->systick[M_REG_S], TYPE_SYSTICK);
-        qdev_connect_clock_in(DEVICE(&s->systick[M_REG_S]), "refclk",
-                              s->refclk);
+        if (clock_has_source(s->refclk)) {
+            qdev_connect_clock_in(DEVICE(&s->systick[M_REG_S]), "refclk",
+                                  s->refclk);
+        }
         qdev_connect_clock_in(DEVICE(&s->systick[M_REG_S]), "cpuclk",
                               s->cpuclk);
 
@@ -520,8 +538,8 @@ static const VMStateDescription vmstate_armv7m = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
-        VMSTATE_CLOCK(refclk, SysTickState),
-        VMSTATE_CLOCK(cpuclk, SysTickState),
+        VMSTATE_CLOCK(refclk, ARMv7MState),
+        VMSTATE_CLOCK(cpuclk, ARMv7MState),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -550,20 +568,14 @@ static void armv7m_reset(void *opaque)
     cpu_reset(CPU(cpu));
 }
 
-void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
+void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename,
+                        hwaddr mem_base, int mem_size)
 {
-    int image_size;
+    ssize_t image_size;
     uint64_t entry;
-    int big_endian;
     AddressSpace *as;
     int asidx;
     CPUState *cs = CPU(cpu);
-
-#ifdef TARGET_WORDS_BIGENDIAN
-    big_endian = 1;
-#else
-    big_endian = 0;
-#endif
 
     if (arm_feature(&cpu->env, ARM_FEATURE_EL3)) {
         asidx = ARMASIdx_S;
@@ -575,9 +587,9 @@ void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
     if (kernel_filename) {
         image_size = load_elf_as(kernel_filename, NULL, NULL, NULL,
                                  &entry, NULL, NULL,
-                                 NULL, big_endian, EM_ARM, 1, 0, as);
+                                 NULL, 0, EM_ARM, 1, 0, as);
         if (image_size < 0) {
-            image_size = load_image_targphys_as(kernel_filename, 0,
+            image_size = load_image_targphys_as(kernel_filename, mem_base,
                                                 mem_size, as);
         }
         if (image_size < 0) {

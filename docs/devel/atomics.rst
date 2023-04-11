@@ -1,3 +1,5 @@
+.. _atomics-ref:
+
 =========================
 Atomic operations in QEMU
 =========================
@@ -25,7 +27,8 @@ provides macros that fall in three camps:
 
 - weak atomic access and manual memory barriers: ``qatomic_read()``,
   ``qatomic_set()``, ``smp_rmb()``, ``smp_wmb()``, ``smp_mb()``,
-  ``smp_mb_acquire()``, ``smp_mb_release()``, ``smp_read_barrier_depends()``;
+  ``smp_mb_acquire()``, ``smp_mb_release()``, ``smp_read_barrier_depends()``,
+  ``smp_mb__before_rmw()``, ``smp_mb__after_rmw()``;
 
 - sequentially consistent atomic access: everything else.
 
@@ -466,13 +469,19 @@ and memory barriers, and the equivalents in QEMU:
   In QEMU, the second kind is named ``atomic_OP_fetch``.
 
 - different atomic read-modify-write operations in Linux imply
-  a different set of memory barriers; in QEMU, all of them enforce
-  sequential consistency.
+  a different set of memory barriers. In QEMU, all of them enforce
+  sequential consistency: there is a single order in which the
+  program sees them happen.
 
-- in QEMU, ``qatomic_read()`` and ``qatomic_set()`` do not participate in
-  the total ordering enforced by sequentially-consistent operations.
-  This is because QEMU uses the C11 memory model.  The following example
-  is correct in Linux but not in QEMU:
+- however, according to the C11 memory model that QEMU uses, this order
+  does not propagate to other memory accesses on either side of the
+  read-modify-write operation.  As far as those are concerned, the
+  operation consist of just a load-acquire followed by a store-release.
+  Stores that precede the RMW operation, and loads that follow it, can
+  still be reordered and will happen *in the middle* of the read-modify-write
+  operation!
+
+  Therefore, the following example is correct in Linux but not in QEMU:
 
       +----------------------------------+--------------------------------+
       | Linux (correct)                  | QEMU (incorrect)               |
@@ -486,9 +495,24 @@ and memory barriers, and the equivalents in QEMU:
   because the read of ``y`` can be moved (by either the processor or the
   compiler) before the write of ``x``.
 
-  Fixing this requires an ``smp_mb()`` memory barrier between the write
-  of ``x`` and the read of ``y``.  In the common case where only one thread
-  writes ``x``, it is also possible to write it like this:
+  Fixing this requires a full memory barrier between the write of ``x`` and
+  the read of ``y``.  QEMU provides ``smp_mb__before_rmw()`` and
+  ``smp_mb__after_rmw()``; they act both as an optimization,
+  avoiding the memory barrier on processors where it is unnecessary,
+  and as a clarification of this corner case of the C11 memory model:
+
+      +--------------------------------+
+      | QEMU (correct)                 |
+      +================================+
+      | ::                             |
+      |                                |
+      |   a = qatomic_fetch_add(&x, 2);|
+      |   smp_mb__after_rmw();         |
+      |   b = qatomic_read(&y);        |
+      +--------------------------------+
+
+  In the common case where only one thread writes ``x``, it is also possible
+  to write it like this:
 
       +--------------------------------+
       | QEMU (correct)                 |

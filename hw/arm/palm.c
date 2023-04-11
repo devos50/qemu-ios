@@ -32,6 +32,8 @@
 #include "cpu.h"
 #include "qemu/cutils.h"
 #include "qom/object.h"
+#include "qemu/error-report.h"
+
 
 static uint64_t static_read(void *opaque, hwaddr offset, unsigned size)
 {
@@ -115,7 +117,7 @@ static struct {
 
 static void palmte_button_event(void *opaque, int keycode)
 {
-    struct omap_mpu_state_s *cpu = (struct omap_mpu_state_s *) opaque;
+    struct omap_mpu_state_s *cpu = opaque;
 
     if (palmte_keymap[keycode & 0x7f].row != -1)
         omap_mpuio_key(cpu->mpuio,

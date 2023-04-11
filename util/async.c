@@ -27,11 +27,14 @@
 #include "qapi/error.h"
 #include "block/aio.h"
 #include "block/thread-pool.h"
+#include "block/graph-lock.h"
 #include "qemu/main-loop.h"
 #include "qemu/atomic.h"
 #include "qemu/rcu_queue.h"
 #include "block/raw-aio.h"
 #include "qemu/coroutine_int.h"
+#include "qemu/coroutine-tls.h"
+#include "sysemu/cpu-timers.h"
 #include "trace.h"
 
 /***********************************************************/
@@ -71,18 +74,32 @@ static void aio_bh_enqueue(QEMUBH *bh, unsigned new_flags)
     unsigned old_flags;
 
     /*
-     * The memory barrier implicit in qatomic_fetch_or makes sure that:
-     * 1. idle & any writes needed by the callback are done before the
-     *    locations are read in the aio_bh_poll.
-     * 2. ctx is loaded before the callback has a chance to execute and bh
-     *    could be freed.
+     * Synchronizes with atomic_fetch_and() in aio_bh_dequeue(), ensuring that
+     * insertion starts after BH_PENDING is set.
      */
     old_flags = qatomic_fetch_or(&bh->flags, BH_PENDING | new_flags);
+
     if (!(old_flags & BH_PENDING)) {
+        /*
+         * At this point the bottom half becomes visible to aio_bh_poll().
+         * This insertion thus synchronizes with QSLIST_MOVE_ATOMIC in
+         * aio_bh_poll(), ensuring that:
+         * 1. any writes needed by the callback are visible from the callback
+         *    after aio_bh_dequeue() returns bh.
+         * 2. ctx is loaded before the callback has a chance to execute and bh
+         *    could be freed.
+         */
         QSLIST_INSERT_HEAD_ATOMIC(&ctx->bh_list, bh, next);
     }
 
     aio_notify(ctx);
+    /*
+     * Workaround for record/replay.
+     * vCPU execution should be suspended when new BH is set.
+     * This is needed to avoid guest timeouts caused
+     * by the long cycles of the execution.
+     */
+    icount_notify_exit();
 }
 
 /* Only called from aio_bh_poll() and aio_ctx_finalize() */
@@ -97,11 +114,8 @@ static QEMUBH *aio_bh_dequeue(BHList *head, unsigned *flags)
     QSLIST_REMOVE_HEAD(head, next);
 
     /*
-     * The qatomic_and is paired with aio_bh_enqueue().  The implicit memory
-     * barrier ensures that the callback sees all writes done by the scheduling
-     * thread.  It also ensures that the scheduling thread sees the cleared
-     * flag before bh->cb has run, and thus will call aio_notify again if
-     * necessary.
+     * Synchronizes with qatomic_fetch_or() in aio_bh_enqueue(), ensuring that
+     * the removal finishes before BH_PENDING is reset.
      */
     *flags = qatomic_fetch_and(&bh->flags,
                               ~(BH_PENDING | BH_SCHEDULED | BH_IDLE));
@@ -148,6 +162,7 @@ int aio_bh_poll(AioContext *ctx)
     BHListSlice *s;
     int ret = 0;
 
+    /* Synchronizes with QSLIST_INSERT_HEAD_ATOMIC in aio_bh_enqueue().  */
     QSLIST_MOVE_ATOMIC(&slice.bh_list, &ctx->bh_list);
     QSIMPLEQ_INSERT_TAIL(&ctx->bh_slice_list, &slice, next);
 
@@ -362,11 +377,12 @@ aio_ctx_finalize(GSource     *source)
         g_free(bh);
     }
 
-    aio_set_event_notifier(ctx, &ctx->notifier, false, NULL, NULL);
+    aio_set_event_notifier(ctx, &ctx->notifier, false, NULL, NULL, NULL);
     event_notifier_cleanup(&ctx->notifier);
     qemu_rec_mutex_destroy(&ctx->lock);
     qemu_lockcnt_destroy(&ctx->list_lock);
     timerlistgroup_deinit(&ctx->tlg);
+    unregister_aiocontext(ctx);
     aio_context_destroy(ctx);
 }
 
@@ -437,15 +453,15 @@ LuringState *aio_get_linux_io_uring(AioContext *ctx)
 void aio_notify(AioContext *ctx)
 {
     /*
-     * Write e.g. bh->flags before writing ctx->notified.  Pairs with smp_mb in
-     * aio_notify_accept.
+     * Write e.g. ctx->bh_list before writing ctx->notified.  Pairs with
+     * smp_mb() in aio_notify_accept().
      */
     smp_wmb();
     qatomic_set(&ctx->notified, true);
 
     /*
-     * Write ctx->notified before reading ctx->notify_me.  Pairs
-     * with smp_mb in aio_ctx_prepare or aio_poll.
+     * Write ctx->notified (and also ctx->bh_list) before reading ctx->notify_me.
+     * Pairs with smp_mb() in aio_ctx_prepare or aio_poll.
      */
     smp_mb();
     if (qatomic_read(&ctx->notify_me)) {
@@ -458,8 +474,9 @@ void aio_notify_accept(AioContext *ctx)
     qatomic_set(&ctx->notified, false);
 
     /*
-     * Write ctx->notified before reading e.g. bh->flags.  Pairs with smp_wmb
-     * in aio_notify.
+     * Order reads of ctx->notified (in aio_context_notifier_poll()) and the
+     * above clearing of ctx->notified before reads of e.g. bh->flags.  Pairs
+     * with smp_wmb() in aio_notify.
      */
     smp_mb();
 }
@@ -482,7 +499,17 @@ static bool aio_context_notifier_poll(void *opaque)
     EventNotifier *e = opaque;
     AioContext *ctx = container_of(e, AioContext, notifier);
 
+    /*
+     * No need for load-acquire because we just want to kick the
+     * event loop.  aio_notify_accept() takes care of synchronizing
+     * the event loop with the producers.
+     */
     return qatomic_read(&ctx->notified);
+}
+
+static void aio_context_notifier_poll_ready(EventNotifier *e)
+{
+    /* Do nothing, we just wanted to kick the event loop */
 }
 
 static void co_schedule_bh_cb(void *opaque)
@@ -536,7 +563,8 @@ AioContext *aio_context_new(Error **errp)
     aio_set_event_notifier(ctx, &ctx->notifier,
                            false,
                            aio_context_notifier_cb,
-                           aio_context_notifier_poll);
+                           aio_context_notifier_poll,
+                           aio_context_notifier_poll_ready);
 #ifdef CONFIG_LINUX_AIO
     ctx->linux_aio = NULL;
 #endif
@@ -555,6 +583,11 @@ AioContext *aio_context_new(Error **errp)
     ctx->poll_shrink = 0;
 
     ctx->aio_max_batch = 0;
+
+    ctx->thread_pool_min = 0;
+    ctx->thread_pool_max = THREAD_POOL_MAX_THREADS_DEFAULT;
+
+    register_aiocontext(ctx);
 
     return ctx;
 fail:
@@ -618,7 +651,7 @@ void coroutine_fn aio_co_reschedule_self(AioContext *new_ctx)
     }
 }
 
-void aio_co_wake(struct Coroutine *co)
+void aio_co_wake(Coroutine *co)
 {
     AioContext *ctx;
 
@@ -631,7 +664,7 @@ void aio_co_wake(struct Coroutine *co)
     aio_co_enter(ctx, co);
 }
 
-void aio_co_enter(AioContext *ctx, struct Coroutine *co)
+void aio_co_enter(AioContext *ctx, Coroutine *co)
 {
     if (ctx != qemu_get_current_aio_context()) {
         aio_co_schedule(ctx, co);
@@ -669,12 +702,13 @@ void aio_context_release(AioContext *ctx)
     qemu_rec_mutex_unlock(&ctx->lock);
 }
 
-static __thread AioContext *my_aiocontext;
+QEMU_DEFINE_STATIC_CO_TLS(AioContext *, my_aiocontext)
 
 AioContext *qemu_get_current_aio_context(void)
 {
-    if (my_aiocontext) {
-        return my_aiocontext;
+    AioContext *ctx = get_my_aiocontext();
+    if (ctx) {
+        return ctx;
     }
     if (qemu_mutex_iothread_locked()) {
         /* Possibly in a vCPU thread.  */
@@ -685,6 +719,23 @@ AioContext *qemu_get_current_aio_context(void)
 
 void qemu_set_current_aio_context(AioContext *ctx)
 {
-    assert(!my_aiocontext);
-    my_aiocontext = ctx;
+    assert(!get_my_aiocontext());
+    set_my_aiocontext(ctx);
+}
+
+void aio_context_set_thread_pool_params(AioContext *ctx, int64_t min,
+                                        int64_t max, Error **errp)
+{
+
+    if (min > max || !max || min > INT_MAX || max > INT_MAX) {
+        error_setg(errp, "bad thread-pool-min/thread-pool-max values");
+        return;
+    }
+
+    ctx->thread_pool_min = min;
+    ctx->thread_pool_max = max;
+
+    if (ctx->thread_pool) {
+        thread_pool_update_params(ctx->thread_pool, ctx);
+    }
 }

@@ -1,5 +1,5 @@
 /*
- *  Copyright(c) 2019-2021 Qualcomm Innovation Center, Inc. All Rights Reserved.
+ *  Copyright(c) 2019-2023 Qualcomm Innovation Center, Inc. All Rights Reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -29,14 +29,17 @@
 #include "fma_emu.h"
 #include "mmvec/mmvec.h"
 #include "mmvec/macros.h"
+#include "op_helper.h"
+#include "translate.h"
 
 #define SF_BIAS        127
 #define SF_MANTBITS    23
 
 /* Exceptions processing helpers */
-static void QEMU_NORETURN do_raise_exception_err(CPUHexagonState *env,
-                                                 uint32_t exception,
-                                                 uintptr_t pc)
+static G_NORETURN
+void do_raise_exception_err(CPUHexagonState *env,
+                            uint32_t exception,
+                            uintptr_t pc)
 {
     CPUState *cs = env_cpu(env);
     qemu_log_mask(CPU_LOG_INT, "%s: %d\n", __func__, exception);
@@ -44,13 +47,13 @@ static void QEMU_NORETURN do_raise_exception_err(CPUHexagonState *env,
     cpu_loop_exit_restore(cs, pc);
 }
 
-void QEMU_NORETURN HELPER(raise_exception)(CPUHexagonState *env, uint32_t excp)
+G_NORETURN void HELPER(raise_exception)(CPUHexagonState *env, uint32_t excp)
 {
     do_raise_exception_err(env, excp, 0);
 }
 
-static void log_reg_write(CPUHexagonState *env, int rnum,
-                          target_ulong val, uint32_t slot)
+void log_reg_write(CPUHexagonState *env, int rnum,
+                   target_ulong val, uint32_t slot)
 {
     HEX_DEBUG_LOG("log_reg_write[%d] = " TARGET_FMT_ld " (0x" TARGET_FMT_lx ")",
                   rnum, val, val);
@@ -81,8 +84,8 @@ static void log_pred_write(CPUHexagonState *env, int pnum, target_ulong val)
     }
 }
 
-static void log_store32(CPUHexagonState *env, target_ulong addr,
-                        target_ulong val, int width, int slot)
+void log_store32(CPUHexagonState *env, target_ulong addr,
+                 target_ulong val, int width, int slot)
 {
     HEX_DEBUG_LOG("log_store%d(0x" TARGET_FMT_lx
                   ", %" PRId32 " [0x08%" PRIx32 "])\n",
@@ -92,8 +95,8 @@ static void log_store32(CPUHexagonState *env, target_ulong addr,
     env->mem_log_stores[slot].data32 = val;
 }
 
-static void log_store64(CPUHexagonState *env, target_ulong addr,
-                        int64_t val, int width, int slot)
+void log_store64(CPUHexagonState *env, target_ulong addr,
+                 int64_t val, int width, int slot)
 {
     HEX_DEBUG_LOG("log_store%d(0x" TARGET_FMT_lx
                   ", %" PRId64 " [0x016%" PRIx64 "])\n",
@@ -101,24 +104,6 @@ static void log_store64(CPUHexagonState *env, target_ulong addr,
     env->mem_log_stores[slot].va = addr;
     env->mem_log_stores[slot].width = width;
     env->mem_log_stores[slot].data64 = val;
-}
-
-static void write_new_pc(CPUHexagonState *env, target_ulong addr)
-{
-    HEX_DEBUG_LOG("write_new_pc(0x" TARGET_FMT_lx ")\n", addr);
-
-    /*
-     * If more than one branch is taken in a packet, only the first one
-     * is actually done.
-     */
-    if (env->branch_taken) {
-        HEX_DEBUG_LOG("INFO: multiple branches taken in same packet, "
-                      "ignoring the second one\n");
-    } else {
-        fCHECK_PCALIGN(addr);
-        env->branch_taken = 1;
-        env->next_PC = addr;
-    }
 }
 
 /* Handy place to set a breakpoint */
@@ -292,7 +277,7 @@ void HELPER(debug_commit_end)(CPUHexagonState *env, int has_st0, int has_st1)
         }
     }
 
-    HEX_DEBUG_LOG("Next PC = " TARGET_FMT_lx "\n", env->next_PC);
+    HEX_DEBUG_LOG("Next PC = " TARGET_FMT_lx "\n", env->gpr[HEX_REG_PC]);
     HEX_DEBUG_LOG("Exec counters: pkt = " TARGET_FMT_lx
                   ", insn = " TARGET_FMT_lx
                   ", hvx = " TARGET_FMT_lx "\n",
@@ -304,8 +289,8 @@ void HELPER(debug_commit_end)(CPUHexagonState *env, int has_st0, int has_st1)
 
 int32_t HELPER(fcircadd)(int32_t RxV, int32_t offset, int32_t M, int32_t CS)
 {
-    int32_t K_const = sextract32(M, 24, 4);
-    int32_t length = sextract32(M, 0, 17);
+    uint32_t K_const = extract32(M, 24, 4);
+    uint32_t length = extract32(M, 0, 17);
     uint32_t new_ptr = RxV + offset;
     uint32_t start_addr;
     uint32_t end_addr;
@@ -431,9 +416,10 @@ int32_t HELPER(vacsh_pred)(CPUHexagonState *env,
     return PeV;
 }
 
-static void probe_store(CPUHexagonState *env, int slot, int mmu_idx)
+static void probe_store(CPUHexagonState *env, int slot, int mmu_idx,
+                        bool is_predicated)
 {
-    if (!(env->slot_cancelled & (1 << slot))) {
+    if (!is_predicated || !(env->slot_cancelled & (1 << slot))) {
         size1u_t width = env->mem_log_stores[slot].width;
         target_ulong va = env->mem_log_stores[slot].va;
         uintptr_t ra = GETPC();
@@ -441,10 +427,24 @@ static void probe_store(CPUHexagonState *env, int slot, int mmu_idx)
     }
 }
 
-/* Called during packet commit when there are two scalar stores */
-void HELPER(probe_pkt_scalar_store_s0)(CPUHexagonState *env, int mmu_idx)
+/*
+ * Called from a mem_noshuf packet to make sure the load doesn't
+ * raise an exception
+ */
+void HELPER(probe_noshuf_load)(CPUHexagonState *env, target_ulong va,
+                               int size, int mmu_idx)
 {
-    probe_store(env, 0, mmu_idx);
+    uintptr_t retaddr = GETPC();
+    probe_read(env, va, size, mmu_idx, retaddr);
+}
+
+/* Called during packet commit when there are two scalar stores */
+void HELPER(probe_pkt_scalar_store_s0)(CPUHexagonState *env, int args)
+{
+    int mmu_idx = FIELD_EX32(args, PROBE_PKT_SCALAR_STORE_S0, MMU_IDX);
+    bool is_predicated =
+        FIELD_EX32(args, PROBE_PKT_SCALAR_STORE_S0, IS_PREDICATED);
+    probe_store(env, 0, mmu_idx, is_predicated);
 }
 
 void HELPER(probe_hvx_stores)(CPUHexagonState *env, int mmu_idx)
@@ -491,15 +491,18 @@ void HELPER(probe_hvx_stores)(CPUHexagonState *env, int mmu_idx)
 void HELPER(probe_pkt_scalar_hvx_stores)(CPUHexagonState *env, int mask,
                                          int mmu_idx)
 {
-    bool has_st0        = (mask >> 0) & 1;
-    bool has_st1        = (mask >> 1) & 1;
-    bool has_hvx_stores = (mask >> 2) & 1;
+    bool has_st0 = FIELD_EX32(mask, PROBE_PKT_SCALAR_HVX_STORES, HAS_ST0);
+    bool has_st1 = FIELD_EX32(mask, PROBE_PKT_SCALAR_HVX_STORES, HAS_ST1);
+    bool has_hvx_stores =
+        FIELD_EX32(mask, PROBE_PKT_SCALAR_HVX_STORES, HAS_HVX_STORES);
+    bool s0_is_pred = FIELD_EX32(mask, PROBE_PKT_SCALAR_HVX_STORES, S0_IS_PRED);
+    bool s1_is_pred = FIELD_EX32(mask, PROBE_PKT_SCALAR_HVX_STORES, S1_IS_PRED);
 
     if (has_st0) {
-        probe_store(env, 0, mmu_idx);
+        probe_store(env, 0, mmu_idx, s0_is_pred);
     }
     if (has_st1) {
-        probe_store(env, 1, mmu_idx);
+        probe_store(env, 1, mmu_idx, s1_is_pred);
     }
     if (has_hvx_stores) {
         HELPER(probe_hvx_stores)(env, mmu_idx);
@@ -513,43 +516,41 @@ void HELPER(probe_pkt_scalar_hvx_stores)(CPUHexagonState *env, int mask,
  * If the load is in slot 0 and there is a store in slot1 (that
  * wasn't cancelled), we have to do the store first.
  */
-static void check_noshuf(CPUHexagonState *env, uint32_t slot)
+static void check_noshuf(CPUHexagonState *env, uint32_t slot,
+                         target_ulong vaddr, int size)
 {
     if (slot == 0 && env->pkt_has_store_s1 &&
         ((env->slot_cancelled & (1 << 1)) == 0)) {
+        HELPER(probe_noshuf_load)(env, vaddr, size, MMU_USER_IDX);
         HELPER(commit_store)(env, 1);
     }
 }
 
-static uint8_t mem_load1(CPUHexagonState *env, uint32_t slot,
-                         target_ulong vaddr)
+uint8_t mem_load1(CPUHexagonState *env, uint32_t slot, target_ulong vaddr)
 {
     uintptr_t ra = GETPC();
-    check_noshuf(env, slot);
+    check_noshuf(env, slot, vaddr, 1);
     return cpu_ldub_data_ra(env, vaddr, ra);
 }
 
-static uint16_t mem_load2(CPUHexagonState *env, uint32_t slot,
-                          target_ulong vaddr)
+uint16_t mem_load2(CPUHexagonState *env, uint32_t slot, target_ulong vaddr)
 {
     uintptr_t ra = GETPC();
-    check_noshuf(env, slot);
+    check_noshuf(env, slot, vaddr, 2);
     return cpu_lduw_data_ra(env, vaddr, ra);
 }
 
-static uint32_t mem_load4(CPUHexagonState *env, uint32_t slot,
-                          target_ulong vaddr)
+uint32_t mem_load4(CPUHexagonState *env, uint32_t slot, target_ulong vaddr)
 {
     uintptr_t ra = GETPC();
-    check_noshuf(env, slot);
+    check_noshuf(env, slot, vaddr, 4);
     return cpu_ldl_data_ra(env, vaddr, ra);
 }
 
-static uint64_t mem_load8(CPUHexagonState *env, uint32_t slot,
-                          target_ulong vaddr)
+uint64_t mem_load8(CPUHexagonState *env, uint32_t slot, target_ulong vaddr)
 {
     uintptr_t ra = GETPC();
-    check_noshuf(env, slot);
+    check_noshuf(env, slot, vaddr, 8);
     return cpu_ldq_data_ra(env, vaddr, ra);
 }
 
@@ -829,7 +830,7 @@ uint32_t HELPER(conv_df2uw_chop)(CPUHexagonState *env, float64 RssV)
     uint32_t RdV;
     arch_fpop_start(env);
     /* Hexagon checks the sign before rounding */
-    if (float64_is_neg(RssV) && !float32_is_any_nan(RssV)) {
+    if (float64_is_neg(RssV) && !float64_is_any_nan(RssV)) {
         float_raise(float_flag_invalid, &env->fp_status);
         RdV = 0;
     } else {
@@ -938,8 +939,7 @@ int32_t HELPER(sfcmpuo)(CPUHexagonState *env, float32 RsV, float32 RtV)
 {
     int32_t PdV;
     arch_fpop_start(env);
-    PdV = f8BITSOF(float32_is_any_nan(RsV) ||
-                   float32_is_any_nan(RtV));
+    PdV = f8BITSOF(float32_unordered_quiet(RsV, RtV, &env->fp_status));
     arch_fpop_end(env);
     return PdV;
 }
@@ -948,7 +948,7 @@ float32 HELPER(sfmax)(CPUHexagonState *env, float32 RsV, float32 RtV)
 {
     float32 RdV;
     arch_fpop_start(env);
-    RdV = float32_maxnum(RsV, RtV, &env->fp_status);
+    RdV = float32_maximum_number(RsV, RtV, &env->fp_status);
     arch_fpop_end(env);
     return RdV;
 }
@@ -957,7 +957,7 @@ float32 HELPER(sfmin)(CPUHexagonState *env, float32 RsV, float32 RtV)
 {
     float32 RdV;
     arch_fpop_start(env);
-    RdV = float32_minnum(RsV, RtV, &env->fp_status);
+    RdV = float32_minimum_number(RsV, RtV, &env->fp_status);
     arch_fpop_end(env);
     return RdV;
 }
@@ -1041,10 +1041,7 @@ float64 HELPER(dfmax)(CPUHexagonState *env, float64 RssV, float64 RttV)
 {
     float64 RddV;
     arch_fpop_start(env);
-    RddV = float64_maxnum(RssV, RttV, &env->fp_status);
-    if (float64_is_any_nan(RssV) || float64_is_any_nan(RttV)) {
-        float_raise(float_flag_invalid, &env->fp_status);
-    }
+    RddV = float64_maximum_number(RssV, RttV, &env->fp_status);
     arch_fpop_end(env);
     return RddV;
 }
@@ -1053,10 +1050,7 @@ float64 HELPER(dfmin)(CPUHexagonState *env, float64 RssV, float64 RttV)
 {
     float64 RddV;
     arch_fpop_start(env);
-    RddV = float64_minnum(RssV, RttV, &env->fp_status);
-    if (float64_is_any_nan(RssV) || float64_is_any_nan(RttV)) {
-        float_raise(float_flag_invalid, &env->fp_status);
-    }
+    RddV = float64_minimum_number(RssV, RttV, &env->fp_status);
     arch_fpop_end(env);
     return RddV;
 }
@@ -1097,8 +1091,7 @@ int32_t HELPER(dfcmpuo)(CPUHexagonState *env, float64 RssV, float64 RttV)
 {
     int32_t PdV;
     arch_fpop_start(env);
-    PdV = f8BITSOF(float64_is_any_nan(RssV) ||
-                   float64_is_any_nan(RttV));
+    PdV = f8BITSOF(float64_unordered_quiet(RssV, RttV, &env->fp_status));
     arch_fpop_end(env);
     return PdV;
 }
@@ -1184,7 +1177,7 @@ float32 HELPER(sffms)(CPUHexagonState *env, float32 RxV,
 {
     float32 neg_RsV;
     arch_fpop_start(env);
-    neg_RsV = float32_sub(float32_zero, RsV, &env->fp_status);
+    neg_RsV = float32_set_sign(RsV, float32_is_neg(RsV) ? 0 : 1);
     RxV = internal_fmafx(neg_RsV, RtV, RxV, 0, &env->fp_status);
     arch_fpop_end(env);
     return RxV;
@@ -1457,12 +1450,6 @@ void HELPER(vwhist128qm)(CPUHexagonState *env, int32_t uiV)
                 env->VRegs[vindex].uw[elindex] + weight;
         }
     }
-}
-
-static void cancel_slot(CPUHexagonState *env, uint32_t slot)
-{
-    HEX_DEBUG_LOG("Slot %d cancelled\n", slot);
-    env->slot_cancelled |= (1 << slot);
 }
 
 /* These macros can be referenced in the generated helper functions */

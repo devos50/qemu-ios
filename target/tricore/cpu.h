@@ -22,14 +22,10 @@
 
 #include "cpu-qom.h"
 #include "exec/cpu-defs.h"
+#include "qemu/cpu-float.h"
 #include "tricore-defs.h"
 
-struct tricore_boot_info;
-
-typedef struct tricore_def_t tricore_def_t;
-
-typedef struct CPUTriCoreState CPUTriCoreState;
-struct CPUTriCoreState {
+typedef struct CPUArchState {
     /* GPR Register */
     uint32_t gpr_a[16];
     uint32_t gpr_d[16];
@@ -179,17 +175,10 @@ struct CPUTriCoreState {
     uint32_t M3CNT;
     /* Floating Point Registers */
     float_status fp_status;
-    /* QEMU */
-    int error_code;
-    uint32_t hflags;    /* CPU State */
 
     /* Internal CPU feature flags.  */
     uint64_t features;
-
-    const tricore_def_t *cpu_model;
-    void *irq[8];
-    struct QEMUTimer *timer; /* Internal timer */
-};
+} CPUTriCoreState;
 
 /**
  * TriCoreCPU:
@@ -197,7 +186,7 @@ struct CPUTriCoreState {
  *
  * A TriCore CPU.
  */
-struct TriCoreCPU {
+struct ArchCPU {
     /*< private >*/
     CPUState parent_obj;
     /*< public >*/
@@ -368,9 +357,6 @@ static inline int cpu_mmu_index(CPUTriCoreState *env, bool ifetch)
 {
     return 0;
 }
-
-typedef CPUTriCoreState CPUArchState;
-typedef TriCoreCPU ArchCPU;
 
 #include "exec/cpu-all.h"
 

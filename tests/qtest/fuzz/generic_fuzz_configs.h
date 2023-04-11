@@ -20,8 +20,8 @@ typedef struct generic_fuzz_config {
 } generic_fuzz_config;
 
 static inline gchar *generic_fuzzer_virtio_9p_args(void){
-    char tmpdir[] = "/tmp/qemu-fuzz.XXXXXX";
-    g_assert_nonnull(mkdtemp(tmpdir));
+    g_autofree char *tmpdir = g_dir_make_tmp("qemu-fuzz.XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
 
     return g_strdup_printf("-machine q35 -nodefaults "
     "-device virtio-9p,fsdev=hshare,mount_tag=hshare "
@@ -90,6 +90,11 @@ const generic_fuzz_config predefined_configs[] = {
         .args = "-M q35 -nodefaults "
         "-device e1000e,netdev=net0 -netdev user,id=net0",
         .objects = "e1000e",
+    },{
+        .name = "igb",
+        .args = "-M q35 -nodefaults "
+        "-device igb,netdev=net0 -netdev user,id=net0",
+        .objects = "igb",
     },{
         .name = "cirrus-vga",
         .args = "-machine q35 -nodefaults -device cirrus-vga",

@@ -24,9 +24,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "sysemu/tcg.h"
 #include "sysemu/replay.h"
+#include "sysemu/cpu-timers.h"
 #include "qemu/main-loop.h"
 #include "qemu/notify.h"
 #include "qemu/guest-random.h"
@@ -51,7 +51,7 @@ void rr_kick_vcpu_thread(CPUState *unused)
  *
  * The kick timer is responsible for moving single threaded vCPU
  * emulation on to the next vCPU. If more than one vCPU is running a
- * timer event with force a cpu->exit so the next vCPU can get
+ * timer event we force a cpu->exit so the next vCPU can get
  * scheduled.
  *
  * The timer is removed if all vCPUs are idle and restarted again once
@@ -279,8 +279,8 @@ void rr_start_vcpu_thread(CPUState *cpu)
     tcg_cpu_init_cflags(cpu, false);
 
     if (!single_tcg_cpu_thread) {
-        cpu->thread = g_malloc0(sizeof(QemuThread));
-        cpu->halt_cond = g_malloc0(sizeof(QemuCond));
+        cpu->thread = g_new0(QemuThread, 1);
+        cpu->halt_cond = g_new0(QemuCond, 1);
         qemu_cond_init(cpu->halt_cond);
 
         /* share a single thread for all cpus with TCG */

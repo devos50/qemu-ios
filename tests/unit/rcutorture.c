@@ -50,8 +50,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  *
  * Copyright (c) 2008 Paul E. McKenney, IBM Corporation.
  */
@@ -122,7 +121,7 @@ static void *rcu_read_perf_test(void *arg)
 
     rcu_register_thread();
 
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
     qatomic_inc(&nthreadsrunning);
     while (goflag == GOFLAG_INIT) {
         g_usleep(1000);
@@ -148,7 +147,7 @@ static void *rcu_update_perf_test(void *arg)
 
     rcu_register_thread();
 
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
     qatomic_inc(&nthreadsrunning);
     while (goflag == GOFLAG_INIT) {
         g_usleep(1000);
@@ -253,7 +252,7 @@ static void *rcu_read_stress_test(void *arg)
 
     rcu_register_thread();
 
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
     while (goflag == GOFLAG_INIT) {
         g_usleep(1000);
     }
@@ -304,7 +303,7 @@ static void *rcu_update_stress_test(void *arg)
     struct rcu_stress *cp = qatomic_read(&rcu_stress_current);
 
     rcu_register_thread();
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
 
     while (goflag == GOFLAG_INIT) {
         g_usleep(1000);
@@ -347,7 +346,7 @@ static void *rcu_fake_update_stress_test(void *arg)
 {
     rcu_register_thread();
 
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
     while (goflag == GOFLAG_INIT) {
         g_usleep(1000);
     }

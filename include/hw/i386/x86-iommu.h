@@ -21,7 +21,6 @@
 #define HW_I386_X86_IOMMU_H
 
 #include "hw/sysbus.h"
-#include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
 #include "qom/object.h"
 
@@ -87,7 +86,7 @@ struct X86IOMMUIrq {
 struct X86IOMMU_MSIMessage {
     union {
         struct {
-#ifdef HOST_WORDS_BIGENDIAN
+#if HOST_BIG_ENDIAN
             uint32_t __addr_head:12; /* 0xfee */
             uint32_t dest:8;
             uint32_t __reserved:8;
@@ -108,7 +107,7 @@ struct X86IOMMU_MSIMessage {
     };
     union {
         struct {
-#ifdef HOST_WORDS_BIGENDIAN
+#if HOST_BIG_ENDIAN
             uint16_t trigger_mode:1;
             uint16_t level:1;
             uint16_t __resved:3;

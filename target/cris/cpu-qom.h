@@ -25,13 +25,12 @@
 
 #define TYPE_CRIS_CPU "cris-cpu"
 
-OBJECT_DECLARE_TYPE(CRISCPU, CRISCPUClass,
-                    CRIS_CPU)
+OBJECT_DECLARE_CPU_TYPE(CRISCPU, CRISCPUClass, CRIS_CPU)
 
 /**
  * CRISCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  * @vr: Version Register value.
  *
  * A CRIS CPU model.
@@ -42,7 +41,7 @@ struct CRISCPUClass {
     /*< public >*/
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
 
     uint32_t vr;
 };

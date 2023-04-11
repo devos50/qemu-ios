@@ -1,12 +1,15 @@
 FROM registry.fedoraproject.org/fedora:34
 
 ENV PACKAGES \
+    bison \
     bzip2 \
     ccache \
     diffutils \
+    flex \
     findutils \
     gcc \
     git \
+    libfdt-devel.i686 \
     libffi-devel.i686 \
     libselinux-devel.i686 \
     libtasn1-devel.i686 \
@@ -20,7 +23,6 @@ ENV PACKAGES \
     gnutls-devel.i686 \
     nettle-devel.i686 \
     pcre-devel.i686 \
-    perl-Test-Harness \
     pixman-devel.i686 \
     sysprof-capture-devel.i686 \
     zlib-devel.i686
@@ -30,3 +32,8 @@ ENV PKG_CONFIG_LIBDIR /usr/lib/pkgconfig
 
 RUN dnf update -y && dnf install -y $PACKAGES
 RUN rpm -q $PACKAGES | sort > /packages.txt
+# As a final step configure the user (if env is defined)
+ARG USER
+ARG UID
+RUN if [ "${USER}" ]; then \
+  id ${USER} 2>/dev/null || useradd -u ${UID} -U ${USER}; fi

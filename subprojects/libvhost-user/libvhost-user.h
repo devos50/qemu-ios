@@ -54,12 +54,12 @@ enum VhostUserProtocolFeature {
     VHOST_USER_PROTOCOL_F_RARP = 2,
     VHOST_USER_PROTOCOL_F_REPLY_ACK = 3,
     VHOST_USER_PROTOCOL_F_NET_MTU = 4,
-    VHOST_USER_PROTOCOL_F_SLAVE_REQ = 5,
+    VHOST_USER_PROTOCOL_F_BACKEND_REQ = 5,
     VHOST_USER_PROTOCOL_F_CROSS_ENDIAN = 6,
     VHOST_USER_PROTOCOL_F_CRYPTO_SESSION = 7,
     VHOST_USER_PROTOCOL_F_PAGEFAULT = 8,
     VHOST_USER_PROTOCOL_F_CONFIG = 9,
-    VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD = 10,
+    VHOST_USER_PROTOCOL_F_BACKEND_SEND_FD = 10,
     VHOST_USER_PROTOCOL_F_HOST_NOTIFIER = 11,
     VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD = 12,
     VHOST_USER_PROTOCOL_F_INBAND_NOTIFICATIONS = 14,
@@ -92,7 +92,7 @@ typedef enum VhostUserRequest {
     VHOST_USER_SET_VRING_ENABLE = 18,
     VHOST_USER_SEND_RARP = 19,
     VHOST_USER_NET_SET_MTU = 20,
-    VHOST_USER_SET_SLAVE_REQ_FD = 21,
+    VHOST_USER_SET_BACKEND_REQ_FD = 21,
     VHOST_USER_IOTLB_MSG = 22,
     VHOST_USER_SET_VRING_ENDIAN = 23,
     VHOST_USER_GET_CONFIG = 24,
@@ -113,13 +113,13 @@ typedef enum VhostUserRequest {
 } VhostUserRequest;
 
 typedef enum VhostUserSlaveRequest {
-    VHOST_USER_SLAVE_NONE = 0,
-    VHOST_USER_SLAVE_IOTLB_MSG = 1,
-    VHOST_USER_SLAVE_CONFIG_CHANGE_MSG = 2,
-    VHOST_USER_SLAVE_VRING_HOST_NOTIFIER_MSG = 3,
-    VHOST_USER_SLAVE_VRING_CALL = 4,
-    VHOST_USER_SLAVE_VRING_ERR = 5,
-    VHOST_USER_SLAVE_MAX
+    VHOST_USER_BACKEND_NONE = 0,
+    VHOST_USER_BACKEND_IOTLB_MSG = 1,
+    VHOST_USER_BACKEND_CONFIG_CHANGE_MSG = 2,
+    VHOST_USER_BACKEND_VRING_HOST_NOTIFIER_MSG = 3,
+    VHOST_USER_BACKEND_VRING_CALL = 4,
+    VHOST_USER_BACKEND_VRING_ERR = 5,
+    VHOST_USER_BACKEND_MAX
 }  VhostUserSlaveRequest;
 
 typedef struct VhostUserMemoryRegion {
@@ -128,6 +128,8 @@ typedef struct VhostUserMemoryRegion {
     uint64_t userspace_addr;
     uint64_t mmap_offset;
 } VhostUserMemoryRegion;
+
+#define VHOST_USER_MEM_REG_SIZE (sizeof(VhostUserMemoryRegion))
 
 typedef struct VhostUserMemory {
     uint32_t nregions;
@@ -341,7 +343,7 @@ typedef struct VuVirtq {
     /* Notification enabled? */
     bool notification;
 
-    int inuse;
+    unsigned int inuse;
 
     vu_queue_handler_cb handler;
 
@@ -470,6 +472,15 @@ bool vu_init(VuDev *dev,
  * Cleans up the VuDev context
  */
 void vu_deinit(VuDev *dev);
+
+
+/**
+ * vu_request_to_string: return string for vhost message request
+ * @req: VhostUserMsg request
+ *
+ * Returns a const string, do not free.
+ */
+const char *vu_request_to_string(unsigned int req);
 
 /**
  * vu_dispatch:

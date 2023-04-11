@@ -42,11 +42,13 @@
 #include "qapi/qmp/qstring.h"
 #include "qapi/qobject-input-visitor.h"
 
-#include "qemu-common.h"
+#include "qemu/help-texts.h"
 #include "qemu-version.h"
+#include "qemu/cutils.h"
 #include "qemu/config-file.h"
 #include "qemu/error-report.h"
 #include "qemu/help_option.h"
+#include "qemu/job.h"
 #include "qemu/log.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
@@ -60,6 +62,7 @@
 #include "trace/control.h"
 
 static const char *pid_file;
+static char *pid_file_realpath;
 static volatile bool exit_requested = false;
 
 void qemu_system_killed(int signal, pid_t pid)
@@ -93,6 +96,9 @@ static void help(void)
 "  --chardev <options>    configure a character device backend\n"
 "                         (see the qemu(1) man page for possible options)\n"
 "\n"
+"  --daemonize            daemonize the process, and have the parent exit\n"
+"                         once startup is complete\n"
+"\n"
 "  --export [type=]nbd,id=<id>,node-name=<node-name>[,name=<export-name>]\n"
 "           [,writable=on|off][,bitmap=<name>]\n"
 "                         export the specified block node over NBD\n"
@@ -100,10 +106,33 @@ static void help(void)
 "\n"
 #ifdef CONFIG_FUSE
 "  --export [type=]fuse,id=<id>,node-name=<node-name>,mountpoint=<file>\n"
-"           [,growable=on|off][,writable=on|off]\n"
+"           [,growable=on|off][,writable=on|off][,allow-other=on|off|auto]\n"
 "                         export the specified block node over FUSE\n"
 "\n"
 #endif /* CONFIG_FUSE */
+#ifdef CONFIG_VHOST_USER_BLK_SERVER
+"  --export [type=]vhost-user-blk,id=<id>,node-name=<node-name>,\n"
+"           addr.type=unix,addr.path=<socket-path>[,writable=on|off]\n"
+"           [,logical-block-size=<block-size>][,num-queues=<num-queues>]\n"
+"                         export the specified block node as a\n"
+"                         vhost-user-blk device over UNIX domain socket\n"
+"  --export [type=]vhost-user-blk,id=<id>,node-name=<node-name>,\n"
+"           addr.type=fd,addr.str=<fd>[,writable=on|off]\n"
+"           [,logical-block-size=<block-size>][,num-queues=<num-queues>]\n"
+"                         export the specified block node as a\n"
+"                         vhost-user-blk device over file descriptor\n"
+"\n"
+#endif /* CONFIG_VHOST_USER_BLK_SERVER */
+#ifdef CONFIG_VDUSE_BLK_EXPORT
+"  --export [type=]vduse-blk,id=<id>,node-name=<node-name>\n"
+"           ,name=<vduse-name>[,writable=on|off]\n"
+"           [,num-queues=<num-queues>][,queue-size=<queue-size>]\n"
+"           [,logical-block-size=<logical-block-size>]\n"
+"           [,serial=<serial-number>]\n"
+"                         export the specified block node as a\n"
+"                         vduse-blk device\n"
+"\n"
+#endif /* CONFIG_VDUSE_BLK_EXPORT */
 "  --monitor [chardev=]name[,mode=control][,pretty[=on|off]]\n"
 "                         configure a QMP monitor\n"
 "\n"
@@ -125,12 +154,13 @@ static void help(void)
 "  --pidfile <path>       write process ID to a file after startup\n"
 "\n"
 QEMU_HELP_BOTTOM "\n",
-    error_get_progname());
+    g_get_prgname());
 }
 
 enum {
     OPTION_BLOCKDEV = 256,
     OPTION_CHARDEV,
+    OPTION_DAEMONIZE,
     OPTION_EXPORT,
     OPTION_MONITOR,
     OPTION_NBD_SERVER,
@@ -164,13 +194,30 @@ static int getopt_set_loc(int argc, char **argv, const char *optstring,
     return c;
 }
 
-static void process_options(int argc, char *argv[])
+/**
+ * Process QSD command-line arguments.
+ *
+ * This is done in two passes:
+ *
+ * First (@pre_init_pass is true), we do a pass where all global
+ * arguments pertaining to the QSD process (like --help or --daemonize)
+ * are processed.  This pass is done before most of the QEMU-specific
+ * initialization steps (e.g. initializing the block layer or QMP), and
+ * so must only process arguments that are not really QEMU-specific.
+ *
+ * Second (@pre_init_pass is false), we (sequentially) process all
+ * QEMU/QSD-specific arguments.  Many of these arguments are effectively
+ * translated to QMP commands (like --blockdev for blockdev-add, or
+ * --export for block-export-add).
+ */
+static void process_options(int argc, char *argv[], bool pre_init_pass)
 {
     int c;
 
     static const struct option long_options[] = {
         {"blockdev", required_argument, NULL, OPTION_BLOCKDEV},
         {"chardev", required_argument, NULL, OPTION_CHARDEV},
+        {"daemonize", no_argument, NULL, OPTION_DAEMONIZE},
         {"export", required_argument, NULL, OPTION_EXPORT},
         {"help", no_argument, NULL, 'h'},
         {"monitor", required_argument, NULL, OPTION_MONITOR},
@@ -183,11 +230,27 @@ static void process_options(int argc, char *argv[])
     };
 
     /*
-     * In contrast to the system emulator, options are processed in the order
-     * they are given on the command lines. This means that things must be
-     * defined first before they can be referenced in another option.
+     * In contrast to the system emulator, QEMU-specific options are processed
+     * in the order they are given on the command lines. This means that things
+     * must be defined first before they can be referenced in another option.
      */
+    optind = 1;
     while ((c = getopt_set_loc(argc, argv, "-hT:V", long_options)) != -1) {
+        bool handle_option_pre_init;
+
+        /* Should this argument be processed in the pre-init pass? */
+        handle_option_pre_init =
+            c == '?' ||
+            c == 'h' ||
+            c == 'V' ||
+            c == OPTION_DAEMONIZE ||
+            c == OPTION_PIDFILE;
+
+        /* Process every option only in its respective pass */
+        if (pre_init_pass != handle_option_pre_init) {
+            continue;
+        }
+
         switch (c) {
         case '?':
             exit(EXIT_FAILURE);
@@ -233,6 +296,16 @@ static void process_options(int argc, char *argv[])
                 qemu_opts_del(opts);
                 break;
             }
+        case OPTION_DAEMONIZE:
+            if (os_set_daemonize(true) < 0) {
+                /*
+                 * --daemonize is parsed before monitor_init_globals(), so
+                 * error_report() does not work yet
+                 */
+                fprintf(stderr, "--daemonize not supported in this build\n");
+                exit(EXIT_FAILURE);
+            }
+            break;
         case OPTION_EXPORT:
             {
                 Visitor *v;
@@ -292,7 +365,7 @@ static void process_options(int argc, char *argv[])
 
 static void pid_file_cleanup(void)
 {
-    unlink(pid_file);
+    unlink(pid_file_realpath);
 }
 
 static void pid_file_init(void)
@@ -305,6 +378,14 @@ static void pid_file_init(void)
 
     if (!qemu_write_pidfile(pid_file, &err)) {
         error_reportf_err(err, "cannot create PID file: ");
+        exit(EXIT_FAILURE);
+    }
+
+    pid_file_realpath = g_malloc(PATH_MAX);
+    if (!realpath(pid_file, pid_file_realpath)) {
+        error_report("cannot resolve PID file path: %s: %s",
+                     pid_file, strerror(errno));
+        unlink(pid_file);
         exit(EXIT_FAILURE);
     }
 
@@ -321,21 +402,25 @@ int main(int argc, char *argv[])
     qemu_init_exec_dir(argv[0]);
     os_setup_signal_handling();
 
+    process_options(argc, argv, true);
+
+    os_daemonize();
+
     module_call_init(MODULE_INIT_QOM);
     module_call_init(MODULE_INIT_TRACE);
     qemu_add_opts(&qemu_trace_opts);
     qcrypto_init(&error_fatal);
     bdrv_init();
-    monitor_init_globals_core();
+    monitor_init_globals();
     init_qmp_commands();
 
     if (!trace_init_backends()) {
         return EXIT_FAILURE;
     }
-    qemu_set_log(LOG_TRACE);
+    qemu_set_log(LOG_TRACE, &error_fatal);
 
     qemu_init_main_loop(&error_fatal);
-    process_options(argc, argv);
+    process_options(argc, argv, false);
 
     /*
      * Write the pid file after creating chardevs, exports, and NBD servers but
@@ -343,6 +428,7 @@ int main(int argc, char *argv[])
      * it.
      */
     pid_file_init();
+    os_setup_post();
 
     while (!exit_requested) {
         main_loop_wait(false);

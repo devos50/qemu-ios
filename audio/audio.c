@@ -28,11 +28,15 @@
 #include "monitor/monitor.h"
 #include "qemu/timer.h"
 #include "qapi/error.h"
+#include "qapi/clone-visitor.h"
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/qapi-visit-audio.h"
+#include "qapi/qapi-commands-audio.h"
 #include "qemu/cutils.h"
+#include "qemu/log.h"
 #include "qemu/module.h"
-#include "qemu-common.h"
+#include "qemu/help_option.h"
+#include "sysemu/sysemu.h"
 #include "sysemu/replay.h"
 #include "sysemu/runstate.h"
 #include "ui/qemu-spice.h"
@@ -72,20 +76,24 @@ void audio_driver_register(audio_driver *drv)
 audio_driver *audio_driver_lookup(const char *name)
 {
     struct audio_driver *d;
+    Error *local_err = NULL;
+    int rv;
 
     QLIST_FOREACH(d, &audio_drivers, next) {
         if (strcmp(name, d->name) == 0) {
             return d;
         }
     }
-
-    audio_module_load_one(name);
-    QLIST_FOREACH(d, &audio_drivers, next) {
-        if (strcmp(name, d->name) == 0) {
-            return d;
+    rv = audio_module_load(name, &local_err);
+    if (rv > 0) {
+        QLIST_FOREACH(d, &audio_drivers, next) {
+            if (strcmp(name, d->name) == 0) {
+                return d;
+            }
         }
+    } else if (rv < 0) {
+        error_report_err(local_err);
     }
-
     return NULL;
 }
 
@@ -117,7 +125,6 @@ int audio_bug (const char *funcname, int cond)
             AUD_log (NULL, "I am sorry\n");
         }
         AUD_log (NULL, "Context:\n");
-        abort();
     }
 
     return cond;
@@ -140,26 +147,6 @@ static inline int audio_bits_to_index (int bits)
         AUD_log (NULL, "invalid bits %d\n", bits);
         return 0;
     }
-}
-
-void *audio_calloc (const char *funcname, int nmemb, size_t size)
-{
-    int cond;
-    size_t len;
-
-    len = nmemb * size;
-    cond = !nmemb || !size;
-    cond |= nmemb < 0;
-    cond |= len < size;
-
-    if (audio_bug ("audio_calloc", cond)) {
-        AUD_log (NULL, "%s passed invalid arguments to audio_calloc\n",
-                 funcname);
-        AUD_log (NULL, "nmemb=%d size=%zu (len=%zu)\n", nmemb, size, len);
-        return NULL;
-    }
-
-    return g_malloc0 (len);
 }
 
 void AUD_vlog (const char *cap, const char *fmt, va_list ap)
@@ -394,13 +381,6 @@ void audio_pcm_info_clear_buf (struct audio_pcm_info *info, void *buf, int len)
 /*
  * Capture
  */
-static void noop_conv (struct st_sample *dst, const void *src, int samples)
-{
-    (void) src;
-    (void) dst;
-    (void) samples;
-}
-
 static CaptureVoiceOut *audio_pcm_capture_find_specific(AudioState *s,
                                                         struct audsettings *as)
 {
@@ -498,15 +478,8 @@ static int audio_attach_capture (HWVoiceOut *hw)
         sw->info = hw->info;
         sw->empty = 1;
         sw->active = hw->enabled;
-        sw->conv = noop_conv;
-        sw->ratio = ((int64_t) hw_cap->info.freq << 32) / sw->info.freq;
         sw->vol = nominal_volume;
         sw->rate = st_rate_start (sw->info.freq, hw_cap->info.freq);
-        if (!sw->rate) {
-            dolog ("Could not start rate conversion for `%s'\n", SW_NAME (sw));
-            g_free (sw);
-            return -1;
-        }
         QLIST_INSERT_HEAD (&hw_cap->sw_head, sw, entries);
         QLIST_INSERT_HEAD (&hw->cap_head, sc, entries);
 #ifdef DEBUG_CAPTURE
@@ -541,104 +514,93 @@ static size_t audio_pcm_hw_find_min_in (HWVoiceIn *hw)
 static size_t audio_pcm_hw_get_live_in(HWVoiceIn *hw)
 {
     size_t live = hw->total_samples_captured - audio_pcm_hw_find_min_in (hw);
-    if (audio_bug(__func__, live > hw->conv_buf->size)) {
-        dolog("live=%zu hw->conv_buf->size=%zu\n", live, hw->conv_buf->size);
+    if (audio_bug(__func__, live > hw->conv_buf.size)) {
+        dolog("live=%zu hw->conv_buf.size=%zu\n", live, hw->conv_buf.size);
         return 0;
     }
     return live;
 }
 
-static void audio_pcm_hw_clip_out(HWVoiceOut *hw, void *pcm_buf, size_t len)
+static size_t audio_pcm_hw_conv_in(HWVoiceIn *hw, void *pcm_buf, size_t samples)
 {
-    size_t clipped = 0;
-    size_t pos = hw->mix_buf->pos;
+    size_t conv = 0;
+    STSampleBuffer *conv_buf = &hw->conv_buf;
 
-    while (len) {
-        st_sample *src = hw->mix_buf->samples + pos;
-        uint8_t *dst = advance(pcm_buf, clipped * hw->info.bytes_per_frame);
-        size_t samples_till_end_of_buf = hw->mix_buf->size - pos;
-        size_t samples_to_clip = MIN(len, samples_till_end_of_buf);
+    while (samples) {
+        uint8_t *src = advance(pcm_buf, conv * hw->info.bytes_per_frame);
+        size_t proc = MIN(samples, conv_buf->size - conv_buf->pos);
 
-        hw->clip(dst, src, samples_to_clip);
-
-        pos = (pos + samples_to_clip) % hw->mix_buf->size;
-        len -= samples_to_clip;
-        clipped += samples_to_clip;
+        hw->conv(conv_buf->buffer + conv_buf->pos, src, proc);
+        conv_buf->pos = (conv_buf->pos + proc) % conv_buf->size;
+        samples -= proc;
+        conv += proc;
     }
+
+    return conv;
 }
 
 /*
  * Soft voice (capture)
  */
-static size_t audio_pcm_sw_get_rpos_in(SWVoiceIn *sw)
+static void audio_pcm_sw_resample_in(SWVoiceIn *sw,
+    size_t frames_in_max, size_t frames_out_max,
+    size_t *total_in, size_t *total_out)
 {
     HWVoiceIn *hw = sw->hw;
-    ssize_t live = hw->total_samples_captured - sw->total_hw_samples_acquired;
-    ssize_t rpos;
+    struct st_sample *src, *dst;
+    size_t live, rpos, frames_in, frames_out;
 
-    if (audio_bug(__func__, live < 0 || live > hw->conv_buf->size)) {
-        dolog("live=%zu hw->conv_buf->size=%zu\n", live, hw->conv_buf->size);
-        return 0;
-    }
+    live = hw->total_samples_captured - sw->total_hw_samples_acquired;
+    rpos = audio_ring_posb(hw->conv_buf.pos, live, hw->conv_buf.size);
 
-    rpos = hw->conv_buf->pos - live;
-    if (rpos >= 0) {
-        return rpos;
-    } else {
-        return hw->conv_buf->size + rpos;
+    /* resample conv_buf from rpos to end of buffer */
+    src = hw->conv_buf.buffer + rpos;
+    frames_in = MIN(frames_in_max, hw->conv_buf.size - rpos);
+    dst = sw->resample_buf.buffer;
+    frames_out = frames_out_max;
+    st_rate_flow(sw->rate, src, dst, &frames_in, &frames_out);
+    rpos += frames_in;
+    *total_in = frames_in;
+    *total_out = frames_out;
+
+    /* resample conv_buf from start of buffer if there are input frames left */
+    if (frames_in_max - frames_in && rpos == hw->conv_buf.size) {
+        src = hw->conv_buf.buffer;
+        frames_in = frames_in_max - frames_in;
+        dst += frames_out;
+        frames_out = frames_out_max - frames_out;
+        st_rate_flow(sw->rate, src, dst, &frames_in, &frames_out);
+        *total_in += frames_in;
+        *total_out += frames_out;
     }
 }
 
-static size_t audio_pcm_sw_read(SWVoiceIn *sw, void *buf, size_t size)
+static size_t audio_pcm_sw_read(SWVoiceIn *sw, void *buf, size_t buf_len)
 {
     HWVoiceIn *hw = sw->hw;
-    size_t samples, live, ret = 0, swlim, isamp, osamp, rpos, total = 0;
-    struct st_sample *src, *dst = sw->buf;
-
-    rpos = audio_pcm_sw_get_rpos_in(sw) % hw->conv_buf->size;
+    size_t live, frames_out_max, total_in, total_out;
 
     live = hw->total_samples_captured - sw->total_hw_samples_acquired;
-    if (audio_bug(__func__, live > hw->conv_buf->size)) {
-        dolog("live_in=%zu hw->conv_buf->size=%zu\n", live, hw->conv_buf->size);
-        return 0;
-    }
-
-    samples = size / sw->info.bytes_per_frame;
     if (!live) {
         return 0;
     }
-
-    swlim = (live * sw->ratio) >> 32;
-    swlim = MIN (swlim, samples);
-
-    while (swlim) {
-        src = hw->conv_buf->samples + rpos;
-        if (hw->conv_buf->pos > rpos) {
-            isamp = hw->conv_buf->pos - rpos;
-        } else {
-            isamp = hw->conv_buf->size - rpos;
-        }
-
-        if (!isamp) {
-            break;
-        }
-        osamp = swlim;
-
-        st_rate_flow (sw->rate, src, dst, &isamp, &osamp);
-        swlim -= osamp;
-        rpos = (rpos + isamp) % hw->conv_buf->size;
-        dst += osamp;
-        ret += osamp;
-        total += isamp;
+    if (audio_bug(__func__, live > hw->conv_buf.size)) {
+        dolog("live_in=%zu hw->conv_buf.size=%zu\n", live, hw->conv_buf.size);
+        return 0;
     }
 
-    if (hw->pcm_ops && !hw->pcm_ops->volume_in) {
-        mixeng_volume (sw->buf, ret, &sw->vol);
-    }
+    frames_out_max = MIN(buf_len / sw->info.bytes_per_frame,
+                         sw->resample_buf.size);
 
-    sw->clip (buf, sw->buf, ret);
-    sw->total_hw_samples_acquired += total;
-    return ret * sw->info.bytes_per_frame;
+    audio_pcm_sw_resample_in(sw, live, frames_out_max, &total_in, &total_out);
+
+    if (!hw->pcm_ops->volume_in) {
+        mixeng_volume(sw->resample_buf.buffer, total_out, &sw->vol);
+    }
+    sw->clip(buf, sw->resample_buf.buffer, total_out);
+
+    sw->total_hw_samples_acquired += total_in;
+    return total_out * sw->info.bytes_per_frame;
 }
 
 /*
@@ -674,8 +636,8 @@ static size_t audio_pcm_hw_get_live_out (HWVoiceOut *hw, int *nb_live)
     if (nb_live1) {
         size_t live = smin;
 
-        if (audio_bug(__func__, live > hw->mix_buf->size)) {
-            dolog("live=%zu hw->mix_buf->size=%zu\n", live, hw->mix_buf->size);
+        if (audio_bug(__func__, live > hw->mix_buf.size)) {
+            dolog("live=%zu hw->mix_buf.size=%zu\n", live, hw->mix_buf.size);
             return 0;
         }
         return live;
@@ -683,85 +645,141 @@ static size_t audio_pcm_hw_get_live_out (HWVoiceOut *hw, int *nb_live)
     return 0;
 }
 
+static size_t audio_pcm_hw_get_free(HWVoiceOut *hw)
+{
+    return (hw->pcm_ops->buffer_get_free ? hw->pcm_ops->buffer_get_free(hw) :
+            INT_MAX) / hw->info.bytes_per_frame;
+}
+
+static void audio_pcm_hw_clip_out(HWVoiceOut *hw, void *pcm_buf, size_t len)
+{
+    size_t clipped = 0;
+    size_t pos = hw->mix_buf.pos;
+
+    while (len) {
+        st_sample *src = hw->mix_buf.buffer + pos;
+        uint8_t *dst = advance(pcm_buf, clipped * hw->info.bytes_per_frame);
+        size_t samples_till_end_of_buf = hw->mix_buf.size - pos;
+        size_t samples_to_clip = MIN(len, samples_till_end_of_buf);
+
+        hw->clip(dst, src, samples_to_clip);
+
+        pos = (pos + samples_to_clip) % hw->mix_buf.size;
+        len -= samples_to_clip;
+        clipped += samples_to_clip;
+    }
+}
+
 /*
  * Soft voice (playback)
  */
-static size_t audio_pcm_sw_write(SWVoiceOut *sw, void *buf, size_t size)
+static void audio_pcm_sw_resample_out(SWVoiceOut *sw,
+    size_t frames_in_max, size_t frames_out_max,
+    size_t *total_in, size_t *total_out)
 {
-    size_t hwsamples, samples, isamp, osamp, wpos, live, dead, left, swlim, blck;
-    size_t ret = 0, pos = 0, total = 0;
-
-    if (!sw) {
-        return size;
-    }
-
-    hwsamples = sw->hw->mix_buf->size;
+    HWVoiceOut *hw = sw->hw;
+    struct st_sample *src, *dst;
+    size_t live, wpos, frames_in, frames_out;
 
     live = sw->total_hw_samples_mixed;
-    if (audio_bug(__func__, live > hwsamples)) {
-        dolog("live=%zu hw->mix_buf->size=%zu\n", live, hwsamples);
+    wpos = (hw->mix_buf.pos + live) % hw->mix_buf.size;
+
+    /* write to mix_buf from wpos to end of buffer */
+    src = sw->resample_buf.buffer;
+    frames_in = frames_in_max;
+    dst = hw->mix_buf.buffer + wpos;
+    frames_out = MIN(frames_out_max, hw->mix_buf.size - wpos);
+    st_rate_flow_mix(sw->rate, src, dst, &frames_in, &frames_out);
+    wpos += frames_out;
+    *total_in = frames_in;
+    *total_out = frames_out;
+
+    /* write to mix_buf from start of buffer if there are input frames left */
+    if (frames_in_max - frames_in > 0 && wpos == hw->mix_buf.size) {
+        src += frames_in;
+        frames_in = frames_in_max - frames_in;
+        dst = hw->mix_buf.buffer;
+        frames_out = frames_out_max - frames_out;
+        st_rate_flow_mix(sw->rate, src, dst, &frames_in, &frames_out);
+        *total_in += frames_in;
+        *total_out += frames_out;
+    }
+}
+
+static size_t audio_pcm_sw_write(SWVoiceOut *sw, void *buf, size_t buf_len)
+{
+    HWVoiceOut *hw = sw->hw;
+    size_t live, dead, hw_free, sw_max, fe_max;
+    size_t frames_in_max, frames_out_max, total_in, total_out;
+
+    live = sw->total_hw_samples_mixed;
+    if (audio_bug(__func__, live > hw->mix_buf.size)) {
+        dolog("live=%zu hw->mix_buf.size=%zu\n", live, hw->mix_buf.size);
         return 0;
     }
 
-    if (live == hwsamples) {
+    if (live == hw->mix_buf.size) {
 #ifdef DEBUG_OUT
         dolog ("%s is full %zu\n", sw->name, live);
 #endif
         return 0;
     }
 
-    wpos = (sw->hw->mix_buf->pos + live) % hwsamples;
-    samples = size / sw->info.bytes_per_frame;
+    dead = hw->mix_buf.size - live;
+    hw_free = audio_pcm_hw_get_free(hw);
+    hw_free = hw_free > live ? hw_free - live : 0;
+    frames_out_max = MIN(dead, hw_free);
+    sw_max = st_rate_frames_in(sw->rate, frames_out_max);
+    fe_max = MIN(buf_len / sw->info.bytes_per_frame + sw->resample_buf.pos,
+                 sw->resample_buf.size);
+    frames_in_max = MIN(sw_max, fe_max);
 
-    dead = hwsamples - live;
-    swlim = ((int64_t) dead << 32) / sw->ratio;
-    swlim = MIN (swlim, samples);
-    if (swlim) {
-        sw->conv (sw->buf, buf, swlim);
+    if (!frames_in_max) {
+        return 0;
+    }
 
-        if (sw->hw->pcm_ops && !sw->hw->pcm_ops->volume_out) {
-            mixeng_volume (sw->buf, swlim, &sw->vol);
+    if (frames_in_max > sw->resample_buf.pos) {
+        sw->conv(sw->resample_buf.buffer + sw->resample_buf.pos,
+                 buf, frames_in_max - sw->resample_buf.pos);
+        if (!sw->hw->pcm_ops->volume_out) {
+            mixeng_volume(sw->resample_buf.buffer + sw->resample_buf.pos,
+                          frames_in_max - sw->resample_buf.pos, &sw->vol);
         }
     }
 
-    while (swlim) {
-        dead = hwsamples - live;
-        left = hwsamples - wpos;
-        blck = MIN (dead, left);
-        if (!blck) {
-            break;
-        }
-        isamp = swlim;
-        osamp = blck;
-        st_rate_flow_mix (
-            sw->rate,
-            sw->buf + pos,
-            sw->hw->mix_buf->samples + wpos,
-            &isamp,
-            &osamp
-            );
-        ret += isamp;
-        swlim -= isamp;
-        pos += isamp;
-        live += osamp;
-        wpos = (wpos + osamp) % hwsamples;
-        total += osamp;
-    }
+    audio_pcm_sw_resample_out(sw, frames_in_max, frames_out_max,
+                              &total_in, &total_out);
 
-    sw->total_hw_samples_mixed += total;
+    sw->total_hw_samples_mixed += total_out;
     sw->empty = sw->total_hw_samples_mixed == 0;
+
+    /*
+     * Upsampling may leave one audio frame in the resample buffer. Decrement
+     * total_in by one if there was a leftover frame from the previous resample
+     * pass in the resample buffer. Increment total_in by one if the current
+     * resample pass left one frame in the resample buffer.
+     */
+    if (frames_in_max - total_in == 1) {
+        /* copy one leftover audio frame to the beginning of the buffer */
+        *sw->resample_buf.buffer = *(sw->resample_buf.buffer + total_in);
+        total_in += 1 - sw->resample_buf.pos;
+        sw->resample_buf.pos = 1;
+    } else if (total_in >= sw->resample_buf.pos) {
+        total_in -= sw->resample_buf.pos;
+        sw->resample_buf.pos = 0;
+    }
 
 #ifdef DEBUG_OUT
     dolog (
-        "%s: write size %zu ret %zu total sw %zu\n",
-        SW_NAME (sw),
-        size / sw->info.bytes_per_frame,
-        ret,
+        "%s: write size %zu written %zu total mixed %zu\n",
+        SW_NAME(sw),
+        buf_len / sw->info.bytes_per_frame,
+        total_in,
         sw->total_hw_samples_mixed
         );
 #endif
 
-    return ret * sw->info.bytes_per_frame;
+    return total_in * sw->info.bytes_per_frame;
 }
 
 #ifdef DEBUG_AUDIO
@@ -988,19 +1006,19 @@ static size_t audio_get_avail (SWVoiceIn *sw)
     }
 
     live = sw->hw->total_samples_captured - sw->total_hw_samples_acquired;
-    if (audio_bug(__func__, live > sw->hw->conv_buf->size)) {
-        dolog("live=%zu sw->hw->conv_buf->size=%zu\n", live,
-              sw->hw->conv_buf->size);
+    if (audio_bug(__func__, live > sw->hw->conv_buf.size)) {
+        dolog("live=%zu sw->hw->conv_buf.size=%zu\n", live,
+              sw->hw->conv_buf.size);
         return 0;
     }
 
     ldebug (
-        "%s: get_avail live %zu ret %" PRId64 "\n",
+        "%s: get_avail live %zu frontend frames %u\n",
         SW_NAME (sw),
-        live, (((int64_t) live << 32) / sw->ratio) * sw->info.bytes_per_frame
+        live, st_rate_frames_out(sw->rate, live)
         );
 
-    return (((int64_t) live << 32) / sw->ratio) * sw->info.bytes_per_frame;
+    return live;
 }
 
 static size_t audio_get_free(SWVoiceOut *sw)
@@ -1013,22 +1031,20 @@ static size_t audio_get_free(SWVoiceOut *sw)
 
     live = sw->total_hw_samples_mixed;
 
-    if (audio_bug(__func__, live > sw->hw->mix_buf->size)) {
-        dolog("live=%zu sw->hw->mix_buf->size=%zu\n", live,
-              sw->hw->mix_buf->size);
+    if (audio_bug(__func__, live > sw->hw->mix_buf.size)) {
+        dolog("live=%zu sw->hw->mix_buf.size=%zu\n", live,
+              sw->hw->mix_buf.size);
         return 0;
     }
 
-    dead = sw->hw->mix_buf->size - live;
+    dead = sw->hw->mix_buf.size - live;
 
 #ifdef DEBUG_OUT
-    dolog ("%s: get_free live %zu dead %zu ret %" PRId64 "\n",
-           SW_NAME (sw),
-           live, dead, (((int64_t) dead << 32) / sw->ratio) *
-           sw->info.bytes_per_frame);
+    dolog("%s: get_free live %zu dead %zu frontend frames %u\n",
+          SW_NAME(sw), live, dead, st_rate_frames_in(sw->rate, dead));
 #endif
 
-    return (((int64_t) dead << 32) / sw->ratio) * sw->info.bytes_per_frame;
+    return dead;
 }
 
 static void audio_capture_mix_and_clear(HWVoiceOut *hw, size_t rpos,
@@ -1041,32 +1057,40 @@ static void audio_capture_mix_and_clear(HWVoiceOut *hw, size_t rpos,
 
         for (sc = hw->cap_head.lh_first; sc; sc = sc->entries.le_next) {
             SWVoiceOut *sw = &sc->sw;
-            int rpos2 = rpos;
+            size_t rpos2 = rpos;
 
             n = samples;
             while (n) {
-                size_t till_end_of_hw = hw->mix_buf->size - rpos2;
-                size_t to_write = MIN(till_end_of_hw, n);
-                size_t bytes = to_write * hw->info.bytes_per_frame;
-                size_t written;
+                size_t till_end_of_hw = hw->mix_buf.size - rpos2;
+                size_t to_read = MIN(till_end_of_hw, n);
+                size_t live, frames_in, frames_out;
 
-                sw->buf = hw->mix_buf->samples + rpos2;
-                written = audio_pcm_sw_write (sw, NULL, bytes);
-                if (written - bytes) {
-                    dolog("Could not mix %zu bytes into a capture "
+                sw->resample_buf.buffer = hw->mix_buf.buffer + rpos2;
+                sw->resample_buf.size = to_read;
+                live = sw->total_hw_samples_mixed;
+
+                audio_pcm_sw_resample_out(sw,
+                                          to_read, sw->hw->mix_buf.size - live,
+                                          &frames_in, &frames_out);
+
+                sw->total_hw_samples_mixed += frames_out;
+                sw->empty = sw->total_hw_samples_mixed == 0;
+
+                if (to_read - frames_in) {
+                    dolog("Could not mix %zu frames into a capture "
                           "buffer, mixed %zu\n",
-                          bytes, written);
+                          to_read, frames_in);
                     break;
                 }
-                n -= to_write;
-                rpos2 = (rpos2 + to_write) % hw->mix_buf->size;
+                n -= to_read;
+                rpos2 = (rpos2 + to_read) % hw->mix_buf.size;
             }
         }
     }
 
-    n = MIN(samples, hw->mix_buf->size - rpos);
-    mixeng_clear(hw->mix_buf->samples + rpos, n);
-    mixeng_clear(hw->mix_buf->samples, samples - n);
+    n = MIN(samples, hw->mix_buf.size - rpos);
+    mixeng_clear(hw->mix_buf.buffer + rpos, n);
+    mixeng_clear(hw->mix_buf.buffer, samples - n);
 }
 
 static size_t audio_pcm_hw_run_out(HWVoiceOut *hw, size_t live)
@@ -1092,7 +1116,7 @@ static size_t audio_pcm_hw_run_out(HWVoiceOut *hw, size_t live)
 
         live -= proc;
         clipped += proc;
-        hw->mix_buf->pos = (hw->mix_buf->pos + proc) % hw->mix_buf->size;
+        hw->mix_buf.pos = (hw->mix_buf.pos + proc) % hw->mix_buf.size;
 
         if (proc == 0 || proc < decr) {
             break;
@@ -1111,8 +1135,12 @@ static void audio_run_out (AudioState *s)
     HWVoiceOut *hw = NULL;
     SWVoiceOut *sw;
 
-    if (!audio_get_pdo_out(s->dev)->mixing_engine) {
-        while ((hw = audio_pcm_hw_find_any_enabled_out(s, hw))) {
+    while ((hw = audio_pcm_hw_find_any_enabled_out(s, hw))) {
+        size_t played, live, prev_rpos;
+        size_t hw_free = audio_pcm_hw_get_free(hw);
+        int nb_live;
+
+        if (!audio_get_pdo_out(s->dev)->mixing_engine) {
             /* there is exactly 1 sw for each hw with no mixeng */
             sw = hw->sw_head.lh_first;
 
@@ -1125,23 +1153,44 @@ static void audio_run_out (AudioState *s)
             }
 
             if (sw->active) {
-                sw->callback.fn(sw->callback.opaque, INT_MAX);
+                sw->callback.fn(sw->callback.opaque,
+                                hw_free * sw->info.bytes_per_frame);
+            }
+
+            if (hw->pcm_ops->run_buffer_out) {
+                hw->pcm_ops->run_buffer_out(hw);
+            }
+
+            continue;
+        }
+
+        for (sw = hw->sw_head.lh_first; sw; sw = sw->entries.le_next) {
+            if (sw->active) {
+                size_t sw_free = audio_get_free(sw);
+                size_t free;
+
+                if (hw_free > sw->total_hw_samples_mixed) {
+                    free = st_rate_frames_in(sw->rate,
+                        MIN(sw_free, hw_free - sw->total_hw_samples_mixed));
+                } else {
+                    free = 0;
+                }
+                if (free > sw->resample_buf.pos) {
+                    free = MIN(free, sw->resample_buf.size)
+                           - sw->resample_buf.pos;
+                    sw->callback.fn(sw->callback.opaque,
+                                    free * sw->info.bytes_per_frame);
+                }
             }
         }
-        return;
-    }
-
-    while ((hw = audio_pcm_hw_find_any_enabled_out(s, hw))) {
-        size_t played, live, prev_rpos, free;
-        int nb_live;
 
         live = audio_pcm_hw_get_live_out (hw, &nb_live);
         if (!nb_live) {
             live = 0;
         }
 
-        if (audio_bug(__func__, live > hw->mix_buf->size)) {
-            dolog("live=%zu hw->mix_buf->size=%zu\n", live, hw->mix_buf->size);
+        if (audio_bug(__func__, live > hw->mix_buf.size)) {
+            dolog("live=%zu hw->mix_buf.size=%zu\n", live, hw->mix_buf.size);
             continue;
         }
 
@@ -1163,27 +1212,19 @@ static void audio_run_out (AudioState *s)
         }
 
         if (!live) {
-            for (sw = hw->sw_head.lh_first; sw; sw = sw->entries.le_next) {
-                if (sw->active) {
-                    free = audio_get_free (sw);
-                    if (free > 0) {
-                        sw->callback.fn (sw->callback.opaque, free);
-                    }
-                }
-            }
             if (hw->pcm_ops->run_buffer_out) {
                 hw->pcm_ops->run_buffer_out(hw);
             }
             continue;
         }
 
-        prev_rpos = hw->mix_buf->pos;
+        prev_rpos = hw->mix_buf.pos;
         played = audio_pcm_hw_run_out(hw, live);
         replay_audio_out(&played);
-        if (audio_bug(__func__, hw->mix_buf->pos >= hw->mix_buf->size)) {
-            dolog("hw->mix_buf->pos=%zu hw->mix_buf->size=%zu played=%zu\n",
-                  hw->mix_buf->pos, hw->mix_buf->size, played);
-            hw->mix_buf->pos = 0;
+        if (audio_bug(__func__, hw->mix_buf.pos >= hw->mix_buf.size)) {
+            dolog("hw->mix_buf.pos=%zu hw->mix_buf.size=%zu played=%zu\n",
+                  hw->mix_buf.pos, hw->mix_buf.size, played);
+            hw->mix_buf.pos = 0;
         }
 
 #ifdef DEBUG_OUT
@@ -1211,13 +1252,6 @@ static void audio_run_out (AudioState *s)
             if (!sw->total_hw_samples_mixed) {
                 sw->empty = 1;
             }
-
-            if (sw->active) {
-                free = audio_get_free (sw);
-                if (free > 0) {
-                    sw->callback.fn (sw->callback.opaque, free);
-                }
-            }
         }
     }
 }
@@ -1225,7 +1259,6 @@ static void audio_run_out (AudioState *s)
 static size_t audio_pcm_hw_run_in(HWVoiceIn *hw, size_t samples)
 {
     size_t conv = 0;
-    STSampleBuffer *conv_buf = hw->conv_buf;
 
     if (hw->pcm_ops->run_buffer_in) {
         hw->pcm_ops->run_buffer_in(hw);
@@ -1241,11 +1274,7 @@ static size_t audio_pcm_hw_run_in(HWVoiceIn *hw, size_t samples)
             break;
         }
 
-        proc = MIN(size / hw->info.bytes_per_frame,
-                   conv_buf->size - conv_buf->pos);
-
-        hw->conv(conv_buf->samples + conv_buf->pos, buf, proc);
-        conv_buf->pos = (conv_buf->pos + proc) % conv_buf->size;
+        proc = audio_pcm_hw_conv_in(hw, buf, size / hw->info.bytes_per_frame);
 
         samples -= proc;
         conv += proc;
@@ -1276,10 +1305,10 @@ static void audio_run_in (AudioState *s)
 
         if (replay_mode != REPLAY_MODE_PLAY) {
             captured = audio_pcm_hw_run_in(
-                hw, hw->conv_buf->size - audio_pcm_hw_get_live_in(hw));
+                hw, hw->conv_buf.size - audio_pcm_hw_get_live_in(hw));
         }
-        replay_audio_in(&captured, hw->conv_buf->samples, &hw->conv_buf->pos,
-                        hw->conv_buf->size);
+        replay_audio_in(&captured, hw->conv_buf.buffer, &hw->conv_buf.pos,
+                        hw->conv_buf.size);
 
         min = audio_pcm_hw_find_min_in (hw);
         hw->total_samples_captured += captured - min;
@@ -1289,11 +1318,14 @@ static void audio_run_in (AudioState *s)
             sw->total_hw_samples_acquired -= min;
 
             if (sw->active) {
+                size_t sw_avail = audio_get_avail(sw);
                 size_t avail;
 
-                avail = audio_get_avail (sw);
+                avail = st_rate_frames_out(sw->rate, sw_avail);
                 if (avail > 0) {
-                    sw->callback.fn (sw->callback.opaque, avail);
+                    avail = MIN(avail, sw->resample_buf.size);
+                    sw->callback.fn(sw->callback.opaque,
+                                    avail * sw->info.bytes_per_frame);
                 }
             }
         }
@@ -1310,14 +1342,14 @@ static void audio_run_capture (AudioState *s)
         SWVoiceOut *sw;
 
         captured = live = audio_pcm_hw_get_live_out (hw, NULL);
-        rpos = hw->mix_buf->pos;
+        rpos = hw->mix_buf.pos;
         while (live) {
-            size_t left = hw->mix_buf->size - rpos;
+            size_t left = hw->mix_buf.size - rpos;
             size_t to_capture = MIN(live, left);
             struct st_sample *src;
             struct capture_callback *cb;
 
-            src = hw->mix_buf->samples + rpos;
+            src = hw->mix_buf.buffer + rpos;
             hw->clip (cap->buf, src, to_capture);
             mixeng_clear (src, to_capture);
 
@@ -1325,10 +1357,10 @@ static void audio_run_capture (AudioState *s)
                 cb->ops.capture (cb->opaque, cap->buf,
                                  to_capture * hw->info.bytes_per_frame);
             }
-            rpos = (rpos + to_capture) % hw->mix_buf->size;
+            rpos = (rpos + to_capture) % hw->mix_buf.size;
             live -= to_capture;
         }
-        hw->mix_buf->pos = rpos;
+        hw->mix_buf.pos = rpos;
 
         for (sw = hw->sw_head.lh_first; sw; sw = sw->entries.le_next) {
             if (!sw->active && sw->empty) {
@@ -1394,12 +1426,10 @@ void audio_generic_run_buffer_in(HWVoiceIn *hw)
 
 void *audio_generic_get_buffer_in(HWVoiceIn *hw, size_t *size)
 {
-    ssize_t start = (ssize_t)hw->pos_emul - hw->pending_emul;
+    size_t start;
 
-    if (start < 0) {
-        start += hw->size_emul;
-    }
-    assert(start >= 0 && start < hw->size_emul);
+    start = audio_ring_posb(hw->pos_emul, hw->pending_emul, hw->size_emul);
+    assert(start < hw->size_emul);
 
     *size = MIN(*size, hw->pending_emul);
     *size = MIN(*size, hw->size_emul - start);
@@ -1412,16 +1442,22 @@ void audio_generic_put_buffer_in(HWVoiceIn *hw, void *buf, size_t size)
     hw->pending_emul -= size;
 }
 
+size_t audio_generic_buffer_get_free(HWVoiceOut *hw)
+{
+    if (hw->buf_emul) {
+        return hw->size_emul - hw->pending_emul;
+    } else {
+        return hw->samples * hw->info.bytes_per_frame;
+    }
+}
+
 void audio_generic_run_buffer_out(HWVoiceOut *hw)
 {
     while (hw->pending_emul) {
-        size_t write_len, written;
-        ssize_t start = ((ssize_t) hw->pos_emul) - hw->pending_emul;
+        size_t write_len, written, start;
 
-        if (start < 0) {
-            start += hw->size_emul;
-        }
-        assert(start >= 0 && start < hw->size_emul);
+        start = audio_ring_posb(hw->pos_emul, hw->pending_emul, hw->size_emul);
+        assert(start < hw->size_emul);
 
         write_len = MIN(hw->pending_emul, hw->size_emul - start);
 
@@ -1462,6 +1498,12 @@ size_t audio_generic_write(HWVoiceOut *hw, void *buf, size_t size)
 {
     size_t total = 0;
 
+    if (hw->pcm_ops->buffer_get_free) {
+        size_t free = hw->pcm_ops->buffer_get_free(hw);
+
+        size = MIN(size, free);
+    }
+
     while (total < size) {
         size_t dst_size = size - total;
         size_t copy_size, proc;
@@ -1481,10 +1523,6 @@ size_t audio_generic_write(HWVoiceOut *hw, void *buf, size_t size)
         if (proc == 0 || proc < copy_size) {
             break;
         }
-    }
-
-    if (hw->pcm_ops->run_buffer_out) {
-        hw->pcm_ops->run_buffer_out(hw);
     }
 
     return total;
@@ -1716,7 +1754,7 @@ static AudioState *audio_init(Audiodev *dev, const char *name)
         audio_validate_opts(dev, &error_abort);
     }
 
-    s = g_malloc0(sizeof(AudioState));
+    s = g_new0(AudioState, 1);
     s->dev = dev;
 
     QLIST_INIT (&s->hw_head_out);
@@ -1726,20 +1764,19 @@ static AudioState *audio_init(Audiodev *dev, const char *name)
         atexit(audio_cleanup);
         atexit_registered = true;
     }
-    QTAILQ_INSERT_TAIL(&audio_states, s, list);
 
     s->ts = timer_new_ns(QEMU_CLOCK_VIRTUAL, audio_timer, s);
 
     s->nb_hw_voices_out = audio_get_pdo_out(dev)->voices;
     s->nb_hw_voices_in = audio_get_pdo_in(dev)->voices;
 
-    if (s->nb_hw_voices_out <= 0) {
+    if (s->nb_hw_voices_out < 1) {
         dolog ("Bogus number of playback voices %d, setting to 1\n",
                s->nb_hw_voices_out);
         s->nb_hw_voices_out = 1;
     }
 
-    if (s->nb_hw_voices_in <= 0) {
+    if (s->nb_hw_voices_in < 0) {
         dolog ("Bogus number of capture voices %d, setting to 0\n",
                s->nb_hw_voices_in);
         s->nb_hw_voices_in = 0;
@@ -1751,6 +1788,10 @@ static AudioState *audio_init(Audiodev *dev, const char *name)
             done = !audio_driver_init(s, driver, true, dev);
         } else {
             dolog ("Unknown audio driver `%s'\n", drvname);
+        }
+        if (!done) {
+            free_audio_state(s);
+            return NULL;
         }
     } else {
         for (i = 0; audio_prio_list[i]; i++) {
@@ -1789,6 +1830,7 @@ static AudioState *audio_init(Audiodev *dev, const char *name)
                "(Audio can continue looping even after stopping the VM)\n");
     }
 
+    QTAILQ_INSERT_TAIL(&audio_states, s, list);
     QLIST_INIT (&s->card_head);
     vmstate_register (NULL, 0, &vmstate_audio, s);
     return s;
@@ -1821,6 +1863,7 @@ void AUD_remove_card (QEMUSoundCard *card)
     g_free (card->name);
 }
 
+static struct audio_pcm_ops capture_pcm_ops;
 
 CaptureVoiceOut *AUD_add_capture(
     AudioState *s,
@@ -1866,6 +1909,7 @@ CaptureVoiceOut *AUD_add_capture(
 
         hw = &cap->hw;
         hw->s = s;
+        hw->pcm_ops = &capture_pcm_ops;
         QLIST_INIT (&hw->sw_head);
         QLIST_INIT (&cap->cb_head);
 
@@ -1875,7 +1919,7 @@ CaptureVoiceOut *AUD_add_capture(
 
         audio_pcm_init_info (&hw->info, as);
 
-        cap->buf = g_malloc0_n(hw->mix_buf->size, hw->info.bytes_per_frame);
+        cap->buf = g_malloc0_n(hw->mix_buf.size, hw->info.bytes_per_frame);
 
         if (hw->info.is_float) {
             hw->clip = mixeng_clip_float[hw->info.nchannels == 2];
@@ -1927,7 +1971,7 @@ void AUD_del_capture (CaptureVoiceOut *cap, void *cb_opaque)
                     sw = sw1;
                 }
                 QLIST_REMOVE (cap, entries);
-                g_free (cap->hw.mix_buf);
+                g_free(cap->hw.mix_buf.buffer);
                 g_free (cap->buf);
                 g_free (cap);
             }
@@ -1985,28 +2029,47 @@ void audio_create_pdos(Audiodev *dev)
     switch (dev->driver) {
 #define CASE(DRIVER, driver, pdo_name)                              \
     case AUDIODEV_DRIVER_##DRIVER:                                  \
-        if (!dev->u.driver.has_in) {                                \
+        if (!dev->u.driver.in) {                                    \
             dev->u.driver.in = g_malloc0(                           \
                 sizeof(Audiodev##pdo_name##PerDirectionOptions));   \
-            dev->u.driver.has_in = true;                            \
         }                                                           \
-        if (!dev->u.driver.has_out) {                               \
+        if (!dev->u.driver.out) {                                   \
             dev->u.driver.out = g_malloc0(                          \
                 sizeof(Audiodev##pdo_name##PerDirectionOptions));   \
-            dev->u.driver.has_out = true;                           \
         }                                                           \
         break
 
         CASE(NONE, none, );
+#ifdef CONFIG_AUDIO_ALSA
         CASE(ALSA, alsa, Alsa);
+#endif
+#ifdef CONFIG_AUDIO_COREAUDIO
         CASE(COREAUDIO, coreaudio, Coreaudio);
+#endif
+#ifdef CONFIG_DBUS_DISPLAY
         CASE(DBUS, dbus, );
+#endif
+#ifdef CONFIG_AUDIO_DSOUND
         CASE(DSOUND, dsound, );
+#endif
+#ifdef CONFIG_AUDIO_JACK
         CASE(JACK, jack, Jack);
+#endif
+#ifdef CONFIG_AUDIO_OSS
         CASE(OSS, oss, Oss);
+#endif
+#ifdef CONFIG_AUDIO_PA
         CASE(PA, pa, Pa);
+#endif
+#ifdef CONFIG_AUDIO_SDL
         CASE(SDL, sdl, Sdl);
+#endif
+#ifdef CONFIG_AUDIO_SNDIO
+        CASE(SNDIO, sndio, );
+#endif
+#ifdef CONFIG_SPICE
         CASE(SPICE, spice, );
+#endif
         CASE(WAV, wav, );
 
     case AUDIODEV_DRIVER__MAX:
@@ -2078,29 +2141,57 @@ static void audio_validate_opts(Audiodev *dev, Error **errp)
     }
 }
 
+void audio_help(void)
+{
+    int i;
+
+    printf("Available audio drivers:\n");
+
+    for (i = 0; i < AUDIODEV_DRIVER__MAX; i++) {
+        audio_driver *driver = audio_driver_lookup(AudiodevDriver_str(i));
+        if (driver) {
+            printf("%s\n", driver->name);
+        }
+    }
+}
+
 void audio_parse_option(const char *opt)
 {
-    AudiodevListEntry *e;
     Audiodev *dev = NULL;
 
+    if (is_help_option(opt)) {
+        audio_help();
+        exit(EXIT_SUCCESS);
+    }
     Visitor *v = qobject_input_visitor_new_str(opt, "driver", &error_fatal);
     visit_type_Audiodev(v, NULL, &dev, &error_fatal);
     visit_free(v);
 
+    audio_define(dev);
+}
+
+void audio_define(Audiodev *dev)
+{
+    AudiodevListEntry *e;
+
     audio_validate_opts(dev, &error_fatal);
 
-    e = g_malloc0(sizeof(AudiodevListEntry));
+    e = g_new0(AudiodevListEntry, 1);
     e->dev = dev;
     QSIMPLEQ_INSERT_TAIL(&audiodevs, e, next);
 }
 
-void audio_init_audiodevs(void)
+bool audio_init_audiodevs(void)
 {
     AudiodevListEntry *e;
 
     QSIMPLEQ_FOREACH(e, &audiodevs, next) {
-        audio_init(e->dev, NULL);
+        if (!audio_init(e->dev, NULL)) {
+            return false;
+        }
     }
+
+    return true;
 }
 
 audsettings audiodev_to_audsettings(AudiodevPerDirectionOptions *pdo)
@@ -2198,26 +2289,49 @@ void audio_rate_start(RateCtl *rate)
     rate->start_ticks = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 }
 
-size_t audio_rate_get_bytes(struct audio_pcm_info *info, RateCtl *rate,
-                            size_t bytes_avail)
+size_t audio_rate_peek_bytes(RateCtl *rate, struct audio_pcm_info *info)
 {
     int64_t now;
     int64_t ticks;
     int64_t bytes;
-    int64_t samples;
-    size_t ret;
+    int64_t frames;
 
     now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     ticks = now - rate->start_ticks;
     bytes = muldiv64(ticks, info->bytes_per_second, NANOSECONDS_PER_SECOND);
-    samples = (bytes - rate->bytes_sent) / info->bytes_per_frame;
-    if (samples < 0 || samples > 65536) {
-        AUD_log(NULL, "Resetting rate control (%" PRId64 " samples)\n", samples);
+    frames = (bytes - rate->bytes_sent) / info->bytes_per_frame;
+    if (frames < 0 || frames > 65536) {
+        AUD_log(NULL, "Resetting rate control (%" PRId64 " frames)\n", frames);
         audio_rate_start(rate);
-        samples = 0;
+        frames = 0;
     }
 
-    ret = MIN(samples * info->bytes_per_frame, bytes_avail);
-    rate->bytes_sent += ret;
+    return frames * info->bytes_per_frame;
+}
+
+void audio_rate_add_bytes(RateCtl *rate, size_t bytes_used)
+{
+    rate->bytes_sent += bytes_used;
+}
+
+size_t audio_rate_get_bytes(RateCtl *rate, struct audio_pcm_info *info,
+                            size_t bytes_avail)
+{
+    size_t bytes;
+
+    bytes = audio_rate_peek_bytes(rate, info);
+    bytes = MIN(bytes, bytes_avail);
+    audio_rate_add_bytes(rate, bytes);
+
+    return bytes;
+}
+
+AudiodevList *qmp_query_audiodevs(Error **errp)
+{
+    AudiodevList *ret = NULL;
+    AudiodevListEntry *e;
+    QSIMPLEQ_FOREACH(e, &audiodevs, next) {
+        QAPI_LIST_PREPEND(ret, QAPI_CLONE(Audiodev, e->dev));
+    }
     return ret;
 }

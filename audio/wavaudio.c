@@ -42,7 +42,7 @@ typedef struct WAVVoiceOut {
 static size_t wav_write_out(HWVoiceOut *hw, void *buf, size_t len)
 {
     WAVVoiceOut *wav = (WAVVoiceOut *) hw;
-    int64_t bytes = audio_rate_get_bytes(&hw->info, &wav->rate, len);
+    int64_t bytes = audio_rate_get_bytes(&wav->rate, &hw->info, len);
     assert(bytes % hw->info.bytes_per_frame == 0);
 
     if (bytes && fwrite(buf, bytes, 1, wav->f) != 1) {
@@ -78,7 +78,7 @@ static int wav_init_out(HWVoiceOut *hw, struct audsettings *as,
     Audiodev *dev = drv_opaque;
     AudiodevWavOptions *wopts = &dev->u.wav;
     struct audsettings wav_as = audiodev_to_audsettings(dev->u.wav.out);
-    const char *wav_path = wopts->has_path ? wopts->path : "qemu.wav";
+    const char *wav_path = wopts->path ?: "qemu.wav";
 
     stereo = wav_as.nchannels == 2;
     switch (wav_as.fmt) {
@@ -197,6 +197,7 @@ static struct audio_pcm_ops wav_pcm_ops = {
     .init_out = wav_init_out,
     .fini_out = wav_fini_out,
     .write    = wav_write_out,
+    .buffer_get_free = audio_generic_buffer_get_free,
     .run_buffer_out = audio_generic_run_buffer_out,
     .enable_out = wav_enable_out,
 };

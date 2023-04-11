@@ -1,3 +1,5 @@
+.. _System Emulation:
+
 ----------------
 System Emulation
 ----------------
@@ -10,7 +12,7 @@ or Hypervisor.Framework.
 .. toctree::
    :maxdepth: 3
 
-   quickstart
+   introduction
    invocation
    device-emulation
    keys
@@ -27,6 +29,7 @@ or Hypervisor.Framework.
    secrets
    authz
    gdb
+   replay
    managed-startup
    bootindex
    cpu-hotplug
@@ -34,3 +37,4 @@ or Hypervisor.Framework.
    targets
    security
    multi-process
+   confidential-guest-support

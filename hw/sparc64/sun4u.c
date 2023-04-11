@@ -26,9 +26,9 @@
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "qemu/datadir.h"
 #include "cpu.h"
+#include "hw/irq.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pci_bus.h"
@@ -67,7 +67,6 @@
 #define PBM_PCI_IO_BASE      (PBM_SPECIAL_BASE + 0x02000000ULL)
 #define PROM_FILENAME        "openbios-sparc64"
 #define NVRAM_SIZE           0x2000
-#define MAX_IDE_BUS          2
 #define BIOS_CFG_IOPORT      0x510
 #define FW_CFG_SPARC64_WIDTH (FW_CFG_ARCH_LOCAL + 0x00)
 #define FW_CFG_SPARC64_HEIGHT (FW_CFG_ARCH_LOCAL + 0x01)
@@ -86,7 +85,8 @@ struct EbusState {
     PCIDevice parent_obj;
 
     ISABus *isa_bus;
-    qemu_irq isa_bus_irqs[ISA_NUM_IRQS];
+    qemu_irq *isa_irqs_in;
+    qemu_irq isa_irqs_out[ISA_NUM_IRQS];
     uint64_t console_serial_base;
     MemoryRegion bar0;
     MemoryRegion bar1;
@@ -289,7 +289,7 @@ static const TypeInfo power_info = {
 static void ebus_isa_irq_handler(void *opaque, int n, int level)
 {
     EbusState *s = EBUS(opaque);
-    qemu_irq irq = s->isa_bus_irqs[n];
+    qemu_irq irq = s->isa_irqs_out[n];
 
     /* Pass ISA bus IRQs onto their gpio equivalent */
     trace_ebus_isa_irq_handler(n, level);
@@ -305,7 +305,6 @@ static void ebus_realize(PCIDevice *pci_dev, Error **errp)
     ISADevice *isa_dev;
     SysBusDevice *sbd;
     DeviceState *dev;
-    qemu_irq *isa_irq;
     DriveInfo *fd[MAX_FD];
     int i;
 
@@ -317,9 +316,9 @@ static void ebus_realize(PCIDevice *pci_dev, Error **errp)
     }
 
     /* ISA bus */
-    isa_irq = qemu_allocate_irqs(ebus_isa_irq_handler, s, ISA_NUM_IRQS);
-    isa_bus_irqs(s->isa_bus, isa_irq);
-    qdev_init_gpio_out_named(DEVICE(s), s->isa_bus_irqs, "isa-irq",
+    s->isa_irqs_in = qemu_allocate_irqs(ebus_isa_irq_handler, s, ISA_NUM_IRQS);
+    isa_bus_register_input_irqs(s->isa_bus, s->isa_irqs_in);
+    qdev_init_gpio_out_named(DEVICE(s), s->isa_irqs_out, "isa-irq",
                              ISA_NUM_IRQS);
 
     /* Serial ports */
@@ -335,7 +334,7 @@ static void ebus_realize(PCIDevice *pci_dev, Error **errp)
     parallel_hds_isa_init(s->isa_bus, MAX_PARALLEL_PORTS);
 
     /* Keyboard */
-    isa_create_simple(s->isa_bus, "i8042");
+    isa_create_simple(s->isa_bus, TYPE_I8042);
 
     /* Floppy */
     for (i = 0; i < MAX_FD; i++) {
@@ -633,6 +632,7 @@ static void sun4uv_init(MemoryRegion *address_space_mem,
     switch (vga_interface_type) {
     case VGA_STD:
         pci_create_simple(pci_busA, PCI_DEVFN(2, 0), "VGA");
+        vga_interface_created = true;
         break;
     case VGA_NONE:
         break;
@@ -695,7 +695,7 @@ static void sun4uv_init(MemoryRegion *address_space_mem,
                                     &kernel_addr, &kernel_entry);
 
     sun4u_NVRAM_set_params(nvram, NVRAM_SIZE, "Sun4u", machine->ram_size,
-                           machine->boot_order,
+                           machine->boot_config.order,
                            kernel_addr, kernel_size,
                            machine->kernel_cmdline,
                            initrd_addr, initrd_size,
@@ -727,7 +727,7 @@ static void sun4uv_init(MemoryRegion *address_space_mem,
     }
     fw_cfg_add_i64(fw_cfg, FW_CFG_INITRD_ADDR, initrd_addr);
     fw_cfg_add_i64(fw_cfg, FW_CFG_INITRD_SIZE, initrd_size);
-    fw_cfg_add_i16(fw_cfg, FW_CFG_BOOT_DEVICE, machine->boot_order[0]);
+    fw_cfg_add_i16(fw_cfg, FW_CFG_BOOT_DEVICE, machine->boot_config.order[0]);
 
     fw_cfg_add_i16(fw_cfg, FW_CFG_SPARC64_WIDTH, graphic_width);
     fw_cfg_add_i16(fw_cfg, FW_CFG_SPARC64_HEIGHT, graphic_height);

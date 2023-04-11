@@ -18,7 +18,6 @@
 #include "qapi/qmp/qerror.h"
 #include "qemu/base64.h"
 #include "qemu/cutils.h"
-#include "qemu/atomic.h"
 #include "commands-common.h"
 
 /* Maximum captured guest-exec out_data/err_data - 16MB */
@@ -33,9 +32,8 @@
 #define GUEST_FILE_READ_COUNT_MAX (48 * MiB)
 
 /* Note: in some situations, like with the fsfreeze, logging may be
- * temporarilly disabled. if it is necessary that a command be able
- * to log for accounting purposes, check ga_logging_enabled() beforehand,
- * and use the QERR_QGA_LOGGING_DISABLED to generate an error
+ * temporarily disabled. if it is necessary that a command be able
+ * to log for accounting purposes, check ga_logging_enabled() beforehand.
  */
 void slog(const gchar *fmt, ...)
 {
@@ -162,13 +160,12 @@ GuestExecStatus *qmp_guest_exec_status(int64_t pid, Error **errp)
 
     ges = g_new0(GuestExecStatus, 1);
 
-    bool finished = qatomic_mb_read(&gei->finished);
+    bool finished = gei->finished;
 
     /* need to wait till output channels are closed
      * to be sure we captured all output at this point */
     if (gei->has_output) {
-        finished = finished && qatomic_mb_read(&gei->out.closed);
-        finished = finished && qatomic_mb_read(&gei->err.closed);
+        finished &= gei->out.closed && gei->err.closed;
     }
 
     ges->exited = finished;
@@ -208,14 +205,12 @@ GuestExecStatus *qmp_guest_exec_status(int64_t pid, Error **errp)
         }
 #endif
         if (gei->out.length > 0) {
-            ges->has_out_data = true;
             ges->out_data = g_base64_encode(gei->out.data, gei->out.length);
             g_free(gei->out.data);
             ges->has_out_truncated = gei->out.truncated;
         }
 
         if (gei->err.length > 0) {
-            ges->has_err_data = true;
             ges->err_data = g_base64_encode(gei->err.data, gei->err.length);
             g_free(gei->err.data);
             ges->has_err_truncated = gei->err.truncated;
@@ -244,7 +239,7 @@ static char **guest_exec_get_args(const strList *entry, bool log)
 
     str = g_malloc(str_size);
     *str = 0;
-    args = g_malloc(count * sizeof(char *));
+    args = g_new(char *, count);
     for (it = entry; it != NULL; it = it->next) {
         args[i++] = it->value;
         pstrcat(str, str_size, it->value);
@@ -270,7 +265,7 @@ static void guest_exec_child_watch(GPid pid, gint status, gpointer data)
             (int32_t)gpid_to_int64(pid), (uint32_t)status);
 
     gei->status = status;
-    qatomic_mb_set(&gei->finished, true);
+    gei->finished = true;
 
     g_spawn_close_pid(pid);
 }
@@ -326,7 +321,7 @@ static gboolean guest_exec_input_watch(GIOChannel *ch,
 done:
     g_io_channel_shutdown(ch, true, NULL);
     g_io_channel_unref(ch);
-    qatomic_mb_set(&p->closed, true);
+    p->closed = true;
     g_free(p->data);
 
     return false;
@@ -380,14 +375,14 @@ static gboolean guest_exec_output_watch(GIOChannel *ch,
 close:
     g_io_channel_shutdown(ch, true, NULL);
     g_io_channel_unref(ch);
-    qatomic_mb_set(&p->closed, true);
+    p->closed = true;
     return false;
 }
 
 GuestExec *qmp_guest_exec(const char *path,
                        bool has_arg, strList *arg,
                        bool has_env, strList *env,
-                       bool has_input_data, const char *input_data,
+                       const char *input_data,
                        bool has_capture_output, bool capture_output,
                        Error **errp)
 {
@@ -408,7 +403,7 @@ GuestExec *qmp_guest_exec(const char *path,
     arglist.value = (char *)path;
     arglist.next = has_arg ? arg : NULL;
 
-    if (has_input_data) {
+    if (input_data) {
         input = qbase64_decode(input_data, -1, &ninput, errp);
         if (!input) {
             return NULL;
@@ -425,7 +420,7 @@ GuestExec *qmp_guest_exec(const char *path,
     }
 
     ret = g_spawn_async_with_pipes(NULL, argv, envp, flags,
-            guest_exec_task_setup, NULL, &pid, has_input_data ? &in_fd : NULL,
+            guest_exec_task_setup, NULL, &pid, input_data ? &in_fd : NULL,
             has_output ? &out_fd : NULL, has_output ? &err_fd : NULL, &gerr);
     if (!ret) {
         error_setg(errp, QERR_QGA_COMMAND_FAILED, gerr->message);
@@ -440,7 +435,7 @@ GuestExec *qmp_guest_exec(const char *path,
     gei->has_output = has_output;
     g_child_watch_add(pid, guest_exec_child_watch, gei);
 
-    if (has_input_data) {
+    if (input_data) {
         gei->in.data = g_steal_pointer(&input);
         gei->in.size = ninput;
 #ifdef G_OS_WIN32
@@ -511,7 +506,7 @@ int ga_parse_whence(GuestFileWhence *whence, Error **errp)
 GuestHostName *qmp_guest_get_host_name(Error **errp)
 {
     GuestHostName *result = NULL;
-    g_autofree char *hostname = qemu_get_host_name(errp);
+    g_autofree char *hostname = qga_get_host_name(errp);
 
     /*
      * We want to avoid using g_get_host_name() because that
@@ -549,7 +544,6 @@ GuestTimezone *qmp_guest_get_timezone(Error **errp)
     info->offset = g_time_zone_get_offset(tz, intv);
     name = g_time_zone_get_abbreviation(tz, intv);
     if (name != NULL) {
-        info->has_zone = true;
         info->zone = g_strdup(name);
     }
     g_time_zone_unref(tz);
@@ -584,4 +578,9 @@ GuestFileRead *qmp_guest_file_read(int64_t handle, bool has_count,
     }
 
     return read_data;
+}
+
+int64_t qmp_guest_get_time(Error **errp)
+{
+    return g_get_real_time() * 1000;
 }

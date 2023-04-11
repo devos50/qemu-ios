@@ -57,14 +57,14 @@
 #define MICROVM_QBOOT_FILENAME "qboot.rom"
 #define MICROVM_BIOS_FILENAME  "bios-microvm.bin"
 
-static void microvm_set_rtc(MicrovmMachineState *mms, ISADevice *s)
+static void microvm_set_rtc(MicrovmMachineState *mms, MC146818RtcState *s)
 {
     X86MachineState *x86ms = X86_MACHINE(mms);
     int val;
 
     val = MIN(x86ms->below_4g_mem_size / KiB, 640);
-    rtc_set_memory(s, 0x15, val);
-    rtc_set_memory(s, 0x16, val >> 8);
+    mc146818rtc_set_cmos_data(s, 0x15, val);
+    mc146818rtc_set_cmos_data(s, 0x16, val >> 8);
     /* extended memory (next 64MiB) */
     if (x86ms->below_4g_mem_size > 1 * MiB) {
         val = (x86ms->below_4g_mem_size - 1 * MiB) / KiB;
@@ -74,10 +74,10 @@ static void microvm_set_rtc(MicrovmMachineState *mms, ISADevice *s)
     if (val > 65535) {
         val = 65535;
     }
-    rtc_set_memory(s, 0x17, val);
-    rtc_set_memory(s, 0x18, val >> 8);
-    rtc_set_memory(s, 0x30, val);
-    rtc_set_memory(s, 0x31, val >> 8);
+    mc146818rtc_set_cmos_data(s, 0x17, val);
+    mc146818rtc_set_cmos_data(s, 0x18, val >> 8);
+    mc146818rtc_set_cmos_data(s, 0x30, val);
+    mc146818rtc_set_cmos_data(s, 0x31, val >> 8);
     /* memory between 16MiB and 4GiB */
     if (x86ms->below_4g_mem_size > 16 * MiB) {
         val = (x86ms->below_4g_mem_size - 16 * MiB) / (64 * KiB);
@@ -87,13 +87,13 @@ static void microvm_set_rtc(MicrovmMachineState *mms, ISADevice *s)
     if (val > 65535) {
         val = 65535;
     }
-    rtc_set_memory(s, 0x34, val);
-    rtc_set_memory(s, 0x35, val >> 8);
+    mc146818rtc_set_cmos_data(s, 0x34, val);
+    mc146818rtc_set_cmos_data(s, 0x35, val >> 8);
     /* memory above 4GiB */
     val = x86ms->above_4g_mem_size / 65536;
-    rtc_set_memory(s, 0x5b, val);
-    rtc_set_memory(s, 0x5c, val >> 8);
-    rtc_set_memory(s, 0x5d, val >> 16);
+    mc146818rtc_set_cmos_data(s, 0x5b, val);
+    mc146818rtc_set_cmos_data(s, 0x5c, val >> 8);
+    mc146818rtc_set_cmos_data(s, 0x5d, val >> 16);
 }
 
 static void create_gpex(MicrovmMachineState *mms)
@@ -161,7 +161,6 @@ static void microvm_devices_init(MicrovmMachineState *mms)
     const char *default_firmware;
     X86MachineState *x86ms = X86_MACHINE(mms);
     ISABus *isa_bus;
-    ISADevice *rtc_state;
     GSIState *gsi_state;
     int ioapics;
     int i;
@@ -174,7 +173,7 @@ static void microvm_devices_init(MicrovmMachineState *mms)
 
     isa_bus = isa_bus_new(NULL, get_system_memory(), get_system_io(),
                           &error_abort);
-    isa_bus_irqs(isa_bus, x86ms->gsi);
+    isa_bus_register_input_irqs(isa_bus, x86ms->gsi);
 
     ioapic_init_gsi(gsi_state, "machine");
     if (ioapics > 1) {
@@ -247,7 +246,7 @@ static void microvm_devices_init(MicrovmMachineState *mms)
         x86ms->pci_irq_mask = 0;
     }
 
-    if (mms->pic == ON_OFF_AUTO_ON || mms->pic == ON_OFF_AUTO_AUTO) {
+    if (x86ms->pic == ON_OFF_AUTO_ON || x86ms->pic == ON_OFF_AUTO_AUTO) {
         qemu_irq *i8259;
 
         i8259 = i8259_init(isa_bus, x86_allocate_cpu_irq());
@@ -257,7 +256,7 @@ static void microvm_devices_init(MicrovmMachineState *mms)
         g_free(i8259);
     }
 
-    if (mms->pit == ON_OFF_AUTO_ON || mms->pit == ON_OFF_AUTO_AUTO) {
+    if (x86ms->pit == ON_OFF_AUTO_ON || x86ms->pit == ON_OFF_AUTO_AUTO) {
         if (kvm_pit_in_kernel()) {
             kvm_pit_init(isa_bus, 0x40);
         } else {
@@ -267,8 +266,7 @@ static void microvm_devices_init(MicrovmMachineState *mms)
 
     if (mms->rtc == ON_OFF_AUTO_ON ||
         (mms->rtc == ON_OFF_AUTO_AUTO && !kvm_enabled())) {
-        rtc_state = mc146818_rtc_init(isa_bus, 2000, NULL);
-        microvm_set_rtc(mms, rtc_state);
+        microvm_set_rtc(mms, mc146818_rtc_init(isa_bus, 2000, NULL));
     }
 
     if (mms->isa_serial) {
@@ -324,8 +322,6 @@ static void microvm_memory_init(MicrovmMachineState *mms)
     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, machine->smp.max_cpus);
     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)machine->ram_size);
     fw_cfg_add_i32(fw_cfg, FW_CFG_IRQ0_OVERRIDE, 1);
-    fw_cfg_add_bytes(fw_cfg, FW_CFG_E820_TABLE,
-                     &e820_reserve, sizeof(e820_reserve));
     fw_cfg_add_file(fw_cfg, "etc/e820", e820_table,
                     sizeof(struct e820_entry) * e820_get_num_entries());
 
@@ -467,7 +463,7 @@ static void microvm_machine_state_init(MachineState *machine)
     microvm_devices_init(mms);
 }
 
-static void microvm_machine_reset(MachineState *machine)
+static void microvm_machine_reset(MachineState *machine, ShutdownCause reason)
 {
     MicrovmMachineState *mms = MICROVM_MACHINE(machine);
     CPUState *cs;
@@ -480,49 +476,13 @@ static void microvm_machine_reset(MachineState *machine)
         mms->kernel_cmdline_fixed = true;
     }
 
-    qemu_devices_reset();
+    qemu_devices_reset(reason);
 
     CPU_FOREACH(cs) {
         cpu = X86_CPU(cs);
 
-        if (cpu->apic_state) {
-            device_legacy_reset(cpu->apic_state);
-        }
+        x86_cpu_after_reset(cpu);
     }
-}
-
-static void microvm_machine_get_pic(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
-    OnOffAuto pic = mms->pic;
-
-    visit_type_OnOffAuto(v, name, &pic, errp);
-}
-
-static void microvm_machine_set_pic(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
-
-    visit_type_OnOffAuto(v, name, &mms->pic, errp);
-}
-
-static void microvm_machine_get_pit(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
-    OnOffAuto pit = mms->pit;
-
-    visit_type_OnOffAuto(v, name, &pit, errp);
-}
-
-static void microvm_machine_set_pit(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
-
-    visit_type_OnOffAuto(v, name, &mms->pit, errp);
 }
 
 static void microvm_machine_get_rtc(Object *obj, Visitor *v, const char *name,
@@ -649,8 +609,6 @@ static void microvm_machine_initfn(Object *obj)
     MicrovmMachineState *mms = MICROVM_MACHINE(obj);
 
     /* Configuration */
-    mms->pic = ON_OFF_AUTO_AUTO;
-    mms->pit = ON_OFF_AUTO_AUTO;
     mms->rtc = ON_OFF_AUTO_AUTO;
     mms->pcie = ON_OFF_AUTO_AUTO;
     mms->ioapic2 = ON_OFF_AUTO_AUTO;
@@ -666,6 +624,14 @@ static void microvm_machine_initfn(Object *obj)
     mms->powerdown_req.notify = microvm_powerdown_req;
     qemu_register_powerdown_notifier(&mms->powerdown_req);
 }
+
+GlobalProperty microvm_properties[] = {
+    /*
+     * pcie host bridge (gpex) on microvm has no io address window,
+     * so reserving io space is not going to work.  Turn it off.
+     */
+    { "pcie-root-port", "io-reserve", "0" },
+};
 
 static void microvm_class_init(ObjectClass *oc, void *data)
 {
@@ -701,20 +667,6 @@ static void microvm_class_init(ObjectClass *oc, void *data)
     hc->unplug = microvm_device_unplug_cb;
 
     x86mc->fwcfg_dma_enabled = true;
-
-    object_class_property_add(oc, MICROVM_MACHINE_PIC, "OnOffAuto",
-                              microvm_machine_get_pic,
-                              microvm_machine_set_pic,
-                              NULL, NULL);
-    object_class_property_set_description(oc, MICROVM_MACHINE_PIC,
-        "Enable i8259 PIC");
-
-    object_class_property_add(oc, MICROVM_MACHINE_PIT, "OnOffAuto",
-                              microvm_machine_get_pit,
-                              microvm_machine_set_pit,
-                              NULL, NULL);
-    object_class_property_set_description(oc, MICROVM_MACHINE_PIT,
-        "Enable i8254 PIT");
 
     object_class_property_add(oc, MICROVM_MACHINE_RTC, "OnOffAuto",
                               microvm_machine_get_rtc,
@@ -757,6 +709,9 @@ static void microvm_class_init(ObjectClass *oc, void *data)
         "Set off to disable adding virtio-mmio devices to the kernel cmdline");
 
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
+
+    compat_props_add(mc->compat_props, microvm_properties,
+                     G_N_ELEMENTS(microvm_properties));
 }
 
 static const TypeInfo microvm_machine_info = {

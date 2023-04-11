@@ -1,6 +1,8 @@
 config MALTA
     bool
+    select GT64120
     select ISA_SUPERIO
+    select PIIX4
 
 config MIPSSIM
     bool
@@ -16,7 +18,7 @@ config JAZZ
     select I8254
     select I8257
     select PCSPK
-    select VGA_ISA_MM
+    select VGA_MMIO
     select G364FB
     select DP8393X
     select ESP

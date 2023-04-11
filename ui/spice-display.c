@@ -17,6 +17,7 @@
 
 #include "qemu/osdep.h"
 #include "ui/qemu-spice.h"
+#include "qemu/error-report.h"
 #include "qemu/timer.h"
 #include "qemu/lockable.h"
 #include "qemu/main-loop.h"
@@ -459,11 +460,11 @@ void qemu_spice_cursor_refresh_bh(void *opaque)
     if (ssd->cursor) {
         QEMUCursor *c = ssd->cursor;
         assert(ssd->dcl.con);
-        cursor_get(c);
+        cursor_ref(c);
         qemu_mutex_unlock(&ssd->lock);
         dpy_cursor_define(ssd->dcl.con, c);
         qemu_mutex_lock(&ssd->lock);
-        cursor_put(c);
+        cursor_unref(c);
     }
 
     if (ssd->mouse_x != -1 && ssd->mouse_y != -1) {
@@ -500,22 +501,22 @@ void qemu_spice_display_refresh(SimpleSpiceDisplay *ssd)
 
 /* spice display interface callbacks */
 
+#if SPICE_HAS_ATTACHED_WORKER
+static void interface_attached_worker(QXLInstance *sin)
+{
+    /* nothing to do */
+}
+#else
 static void interface_attach_worker(QXLInstance *sin, QXLWorker *qxl_worker)
 {
     /* nothing to do */
 }
+#endif
 
 static void interface_set_compression_level(QXLInstance *sin, int level)
 {
     /* nothing to do */
 }
-
-#if SPICE_NEEDS_SET_MM_TIME
-static void interface_set_mm_time(QXLInstance *sin, uint32_t mm_time)
-{
-    /* nothing to do */
-}
-#endif
 
 static void interface_get_init_info(QXLInstance *sin, QXLDevInitInfo *info)
 {
@@ -702,11 +703,12 @@ static const QXLInterface dpy_interface = {
     .base.major_version      = SPICE_INTERFACE_QXL_MAJOR,
     .base.minor_version      = SPICE_INTERFACE_QXL_MINOR,
 
+#if SPICE_HAS_ATTACHED_WORKER
+    .attached_worker         = interface_attached_worker,
+#else
     .attache_worker          = interface_attach_worker,
-    .set_compression_level   = interface_set_compression_level,
-#if SPICE_NEEDS_SET_MM_TIME
-    .set_mm_time             = interface_set_mm_time,
 #endif
+    .set_compression_level   = interface_set_compression_level,
     .get_init_info           = interface_get_init_info,
 
     /* the callbacks below are called from spice server thread context */
@@ -763,8 +765,8 @@ static void display_mouse_define(DisplayChangeListener *dcl,
     SimpleSpiceDisplay *ssd = container_of(dcl, SimpleSpiceDisplay, dcl);
 
     qemu_mutex_lock(&ssd->lock);
-    cursor_get(c);
-    cursor_put(ssd->cursor);
+    cursor_ref(c);
+    cursor_unref(ssd->cursor);
     ssd->cursor = c;
     ssd->hot_x = c->hot_x;
     ssd->hot_y = c->hot_y;
@@ -1114,8 +1116,15 @@ static const DisplayChangeListenerOps display_listener_gl_ops = {
     .dpy_gl_update           = qemu_spice_gl_update,
 };
 
+static bool
+qemu_spice_is_compatible_dcl(DisplayGLCtx *dgc,
+                             DisplayChangeListener *dcl)
+{
+    return dcl->ops == &display_listener_gl_ops;
+}
+
 static const DisplayGLCtxOps gl_ctx_ops = {
-    .compatible_dcl          = &display_listener_gl_ops,
+    .dpy_gl_ctx_is_compatible_dcl = qemu_spice_is_compatible_dcl,
     .dpy_gl_ctx_create       = qemu_spice_gl_create_context,
     .dpy_gl_ctx_destroy      = qemu_egl_destroy_context,
     .dpy_gl_ctx_make_current = qemu_egl_make_context_current,

@@ -14,7 +14,7 @@
 #include "channel.h"
 #include "tls.h"
 #include "migration.h"
-#include "qemu-file-channel.h"
+#include "qemu-file.h"
 #include "trace.h"
 #include "qapi/error.h"
 #include "io/channel-tls.h"
@@ -38,10 +38,7 @@ void migration_channel_process_incoming(QIOChannel *ioc)
     trace_migration_set_incoming_channel(
         ioc, object_get_typename(OBJECT(ioc)));
 
-    if (s->parameters.tls_creds &&
-        *s->parameters.tls_creds &&
-        !object_dynamic_cast(OBJECT(ioc),
-                             TYPE_QIO_CHANNEL_TLS)) {
+    if (migrate_channel_requires_tls_upgrade(ioc)) {
         migration_tls_channel_process_incoming(s, ioc, &local_err);
     } else {
         migration_ioc_register_yank(ioc);
@@ -71,10 +68,7 @@ void migration_channel_connect(MigrationState *s,
         ioc, object_get_typename(OBJECT(ioc)), hostname, error);
 
     if (!error) {
-        if (s->parameters.tls_creds &&
-            *s->parameters.tls_creds &&
-            !object_dynamic_cast(OBJECT(ioc),
-                                 TYPE_QIO_CHANNEL_TLS)) {
+        if (migrate_channel_requires_tls_upgrade(ioc)) {
             migration_tls_channel_connect(s, ioc, hostname, &error);
 
             if (!error) {
@@ -86,7 +80,7 @@ void migration_channel_connect(MigrationState *s,
                 return;
             }
         } else {
-            QEMUFile *f = qemu_fopen_channel_output(ioc);
+            QEMUFile *f = qemu_file_new_output(ioc);
 
             migration_ioc_register_yank(ioc);
 
@@ -96,6 +90,50 @@ void migration_channel_connect(MigrationState *s,
         }
     }
     migrate_fd_connect(s, error);
-    g_free(s->hostname);
     error_free(error);
+}
+
+
+/**
+ * @migration_channel_read_peek - Peek at migration channel, without
+ *     actually removing it from channel buffer.
+ *
+ * @ioc: the channel object
+ * @buf: the memory region to read data into
+ * @buflen: the number of bytes to read in @buf
+ * @errp: pointer to a NULL-initialized error object
+ *
+ * Returns 0 if successful, returns -1 and sets @errp if fails.
+ */
+int migration_channel_read_peek(QIOChannel *ioc,
+                                const char *buf,
+                                const size_t buflen,
+                                Error **errp)
+{
+    ssize_t len = 0;
+    struct iovec iov = { .iov_base = (char *)buf, .iov_len = buflen };
+
+    while (true) {
+        len = qio_channel_readv_full(ioc, &iov, 1, NULL, NULL,
+                                     QIO_CHANNEL_READ_FLAG_MSG_PEEK, errp);
+
+        if (len <= 0 && len != QIO_CHANNEL_ERR_BLOCK) {
+            error_setg(errp,
+                       "Failed to peek at channel");
+            return -1;
+        }
+
+        if (len == buflen) {
+            break;
+        }
+
+        /* 1ms sleep. */
+        if (qemu_in_coroutine()) {
+            qemu_co_sleep_ns(QEMU_CLOCK_REALTIME, 1000000);
+        } else {
+            g_usleep(1000);
+        }
+    }
+
+    return 0;
 }

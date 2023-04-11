@@ -26,7 +26,7 @@ from typing import (
     TextIO,
 )
 
-from qemu.qmp import SocketAddrT  # pylint: disable=import-error
+from qemu.qmp import SocketAddrT
 
 from .machine import QEMUMachine
 
@@ -42,7 +42,7 @@ class QEMUQtestProtocol:
     :raise socket.error: on socket connection errors
 
     .. note::
-       No conection is estabalished by __init__(), this is done
+       No connection is established by __init__(), this is done
        by the connect() or accept() methods.
     """
     def __init__(self, address: SocketAddrT,

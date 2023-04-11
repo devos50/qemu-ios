@@ -1,5 +1,6 @@
 #include "qemu/osdep.h"
 #include "ui/clipboard.h"
+#include "trace.h"
 
 static NotifierList clipboard_notifiers =
     NOTIFIER_LIST_INITIALIZER(clipboard_notifiers);
@@ -43,17 +44,23 @@ void qemu_clipboard_peer_release(QemuClipboardPeer *peer,
 
 bool qemu_clipboard_check_serial(QemuClipboardInfo *info, bool client)
 {
+    bool ok;
+
     if (!info->has_serial ||
         !cbinfo[info->selection] ||
         !cbinfo[info->selection]->has_serial) {
+        trace_clipboard_check_serial(-1, -1, true);
         return true;
     }
 
     if (client) {
-        return cbinfo[info->selection]->serial >= info->serial;
+        ok = info->serial >= cbinfo[info->selection]->serial;
     } else {
-        return cbinfo[info->selection]->serial > info->serial;
+        ok = info->serial > cbinfo[info->selection]->serial;
     }
+
+    trace_clipboard_check_serial(cbinfo[info->selection]->serial, info->serial, ok);
+    return ok;
 }
 
 void qemu_clipboard_update(QemuClipboardInfo *info)
@@ -62,14 +69,14 @@ void qemu_clipboard_update(QemuClipboardInfo *info)
         .type = QEMU_CLIPBOARD_UPDATE_INFO,
         .info = info,
     };
-    g_autoptr(QemuClipboardInfo) old = NULL;
-
     assert(info->selection < QEMU_CLIPBOARD_SELECTION__COUNT);
 
     notifier_list_notify(&clipboard_notifiers, &notify);
 
-    old = cbinfo[info->selection];
-    cbinfo[info->selection] = qemu_clipboard_info_ref(info);
+    if (cbinfo[info->selection] != info) {
+        qemu_clipboard_info_unref(cbinfo[info->selection]);
+        cbinfo[info->selection] = qemu_clipboard_info_ref(info);
+    }
 }
 
 QemuClipboardInfo *qemu_clipboard_info(QemuClipboardSelection selection)
@@ -132,7 +139,14 @@ void qemu_clipboard_request(QemuClipboardInfo *info,
 void qemu_clipboard_reset_serial(void)
 {
     QemuClipboardNotify notify = { .type = QEMU_CLIPBOARD_RESET_SERIAL };
+    int i;
 
+    for (i = 0; i < QEMU_CLIPBOARD_SELECTION__COUNT; i++) {
+        QemuClipboardInfo *info = qemu_clipboard_info(i);
+        if (info) {
+            info->serial = 0;
+        }
+    }
     notifier_list_notify(&clipboard_notifiers, &notify);
 }
 

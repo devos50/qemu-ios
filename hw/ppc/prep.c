@@ -50,8 +50,6 @@
 /* SMP is not enabled, for now */
 #define MAX_CPUS 1
 
-#define MAX_IDE_BUS 2
-
 #define CFG_ADDR 0xf0000510
 
 #define KERNEL_LOAD_ADDR 0x01000000
@@ -214,14 +212,13 @@ static int PPC_NVRAM_set_params (Nvram *nvram, uint16_t NVRAM_size,
 static int prep_set_cmos_checksum(DeviceState *dev, void *opaque)
 {
     uint16_t checksum = *(uint16_t *)opaque;
-    ISADevice *rtc;
 
     if (object_dynamic_cast(OBJECT(dev), TYPE_MC146818_RTC)) {
-        rtc = ISA_DEVICE(dev);
-        rtc_set_memory(rtc, 0x2e, checksum & 0xff);
-        rtc_set_memory(rtc, 0x3e, checksum & 0xff);
-        rtc_set_memory(rtc, 0x2f, checksum >> 8);
-        rtc_set_memory(rtc, 0x3f, checksum >> 8);
+        MC146818RtcState *rtc = MC146818_RTC(dev);
+        mc146818rtc_set_cmos_data(rtc, 0x2e, checksum & 0xff);
+        mc146818rtc_set_cmos_data(rtc, 0x3e, checksum & 0xff);
+        mc146818rtc_set_cmos_data(rtc, 0x2f, checksum >> 8);
+        mc146818rtc_set_cmos_data(rtc, 0x3f, checksum >> 8);
 
         object_property_add_alias(qdev_get_machine(), "rtc-time", OBJECT(rtc),
                                   "date");
@@ -255,13 +252,8 @@ static void ibm_40p_init(MachineState *machine)
         exit(1);
     }
 
-    if (env->flags & POWERPC_FLAG_RTC_CLK) {
-        /* POWER / PowerPC 601 RTC clock frequency is 7.8125 MHz */
-        cpu_ppc_tb_init(env, 7812500UL);
-    } else {
-        /* Set time-base frequency to 100 Mhz */
-        cpu_ppc_tb_init(env, 100UL * 1000UL * 1000UL);
-    }
+    /* Set time-base frequency to 100 Mhz */
+    cpu_ppc_tb_init(env, 100UL * 1000UL * 1000UL);
     qemu_register_reset(ppc_prep_reset, cpu);
 
     /* PCI host */
@@ -280,7 +272,7 @@ static void ibm_40p_init(MachineState *machine)
     /* PCI -> ISA bridge */
     i82378_dev = DEVICE(pci_create_simple(pci_bus, PCI_DEVFN(11, 0), "i82378"));
     qdev_connect_gpio_out(i82378_dev, 0,
-                          cpu->env.irq_inputs[PPC6xx_INPUT_INT]);
+                          qdev_get_gpio_in(DEVICE(cpu), PPC6xx_INPUT_INT));
     sysbus_connect_irq(pcihost, 0, qdev_get_gpio_in(i82378_dev, 15));
     isa_bus = ISA_BUS(qdev_get_child_bus(i82378_dev, "isa.0"));
 
@@ -386,7 +378,7 @@ static void ibm_40p_init(MachineState *machine)
         }
         boot_device = 'm';
     } else {
-        boot_device = machine->boot_order[0];
+        boot_device = machine->boot_config.order[0];
     }
 
     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)machine->smp.max_cpus);

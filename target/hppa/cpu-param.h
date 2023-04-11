@@ -6,7 +6,7 @@
  */
 
 #ifndef HPPA_CPU_PARAM_H
-#define HPPA_CPU_PARAM_H 1
+#define HPPA_CPU_PARAM_H
 
 #ifdef TARGET_HPPA64
 # define TARGET_LONG_BITS             64
@@ -29,6 +29,5 @@
 # define TARGET_PHYS_ADDR_SPACE_BITS  32
 #endif
 #define TARGET_PAGE_BITS 12
-#define NB_MMU_MODES 5
 
 #endif

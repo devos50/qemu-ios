@@ -62,15 +62,12 @@ static void get_int(const char *env, uint32_t *dst, bool *has_dst)
     }
 }
 
-static void get_str(const char *env, char **dst, bool *has_dst)
+static void get_str(const char *env, char **dst)
 {
     const char *val = getenv(env);
     if (val) {
-        if (*has_dst) {
-            g_free(*dst);
-        }
+        g_free(*dst);
         *dst = g_strdup(val);
-        *has_dst = true;
     }
 }
 
@@ -93,6 +90,7 @@ static void get_fmt(const char *env, AudioFormat *dst, bool *has_dst)
 }
 
 
+#if defined(CONFIG_AUDIO_ALSA) || defined(CONFIG_AUDIO_DSOUND)
 static void get_millis_to_usecs(const char *env, uint32_t *dst, bool *has_dst)
 {
     const char *val = getenv(env);
@@ -101,15 +99,20 @@ static void get_millis_to_usecs(const char *env, uint32_t *dst, bool *has_dst)
         *has_dst = true;
     }
 }
+#endif
 
+#if defined(CONFIG_AUDIO_ALSA) || defined(CONFIG_AUDIO_COREAUDIO) || \
+    defined(CONFIG_AUDIO_PA) || defined(CONFIG_AUDIO_SDL) || \
+    defined(CONFIG_AUDIO_DSOUND) || defined(CONFIG_AUDIO_OSS)
 static uint32_t frames_to_usecs(uint32_t frames,
                                 AudiodevPerDirectionOptions *pdo)
 {
     uint32_t freq = pdo->has_frequency ? pdo->frequency : 44100;
     return (frames * 1000000 + freq / 2) / freq;
 }
+#endif
 
-
+#ifdef CONFIG_AUDIO_COREAUDIO
 static void get_frames_to_usecs(const char *env, uint32_t *dst, bool *has_dst,
                                 AudiodevPerDirectionOptions *pdo)
 {
@@ -119,14 +122,19 @@ static void get_frames_to_usecs(const char *env, uint32_t *dst, bool *has_dst,
         *has_dst = true;
     }
 }
+#endif
 
+#if defined(CONFIG_AUDIO_PA) || defined(CONFIG_AUDIO_SDL) || \
+    defined(CONFIG_AUDIO_DSOUND) || defined(CONFIG_AUDIO_OSS)
 static uint32_t samples_to_usecs(uint32_t samples,
                                  AudiodevPerDirectionOptions *pdo)
 {
     uint32_t channels = pdo->has_channels ? pdo->channels : 2;
     return frames_to_usecs(samples / channels, pdo);
 }
+#endif
 
+#if defined(CONFIG_AUDIO_PA) || defined(CONFIG_AUDIO_SDL)
 static void get_samples_to_usecs(const char *env, uint32_t *dst, bool *has_dst,
                                  AudiodevPerDirectionOptions *pdo)
 {
@@ -136,7 +144,9 @@ static void get_samples_to_usecs(const char *env, uint32_t *dst, bool *has_dst,
         *has_dst = true;
     }
 }
+#endif
 
+#if defined(CONFIG_AUDIO_DSOUND) || defined(CONFIG_AUDIO_OSS)
 static uint32_t bytes_to_usecs(uint32_t bytes, AudiodevPerDirectionOptions *pdo)
 {
     AudioFormat fmt = pdo->has_format ? pdo->format : AUDIO_FORMAT_S16;
@@ -153,8 +163,11 @@ static void get_bytes_to_usecs(const char *env, uint32_t *dst, bool *has_dst,
         *has_dst = true;
     }
 }
+#endif
 
 /* backend specific functions */
+
+#ifdef CONFIG_AUDIO_ALSA
 /* ALSA */
 static void handle_alsa_per_direction(
     AudiodevAlsaPerDirectionOptions *apdo, const char *prefix)
@@ -169,7 +182,7 @@ static void handle_alsa_per_direction(
     get_bool(buf, &apdo->try_poll, &apdo->has_try_poll);
 
     strcpy(buf + len, "DEV");
-    get_str(buf, &apdo->dev, &apdo->has_dev);
+    get_str(buf, &apdo->dev);
 
     strcpy(buf + len, "SIZE_IN_USEC");
     get_bool(buf, &size_in_usecs, &dummy);
@@ -200,7 +213,9 @@ static void handle_alsa(Audiodev *dev)
     get_millis_to_usecs("QEMU_ALSA_THRESHOLD",
                         &aopt->threshold, &aopt->has_threshold);
 }
+#endif
 
+#ifdef CONFIG_AUDIO_COREAUDIO
 /* coreaudio */
 static void handle_coreaudio(Audiodev *dev)
 {
@@ -213,7 +228,9 @@ static void handle_coreaudio(Audiodev *dev)
             &dev->u.coreaudio.out->buffer_count,
             &dev->u.coreaudio.out->has_buffer_count);
 }
+#endif
 
+#ifdef CONFIG_AUDIO_DSOUND
 /* dsound */
 static void handle_dsound(Audiodev *dev)
 {
@@ -228,14 +245,16 @@ static void handle_dsound(Audiodev *dev)
                        &dev->u.dsound.in->has_buffer_length,
                        dev->u.dsound.in);
 }
+#endif
 
+#ifdef CONFIG_AUDIO_OSS
 /* OSS */
 static void handle_oss_per_direction(
     AudiodevOssPerDirectionOptions *opdo, const char *try_poll_env,
     const char *dev_env)
 {
     get_bool(try_poll_env, &opdo->try_poll, &opdo->has_try_poll);
-    get_str(dev_env, &opdo->dev, &opdo->has_dev);
+    get_str(dev_env, &opdo->dev);
 
     get_bytes_to_usecs("QEMU_OSS_FRAGSIZE",
                        &opdo->buffer_length, &opdo->has_buffer_length,
@@ -256,12 +275,14 @@ static void handle_oss(Audiodev *dev)
     get_bool("QEMU_OSS_EXCLUSIVE", &oopt->exclusive, &oopt->has_exclusive);
     get_int("QEMU_OSS_POLICY", &oopt->dsp_policy, &oopt->has_dsp_policy);
 }
+#endif
 
+#ifdef CONFIG_AUDIO_PA
 /* pulseaudio */
 static void handle_pa_per_direction(
     AudiodevPaPerDirectionOptions *ppdo, const char *env)
 {
-    get_str(env, &ppdo->name, &ppdo->has_name);
+    get_str(env, &ppdo->name);
 }
 
 static void handle_pa(Audiodev *dev)
@@ -278,9 +299,11 @@ static void handle_pa(Audiodev *dev)
         &dev->u.pa.out->has_buffer_length,
         qapi_AudiodevPaPerDirectionOptions_base(dev->u.pa.out));
 
-    get_str("QEMU_PA_SERVER", &dev->u.pa.server, &dev->u.pa.has_server);
+    get_str("QEMU_PA_SERVER", &dev->u.pa.server);
 }
+#endif
 
+#ifdef CONFIG_AUDIO_SDL
 /* SDL */
 static void handle_sdl(Audiodev *dev)
 {
@@ -289,6 +312,7 @@ static void handle_sdl(Audiodev *dev)
         &dev->u.sdl.out->has_buffer_length,
         qapi_AudiodevSdlPerDirectionOptions_base(dev->u.sdl.out));
 }
+#endif
 
 /* wav */
 static void handle_wav(Audiodev *dev)
@@ -299,7 +323,7 @@ static void handle_wav(Audiodev *dev)
             &dev->u.wav.out->has_format);
     get_int("QEMU_WAV_DAC_FIXED_CHANNELS",
             &dev->u.wav.out->channels, &dev->u.wav.out->has_channels);
-    get_str("QEMU_WAV_PATH", &dev->u.wav.path, &dev->u.wav.has_path);
+    get_str("QEMU_WAV_PATH", &dev->u.wav.path);
 }
 
 /* general */
@@ -328,8 +352,8 @@ static void handle_per_direction(
 
 static AudiodevListEntry *legacy_opt(const char *drvname)
 {
-    AudiodevListEntry *e = g_malloc0(sizeof(AudiodevListEntry));
-    e->dev = g_malloc0(sizeof(Audiodev));
+    AudiodevListEntry *e = g_new0(AudiodevListEntry, 1);
+    e->dev = g_new0(Audiodev, 1);
     e->dev->id = g_strdup(drvname);
     e->dev->driver = qapi_enum_parse(
         &AudiodevDriver_lookup, drvname, -1, &error_abort);
@@ -348,29 +372,41 @@ static AudiodevListEntry *legacy_opt(const char *drvname)
     }
 
     switch (e->dev->driver) {
+#ifdef CONFIG_AUDIO_ALSA
     case AUDIODEV_DRIVER_ALSA:
         handle_alsa(e->dev);
         break;
+#endif
 
+#ifdef CONFIG_AUDIO_COREAUDIO
     case AUDIODEV_DRIVER_COREAUDIO:
         handle_coreaudio(e->dev);
         break;
+#endif
 
+#ifdef CONFIG_AUDIO_DSOUND
     case AUDIODEV_DRIVER_DSOUND:
         handle_dsound(e->dev);
         break;
+#endif
 
+#ifdef CONFIG_AUDIO_OSS
     case AUDIODEV_DRIVER_OSS:
         handle_oss(e->dev);
         break;
+#endif
 
+#ifdef CONFIG_AUDIO_PA
     case AUDIODEV_DRIVER_PA:
         handle_pa(e->dev);
         break;
+#endif
 
+#ifdef CONFIG_AUDIO_SDL
     case AUDIODEV_DRIVER_SDL:
         handle_sdl(e->dev);
         break;
+#endif
 
     case AUDIODEV_DRIVER_WAV:
         handle_wav(e->dev);
@@ -508,7 +544,7 @@ static void lv_free(Visitor *v)
 
 static Visitor *legacy_visitor_new(void)
 {
-    LegacyPrintVisitor *lv = g_malloc0(sizeof(LegacyPrintVisitor));
+    LegacyPrintVisitor *lv = g_new0(LegacyPrintVisitor, 1);
 
     lv->visitor.start_struct = lv_start_struct;
     lv->visitor.end_struct = lv_end_struct;

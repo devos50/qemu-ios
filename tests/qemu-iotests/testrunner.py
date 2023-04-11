@@ -24,11 +24,10 @@ import difflib
 import subprocess
 import contextlib
 import json
-import termios
+import shutil
 import sys
 from multiprocessing import Pool
-from contextlib import contextmanager
-from typing import List, Optional, Iterator, Any, Sequence, Dict, \
+from typing import List, Optional, Any, Sequence, Dict, \
         ContextManager
 
 from testenv import TestEnv
@@ -53,22 +52,6 @@ def file_diff(file1: str, file2: str) -> List[str]:
         res = [line.rstrip()
                for line in difflib.unified_diff(seq1, seq2, file1, file2)]
         return res
-
-
-# We want to save current tty settings during test run,
-# since an aborting qemu call may leave things screwed up.
-@contextmanager
-def savetty() -> Iterator[None]:
-    isterm = sys.stdin.isatty()
-    if isterm:
-        fd = sys.stdin.fileno()
-        attr = termios.tcgetattr(fd)
-
-    try:
-        yield
-    finally:
-        if isterm:
-            termios.tcsetattr(fd, termios.TCSADRAIN, attr)
 
 
 class LastElapsedTime(ContextManager['LastElapsedTime']):
@@ -152,10 +135,10 @@ class TestRunner(ContextManager['TestRunner']):
 
         return results
 
-    def __init__(self, env: TestEnv, makecheck: bool = False,
+    def __init__(self, env: TestEnv, tap: bool = False,
                  color: str = 'auto') -> None:
         self.env = env
-        self.makecheck = makecheck
+        self.tap = tap
         self.last_elapsed = LastElapsedTime('.last-elapsed-cache', env)
 
         assert color in ('auto', 'on', 'off')
@@ -168,18 +151,18 @@ class TestRunner(ContextManager['TestRunner']):
         self._stack = contextlib.ExitStack()
         self._stack.enter_context(self.env)
         self._stack.enter_context(self.last_elapsed)
-        self._stack.enter_context(savetty())
         return self
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         self._stack.close()
 
-    def test_print_one_line(self, test: str, starttime: str,
+    def test_print_one_line(self, test: str,
+                            test_field_width: int,
+                            starttime: str,
                             endtime: Optional[str] = None, status: str = '...',
                             lasttime: Optional[float] = None,
                             thistime: Optional[float] = None,
                             description: str = '',
-                            test_field_width: Optional[int] = None,
                             end: str = '\n') -> None:
         """ Print short test info before/after test run """
         test = os.path.basename(test)
@@ -187,13 +170,13 @@ class TestRunner(ContextManager['TestRunner']):
         if test_field_width is None:
             test_field_width = 8
 
-        if self.makecheck and status != '...':
-            if status and status != 'pass':
-                status = f' [{status}]'
-            else:
-                status = ''
-
-            print(f'  TEST   iotest-{self.env.imgfmt}: {test}{status}')
+        if self.tap:
+            if status == 'pass':
+                print(f'ok {self.env.imgfmt} {test}')
+            elif status == 'fail':
+                print(f'not ok {self.env.imgfmt} {test}')
+            elif status == 'not run':
+                print(f'ok {self.env.imgfmt} {test} # SKIP')
             return
 
         if lasttime:
@@ -245,22 +228,17 @@ class TestRunner(ContextManager['TestRunner']):
 
         return f'{test}.out'
 
-    def do_run_test(self, test: str, mp: bool) -> TestResult:
+    def do_run_test(self, test: str) -> TestResult:
         """
         Run one test
 
         :param test: test file path
-        :param mp: if true, we are in a multiprocessing environment, use
-                   personal subdirectories for test run
 
         Note: this method may be called from subprocess, so it does not
         change ``self`` object in any way!
         """
 
         f_test = Path(test)
-        f_bad = Path(f_test.name + '.out.bad')
-        f_notrun = Path(f_test.name + '.notrun')
-        f_casenotrun = Path(f_test.name + '.casenotrun')
         f_reference = Path(self.find_reference(test))
 
         if not f_test.exists():
@@ -275,21 +253,29 @@ class TestRunner(ContextManager['TestRunner']):
                               description='No qualified output '
                                           f'(expected {f_reference})')
 
-        for p in (f_bad, f_notrun, f_casenotrun):
-            silent_unlink(p)
-
         args = [str(f_test.resolve())]
         env = self.env.prepare_subprocess(args)
-        if mp:
-            # Split test directories, so that tests running in parallel don't
-            # break each other.
-            for d in ['TEST_DIR', 'SOCK_DIR']:
-                env[d] = os.path.join(env[d], f_test.name)
-                Path(env[d]).mkdir(parents=True, exist_ok=True)
+
+        # Split test directories, so that tests running in parallel don't
+        # break each other.
+        for d in ['TEST_DIR', 'SOCK_DIR']:
+            env[d] = os.path.join(
+                env[d],
+                f"{self.env.imgfmt}-{self.env.imgproto}-{f_test.name}")
+            Path(env[d]).mkdir(parents=True, exist_ok=True)
+
+        test_dir = env['TEST_DIR']
+        f_bad = Path(test_dir, f_test.name + '.out.bad')
+        f_notrun = Path(test_dir, f_test.name + '.notrun')
+        f_casenotrun = Path(test_dir, f_test.name + '.casenotrun')
+
+        for p in (f_notrun, f_casenotrun):
+            silent_unlink(p)
 
         t0 = time.time()
         with f_bad.open('w', encoding="utf-8") as f:
             with subprocess.Popen(args, cwd=str(f_test.parent), env=env,
+                                  stdin=subprocess.DEVNULL,
                                   stdout=f, stderr=subprocess.STDOUT) as proc:
                 try:
                     proc.wait()
@@ -319,6 +305,11 @@ class TestRunner(ContextManager['TestRunner']):
 
         diff = file_diff(str(f_reference), str(f_bad))
         if diff:
+            if os.environ.get("QEMU_IOTESTS_REGEN", None) is not None:
+                shutil.copyfile(str(f_bad), str(f_reference))
+                print("########################################")
+                print("#####    REFERENCE FILE UPDATED    #####")
+                print("########################################")
             return TestResult(status='fail', elapsed=elapsed,
                               description=f'output mismatch (see {f_bad})',
                               diff=diff, casenotrun=casenotrun)
@@ -328,7 +319,7 @@ class TestRunner(ContextManager['TestRunner']):
                               casenotrun=casenotrun)
 
     def run_test(self, test: str,
-                 test_field_width: Optional[int] = None,
+                 test_field_width: int,
                  mp: bool = False) -> TestResult:
         """
         Run one test and print short status
@@ -345,26 +336,34 @@ class TestRunner(ContextManager['TestRunner']):
         last_el = self.last_elapsed.get(test)
         start = datetime.datetime.now().strftime('%H:%M:%S')
 
-        if not self.makecheck:
+        if not self.tap:
             self.test_print_one_line(test=test,
+                                     test_field_width=test_field_width,
                                      status = 'started' if mp else '...',
                                      starttime=start,
                                      lasttime=last_el,
-                                     end = '\n' if mp else '\r',
-                                     test_field_width=test_field_width)
+                                     end = '\n' if mp else '\r')
+        else:
+            testname = os.path.basename(test)
+            print(f'# running {self.env.imgfmt} {testname}')
 
-        res = self.do_run_test(test, mp)
+        res = self.do_run_test(test)
 
         end = datetime.datetime.now().strftime('%H:%M:%S')
-        self.test_print_one_line(test=test, status=res.status,
+        self.test_print_one_line(test=test,
+                                 test_field_width=test_field_width,
+                                 status=res.status,
                                  starttime=start, endtime=end,
                                  lasttime=last_el, thistime=res.elapsed,
-                                 description=res.description,
-                                 test_field_width=test_field_width)
+                                 description=res.description)
 
         if res.casenotrun:
-            print(res.casenotrun)
+            if self.tap:
+                print('#' + res.casenotrun.replace('\n', '\n#'))
+            else:
+                print(res.casenotrun)
 
+        sys.stdout.flush()
         return res
 
     def run_tests(self, tests: List[str], jobs: int = 1) -> bool:
@@ -373,7 +372,11 @@ class TestRunner(ContextManager['TestRunner']):
         notrun = []
         casenotrun = []
 
-        if not self.makecheck:
+        if self.tap:
+            print('TAP version 13')
+            self.env.print_env('# ')
+            print('1..%d' % len(tests))
+        else:
             self.env.print_env()
 
         test_field_width = max(len(os.path.basename(t)) for t in tests) + 2
@@ -399,10 +402,11 @@ class TestRunner(ContextManager['TestRunner']):
 
             if res.status == 'fail':
                 failed.append(name)
-                if self.makecheck:
-                    self.env.print_env()
                 if res.diff:
-                    print('\n'.join(res.diff))
+                    if self.tap:
+                        print('\n'.join(res.diff), file=sys.stderr)
+                    else:
+                        print('\n'.join(res.diff))
             elif res.status == 'not run':
                 notrun.append(name)
             elif res.status == 'pass':
@@ -413,16 +417,16 @@ class TestRunner(ContextManager['TestRunner']):
             if res.interrupted:
                 break
 
-        if notrun:
-            print('Not run:', ' '.join(notrun))
+        if not self.tap:
+            if notrun:
+                print('Not run:', ' '.join(notrun))
 
-        if casenotrun:
-            print('Some cases not run in:', ' '.join(casenotrun))
+            if casenotrun:
+                print('Some cases not run in:', ' '.join(casenotrun))
 
-        if failed:
-            print('Failures:', ' '.join(failed))
-            print(f'Failed {len(failed)} of {n_run} iotests')
-            return False
-        else:
-            print(f'Passed all {n_run} iotests')
-            return True
+            if failed:
+                print('Failures:', ' '.join(failed))
+                print(f'Failed {len(failed)} of {n_run} iotests')
+            else:
+                print(f'Passed all {n_run} iotests')
+        return not failed

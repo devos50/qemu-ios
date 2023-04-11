@@ -18,22 +18,20 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
-#ifndef QEMU_AVR_QOM_H
-#define QEMU_AVR_QOM_H
+#ifndef TARGET_AVR_CPU_QOM_H
+#define TARGET_AVR_CPU_QOM_H
 
 #include "hw/core/cpu.h"
 #include "qom/object.h"
 
 #define TYPE_AVR_CPU "avr-cpu"
 
-OBJECT_DECLARE_TYPE(AVRCPU, AVRCPUClass,
-                    AVR_CPU)
+OBJECT_DECLARE_CPU_TYPE(AVRCPU, AVRCPUClass, AVR_CPU)
 
 /**
  *  AVRCPUClass:
  *  @parent_realize: The parent class' realize handler.
- *  @parent_reset: The parent class' reset handler.
- *  @vr: Version Register value.
+ *  @parent_phases: The parent class' reset phase handlers.
  *
  *  A AVR CPU model.
  */
@@ -42,8 +40,8 @@ struct AVRCPUClass {
     CPUClass parent_class;
     /*< public >*/
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
 };
 
 
-#endif /* !defined (QEMU_AVR_CPU_QOM_H) */
+#endif /* TARGET_AVR_CPU_QOM_H */

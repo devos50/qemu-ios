@@ -116,9 +116,9 @@ void cpu_reset(CPUState *cpu)
     trace_guest_cpu_reset(cpu);
 }
 
-static void cpu_common_reset(DeviceState *dev)
+static void cpu_common_reset_hold(Object *obj)
 {
-    CPUState *cpu = CPU(dev);
+    CPUState *cpu = CPU(obj);
     CPUClass *cc = CPU_GET_CLASS(cpu);
 
     if (qemu_loglevel_mask(CPU_LOG_RESET)) {
@@ -137,8 +137,7 @@ static void cpu_common_reset(DeviceState *dev)
     cpu->cflags_next_tb = -1;
 
     if (tcg_enabled()) {
-        cpu_tb_jmp_cache_clear(cpu);
-
+        tcg_flush_jmp_cache(cpu);
         tcg_flush_softmmu_tlb(cpu);
     }
 }
@@ -236,8 +235,10 @@ static void cpu_common_initfn(Object *obj)
     /* the default value is changed by qemu_init_vcpu() for softmmu */
     cpu->nr_cores = 1;
     cpu->nr_threads = 1;
+    cpu->cflags_next_tb = -1;
 
     qemu_mutex_init(&cpu->work_mutex);
+    qemu_lockcnt_init(&cpu->in_ioctl_lock);
     QSIMPLEQ_INIT(&cpu->work_list);
     QTAILQ_INIT(&cpu->breakpoints);
     QTAILQ_INIT(&cpu->watchpoints);
@@ -249,6 +250,7 @@ static void cpu_common_finalize(Object *obj)
 {
     CPUState *cpu = CPU(obj);
 
+    qemu_lockcnt_destroy(&cpu->in_ioctl_lock);
     qemu_mutex_destroy(&cpu->work_mutex);
 }
 
@@ -260,6 +262,7 @@ static int64_t cpu_common_get_arch_id(CPUState *cpu)
 static void cpu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
     CPUClass *k = CPU_CLASS(klass);
 
     k->parse_features = cpu_common_parse_features;
@@ -270,7 +273,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_CPU, dc->categories);
     dc->realize = cpu_common_realizefn;
     dc->unrealize = cpu_common_unrealizefn;
-    dc->reset = cpu_common_reset;
+    rc->phases.hold = cpu_common_reset_hold;
     cpu_class_init_props(dc);
     /*
      * Reason: CPUs still need special care by board code: wiring up

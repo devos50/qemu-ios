@@ -15,8 +15,8 @@
 #ifndef BLOCK_COPY_H
 #define BLOCK_COPY_H
 
-#include "block/block.h"
-#include "qemu/co-shared-resource.h"
+#include "block/block-common.h"
+#include "qemu/progress_meter.h"
 
 /* All APIs are thread-safe */
 
@@ -25,6 +25,7 @@ typedef struct BlockCopyState BlockCopyState;
 typedef struct BlockCopyCallState BlockCopyCallState;
 
 BlockCopyState *block_copy_state_new(BdrvChild *source, BdrvChild *target,
+                                     const BdrvDirtyBitmap *bitmap,
                                      Error **errp);
 
 /* Function should be called prior any actual copy request */
@@ -34,11 +35,15 @@ void block_copy_set_progress_meter(BlockCopyState *s, ProgressMeter *pm);
 
 void block_copy_state_free(BlockCopyState *s);
 
-int64_t block_copy_reset_unallocated(BlockCopyState *s,
-                                     int64_t offset, int64_t *count);
+void block_copy_reset(BlockCopyState *s, int64_t offset, int64_t bytes);
+
+int64_t coroutine_fn GRAPH_RDLOCK
+block_copy_reset_unallocated(BlockCopyState *s, int64_t offset, int64_t *count);
 
 int coroutine_fn block_copy(BlockCopyState *s, int64_t offset, int64_t bytes,
-                            bool ignore_ratelimit);
+                            bool ignore_ratelimit, uint64_t timeout_ns,
+                            BlockCopyAsyncCallbackFunc cb,
+                            void *cb_opaque);
 
 /*
  * Run block-copy in a coroutine, create corresponding BlockCopyCallState

@@ -10,6 +10,7 @@
 #ifndef PMU_H
 #define PMU_H
 
+#include "hw/input/adb.h"
 #include "hw/misc/mos6522.h"
 #include "hw/misc/macio/gpio.h"
 #include "qom/object.h"
@@ -193,8 +194,6 @@ struct PMUState {
 
     MemoryRegion mem;
     uint64_t frequency;
-    qemu_irq via_irq;
-    bool via_irq_state;
 
     /* PMU state */
     MOS6522PMUState mos6522_pmu;

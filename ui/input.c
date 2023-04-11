@@ -2,8 +2,6 @@
 #include "sysemu/sysemu.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-ui.h"
-#include "qapi/qmp/qdict.h"
-#include "qemu/error-report.h"
 #include "trace.h"
 #include "ui/input.h"
 #include "ui/console.h"
@@ -124,7 +122,7 @@ qemu_input_find_handler(uint32_t mask, QemuConsole *con)
     return NULL;
 }
 
-void qmp_input_send_event(bool has_device, const char *device,
+void qmp_input_send_event(const char *device,
                           bool has_head, int64_t head,
                           InputEventList *events, Error **errp)
 {
@@ -133,7 +131,7 @@ void qmp_input_send_event(bool has_device, const char *device,
     Error *err = NULL;
 
     con = NULL;
-    if (has_device) {
+    if (device) {
         if (!has_head) {
             head = 0;
         }
@@ -364,7 +362,7 @@ void qemu_input_event_send(QemuConsole *src, InputEvent *evt)
      * when 'alt+print' was pressed. This flaw is now fixed and the
      * 'sysrq' key serves no further purpose. We normalize it to
      * 'print', so that downstream receivers of the event don't
-     * neeed to deal with this mistake
+     * need to deal with this mistake
      */
     if (evt->type == INPUT_EVENT_KIND_KEY &&
         evt->u.key.data->key->u.qcode.data == Q_KEY_CODE_SYSRQ) {
@@ -594,29 +592,29 @@ MouseInfoList *qmp_query_mice(Error **errp)
     return mice_list;
 }
 
-void hmp_mouse_set(Monitor *mon, const QDict *qdict)
+bool qemu_mouse_set(int index, Error **errp)
 {
     QemuInputHandlerState *s;
-    int index = qdict_get_int(qdict, "index");
-    int found = 0;
 
     QTAILQ_FOREACH(s, &handlers, node) {
-        if (s->id != index) {
-            continue;
+        if (s->id == index) {
+            break;
         }
-        if (!(s->handler->mask & (INPUT_EVENT_MASK_REL |
-                                  INPUT_EVENT_MASK_ABS))) {
-            error_report("Input device '%s' is not a mouse", s->handler->name);
-            return;
-        }
-        found = 1;
-        qemu_input_handler_activate(s);
-        break;
     }
 
-    if (!found) {
-        error_report("Mouse at index '%d' not found", index);
+    if (!s) {
+        error_setg(errp, "Mouse at index '%d' not found", index);
+        return false;
     }
 
+    if (!(s->handler->mask & (INPUT_EVENT_MASK_REL |
+                              INPUT_EVENT_MASK_ABS))) {
+        error_setg(errp, "Input device '%s' is not a mouse",
+                   s->handler->name);
+        return false;
+    }
+
+    qemu_input_handler_activate(s);
     qemu_input_check_mode_change();
+    return true;
 }

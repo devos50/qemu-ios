@@ -18,6 +18,8 @@
 #ifndef EXEC_HELPER_HEAD_H
 #define EXEC_HELPER_HEAD_H
 
+#include "fpu/softfloat-types.h"
+
 #define HELPER(name) glue(helper_, name)
 
 /* Some types that make sense in C, but not for TCG.  */
@@ -26,6 +28,7 @@
 #define dh_alias_int i32
 #define dh_alias_i64 i64
 #define dh_alias_s64 i64
+#define dh_alias_i128 i128
 #define dh_alias_f16 i32
 #define dh_alias_f32 i32
 #define dh_alias_f64 i64
@@ -40,26 +43,30 @@
 #define dh_ctype_int int
 #define dh_ctype_i64 uint64_t
 #define dh_ctype_s64 int64_t
+#define dh_ctype_i128 Int128
 #define dh_ctype_f16 uint32_t
 #define dh_ctype_f32 float32
 #define dh_ctype_f64 float64
 #define dh_ctype_ptr void *
 #define dh_ctype_cptr const void *
 #define dh_ctype_void void
-#define dh_ctype_noreturn void QEMU_NORETURN
+#define dh_ctype_noreturn G_NORETURN void
 #define dh_ctype(t) dh_ctype_##t
 
 #ifdef NEED_CPU_H
 # ifdef TARGET_LONG_BITS
 #  if TARGET_LONG_BITS == 32
 #   define dh_alias_tl i32
+#   define dh_typecode_tl dh_typecode_i32
 #  else
 #   define dh_alias_tl i64
+#   define dh_typecode_tl dh_typecode_i64
 #  endif
 # endif
-# define dh_alias_env ptr
 # define dh_ctype_tl target_ulong
+# define dh_alias_env ptr
 # define dh_ctype_env CPUArchState *
+# define dh_typecode_env dh_typecode_ptr
 #endif
 
 /* We can't use glue() here because it falls foul of C preprocessor
@@ -68,6 +75,7 @@
 #define dh_retvar_decl0_noreturn void
 #define dh_retvar_decl0_i32 TCGv_i32 retval
 #define dh_retvar_decl0_i64 TCGv_i64 retval
+#define dh_retval_decl0_i128 TCGv_i128 retval
 #define dh_retvar_decl0_ptr TCGv_ptr retval
 #define dh_retvar_decl0(t) glue(dh_retvar_decl0_, dh_alias(t))
 
@@ -75,6 +83,7 @@
 #define dh_retvar_decl_noreturn
 #define dh_retvar_decl_i32 TCGv_i32 retval,
 #define dh_retvar_decl_i64 TCGv_i64 retval,
+#define dh_retvar_decl_i128 TCGv_i128 retval,
 #define dh_retvar_decl_ptr TCGv_ptr retval,
 #define dh_retvar_decl(t) glue(dh_retvar_decl_, dh_alias(t))
 
@@ -82,6 +91,7 @@
 #define dh_retvar_noreturn NULL
 #define dh_retvar_i32 tcgv_i32_temp(retval)
 #define dh_retvar_i64 tcgv_i64_temp(retval)
+#define dh_retvar_i128 tcgv_i128_temp(retval)
 #define dh_retvar_ptr tcgv_ptr_temp(retval)
 #define dh_retvar(t) glue(dh_retvar_, dh_alias(t))
 
@@ -92,18 +102,18 @@
 #define dh_typecode_i64 4
 #define dh_typecode_s64 5
 #define dh_typecode_ptr 6
-#define dh_typecode(t) glue(dh_typecode_, dh_alias(t))
+#define dh_typecode_i128 7
+#define dh_typecode_int dh_typecode_s32
+#define dh_typecode_f16 dh_typecode_i32
+#define dh_typecode_f32 dh_typecode_i32
+#define dh_typecode_f64 dh_typecode_i64
+#define dh_typecode_cptr dh_typecode_ptr
+#define dh_typecode(t) dh_typecode_##t
 
 #define dh_callflag_i32  0
-#define dh_callflag_s32  0
-#define dh_callflag_int  0
 #define dh_callflag_i64  0
-#define dh_callflag_s64  0
-#define dh_callflag_f16  0
-#define dh_callflag_f32  0
-#define dh_callflag_f64  0
+#define dh_callflag_i128 0
 #define dh_callflag_ptr  0
-#define dh_callflag_cptr dh_callflag_ptr
 #define dh_callflag_void 0
 #define dh_callflag_noreturn TCG_CALL_NO_RETURN
 #define dh_callflag(t) glue(dh_callflag_, dh_alias(t))
@@ -132,6 +142,6 @@
 #define DEF_HELPER_7(name, ret, t1, t2, t3, t4, t5, t6, t7) \
     DEF_HELPER_FLAGS_7(name, 0, ret, t1, t2, t3, t4, t5, t6, t7)
 
-/* MAX_OPC_PARAM_IARGS must be set to n if last entry is DEF_HELPER_FLAGS_n. */
+/* MAX_CALL_IARGS must be set to n if last entry is DEF_HELPER_FLAGS_n. */
 
 #endif /* EXEC_HELPER_HEAD_H */

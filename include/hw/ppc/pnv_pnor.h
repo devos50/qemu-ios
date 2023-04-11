@@ -6,9 +6,11 @@
  * This code is licensed under the GPL version 2 or later. See the
  * COPYING file in the top-level directory.
  */
-#ifndef _PPC_PNV_PNOR_H
-#define _PPC_PNV_PNOR_H
-#include "qom/object.h"
+
+#ifndef PPC_PNV_PNOR_H
+#define PPC_PNV_PNOR_H
+
+#include "hw/sysbus.h"
 
 /*
  * PNOR offset on the LPC FW address space
@@ -28,4 +30,4 @@ struct PnvPnor {
     MemoryRegion   mmio;
 };
 
-#endif /* _PPC_PNV_PNOR_H */
+#endif /* PPC_PNV_PNOR_H */

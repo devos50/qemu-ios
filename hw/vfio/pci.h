@@ -13,12 +13,13 @@
 #define HW_VFIO_VFIO_PCI_H
 
 #include "exec/memory.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
 #include "hw/vfio/vfio-common.h"
 #include "qemu/event_notifier.h"
 #include "qemu/queue.h"
 #include "qemu/timer.h"
 #include "qom/object.h"
+#include "sysemu/kvm.h"
 
 #define PCI_ANY_ID (~0)
 
@@ -171,6 +172,7 @@ struct VFIOPCIDevice {
     bool no_kvm_ioeventfd;
     bool no_vfio_ioeventfd;
     bool enable_ramfb;
+    bool defer_kvm_irq_routing;
     VFIODisplay *dpy;
     Notifier irqchip_change_notifier;
 };

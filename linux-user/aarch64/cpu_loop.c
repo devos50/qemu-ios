@@ -18,7 +18,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu.h"
 #include "user-internals.h"
 #include "cpu_loop-common.h"
@@ -90,6 +89,8 @@ void cpu_loop(CPUARMState *env)
 
         switch (trapnr) {
         case EXCP_SWI:
+            /* On syscall, PSTATE.ZA is preserved, PSTATE.SM is cleared. */
+            aarch64_set_svcr(env, 0, R_SVCR_SM_MASK);
             ret = do_syscall(env,
                              env->xregs[8],
                              env->xregs[0],
@@ -155,7 +156,7 @@ void cpu_loop(CPUARMState *env)
             force_sig_fault(TARGET_SIGTRAP, TARGET_TRAP_BRKPT, env->pc);
             break;
         case EXCP_SEMIHOST:
-            env->xregs[0] = do_common_semihosting(cs);
+            do_common_semihosting(cs);
             env->pc += 4;
             break;
         case EXCP_YIELD:
@@ -202,7 +203,7 @@ void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
     }
     env->pc = regs->pc;
     env->xregs[31] = regs->sp;
-#ifdef TARGET_WORDS_BIGENDIAN
+#if TARGET_BIG_ENDIAN
     env->cp15.sctlr_el[1] |= SCTLR_E0E;
     for (i = 1; i < 4; ++i) {
         env->cp15.sctlr_el[i] |= SCTLR_EE;

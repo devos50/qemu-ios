@@ -29,14 +29,13 @@
 #define TYPE_SPARC_CPU "sparc-cpu"
 #endif
 
-OBJECT_DECLARE_TYPE(SPARCCPU, SPARCCPUClass,
-                    SPARC_CPU)
+OBJECT_DECLARE_CPU_TYPE(SPARCCPU, SPARCCPUClass, SPARC_CPU)
 
 typedef struct sparc_def_t sparc_def_t;
 /**
  * SPARCCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * A SPARC CPU model.
  */
@@ -46,7 +45,7 @@ struct SPARCCPUClass {
     /*< public >*/
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
     sparc_def_t *cpu_def;
 };
 

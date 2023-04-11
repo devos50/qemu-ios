@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  *
  * Copyright (c) 2013 Mike D. Day, IBM Corporation.
  */
@@ -152,7 +151,7 @@ static QSLIST_HEAD(, list_element) Q_list_head;
 
 #define TEST_NAME "qslist"
 #define TEST_LIST_REMOVE_RCU(el, f)                              \
-	 QSLIST_REMOVE_RCU(&Q_list_head, el, list_element, f)
+         QSLIST_REMOVE_RCU(&Q_list_head, el, list_element, f)
 
 #define TEST_LIST_INSERT_AFTER_RCU(list_el, el, f)               \
          QSLIST_INSERT_AFTER_RCU(&Q_list_head, list_el, el, f)
@@ -171,7 +170,7 @@ static void *rcu_q_reader(void *arg)
 
     rcu_register_thread();
 
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
     qatomic_inc(&nthreadsrunning);
     while (qatomic_read(&goflag) == GOFLAG_INIT) {
         g_usleep(1000);
@@ -206,7 +205,7 @@ static void *rcu_q_updater(void *arg)
     long long n_removed_local = 0;
     struct list_element *el, *prev_el;
 
-    *(struct rcu_reader_data **)arg = &rcu_reader;
+    *(struct rcu_reader_data **)arg = get_ptr_rcu_reader();
     qatomic_inc(&nthreadsrunning);
     while (qatomic_read(&goflag) == GOFLAG_INIT) {
         g_usleep(1000);

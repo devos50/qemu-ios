@@ -1,6 +1,11 @@
 config I2C
     bool
 
+config I2C_DEVICES
+    # Device group for i2c devices which can reasonably be user-plugged
+    # to any board's i2c bus
+    bool
+
 config SMBUS
     bool
     select I2C
@@ -9,7 +14,7 @@ config SMBUS_EEPROM
     bool
     select SMBUS
 
-config VERSATILE_I2C
+config ARM_SBCON_I2C
     bool
     select BITBANG_I2C
 
@@ -26,6 +31,10 @@ config IMX_I2C
     select I2C
 
 config MPC_I2C
+    bool
+    select I2C
+
+config ALLWINNER_I2C
     bool
     select I2C
 

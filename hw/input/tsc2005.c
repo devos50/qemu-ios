@@ -489,8 +489,7 @@ void *tsc2005_init(qemu_irq pintdav)
 {
     TSC2005State *s;
 
-    s = (TSC2005State *)
-            g_malloc0(sizeof(TSC2005State));
+    s = g_new0(TSC2005State, 1);
     s->x = 400;
     s->y = 240;
     s->pressure = false;
@@ -524,7 +523,7 @@ void *tsc2005_init(qemu_irq pintdav)
  * from the touchscreen.  Assuming 12-bit precision was used during
  * tslib calibration.
  */
-void tsc2005_set_transform(void *opaque, MouseTransformInfo *info)
+void tsc2005_set_transform(void *opaque, const MouseTransformInfo *info)
 {
     TSC2005State *s = (TSC2005State *) opaque;
 

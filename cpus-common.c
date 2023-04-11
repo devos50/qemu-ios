@@ -23,6 +23,7 @@
 #include "hw/core/cpu.h"
 #include "sysemu/cpus.h"
 #include "qemu/lockable.h"
+#include "trace/trace-root.h"
 
 static QemuMutex qemu_cpu_list_lock;
 static QemuCond exclusive_cond;
@@ -73,6 +74,12 @@ static int cpu_get_free_index(void)
 }
 
 CPUTailQ cpus = QTAILQ_HEAD_INITIALIZER(cpus);
+static unsigned int cpu_list_generation_id;
+
+unsigned int cpu_list_generation_id_get(void)
+{
+    return cpu_list_generation_id;
+}
 
 void cpu_list_add(CPUState *cpu)
 {
@@ -84,6 +91,7 @@ void cpu_list_add(CPUState *cpu)
         assert(!cpu_index_auto_assigned);
     }
     QTAILQ_INSERT_TAIL_RCU(&cpus, cpu, node);
+    cpu_list_generation_id++;
 }
 
 void cpu_list_remove(CPUState *cpu)
@@ -96,6 +104,7 @@ void cpu_list_remove(CPUState *cpu)
 
     QTAILQ_REMOVE_RCU(&cpus, cpu, node);
     cpu->cpu_index = UNASSIGNED_CPU_INDEX;
+    cpu_list_generation_id++;
 }
 
 CPUState *qemu_get_cpu(int index)
@@ -160,7 +169,7 @@ void async_run_on_cpu(CPUState *cpu, run_on_cpu_func func, run_on_cpu_data data)
 {
     struct qemu_work_item *wi;
 
-    wi = g_malloc0(sizeof(struct qemu_work_item));
+    wi = g_new0(struct qemu_work_item, 1);
     wi->func = func;
     wi->data = data;
     wi->free = true;
@@ -183,6 +192,11 @@ void start_exclusive(void)
 {
     CPUState *other_cpu;
     int running_cpus;
+
+    if (current_cpu->exclusive_context_count) {
+        current_cpu->exclusive_context_count++;
+        return;
+    }
 
     qemu_mutex_lock(&qemu_cpu_list_lock);
     exclusive_idle();
@@ -211,13 +225,16 @@ void start_exclusive(void)
      */
     qemu_mutex_unlock(&qemu_cpu_list_lock);
 
-    current_cpu->in_exclusive_context = true;
+    current_cpu->exclusive_context_count = 1;
 }
 
 /* Finish an exclusive operation.  */
 void end_exclusive(void)
 {
-    current_cpu->in_exclusive_context = false;
+    current_cpu->exclusive_context_count--;
+    if (current_cpu->exclusive_context_count) {
+        return;
+    }
 
     qemu_mutex_lock(&qemu_cpu_list_lock);
     qatomic_set(&pending_cpus, 0);
@@ -305,7 +322,7 @@ void async_safe_run_on_cpu(CPUState *cpu, run_on_cpu_func func,
 {
     struct qemu_work_item *wi;
 
-    wi = g_malloc0(sizeof(struct qemu_work_item));
+    wi = g_new0(struct qemu_work_item, 1);
     wi->func = func;
     wi->data = data;
     wi->free = true;
@@ -351,4 +368,75 @@ void process_queued_cpu_work(CPUState *cpu)
     }
     qemu_mutex_unlock(&cpu->work_mutex);
     qemu_cond_broadcast(&qemu_work_cond);
+}
+
+/* Add a breakpoint.  */
+int cpu_breakpoint_insert(CPUState *cpu, vaddr pc, int flags,
+                          CPUBreakpoint **breakpoint)
+{
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+    CPUBreakpoint *bp;
+
+    if (cc->gdb_adjust_breakpoint) {
+        pc = cc->gdb_adjust_breakpoint(cpu, pc);
+    }
+
+    bp = g_malloc(sizeof(*bp));
+
+    bp->pc = pc;
+    bp->flags = flags;
+
+    /* keep all GDB-injected breakpoints in front */
+    if (flags & BP_GDB) {
+        QTAILQ_INSERT_HEAD(&cpu->breakpoints, bp, entry);
+    } else {
+        QTAILQ_INSERT_TAIL(&cpu->breakpoints, bp, entry);
+    }
+
+    if (breakpoint) {
+        *breakpoint = bp;
+    }
+
+    trace_breakpoint_insert(cpu->cpu_index, pc, flags);
+    return 0;
+}
+
+/* Remove a specific breakpoint.  */
+int cpu_breakpoint_remove(CPUState *cpu, vaddr pc, int flags)
+{
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+    CPUBreakpoint *bp;
+
+    if (cc->gdb_adjust_breakpoint) {
+        pc = cc->gdb_adjust_breakpoint(cpu, pc);
+    }
+
+    QTAILQ_FOREACH(bp, &cpu->breakpoints, entry) {
+        if (bp->pc == pc && bp->flags == flags) {
+            cpu_breakpoint_remove_by_ref(cpu, bp);
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
+/* Remove a specific breakpoint by reference.  */
+void cpu_breakpoint_remove_by_ref(CPUState *cpu, CPUBreakpoint *bp)
+{
+    QTAILQ_REMOVE(&cpu->breakpoints, bp, entry);
+
+    trace_breakpoint_remove(cpu->cpu_index, bp->pc, bp->flags);
+    g_free(bp);
+}
+
+/* Remove all matching breakpoints. */
+void cpu_breakpoint_remove_all(CPUState *cpu, int mask)
+{
+    CPUBreakpoint *bp, *next;
+
+    QTAILQ_FOREACH_SAFE(bp, &cpu->breakpoints, entry, next) {
+        if (bp->flags & mask) {
+            cpu_breakpoint_remove_by_ref(cpu, bp);
+        }
+    }
 }

@@ -17,9 +17,11 @@
  *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "qemu/osdep.h"
-#include "exec/gdbstub.h"
+#include "accel/tcg/perf.h"
+#include "gdbstub/syscalls.h"
 #include "qemu.h"
 #include "user-internals.h"
+#include "qemu/plugin.h"
 #ifdef CONFIG_GPROF
 #include <sys/gmon.h>
 #endif
@@ -38,4 +40,5 @@ void preexit_cleanup(CPUArchState *env, int code)
 #endif
         gdb_exit(code);
         qemu_plugin_user_exit();
+        perf_exit();
 }

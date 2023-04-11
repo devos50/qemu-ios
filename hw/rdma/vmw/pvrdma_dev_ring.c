@@ -14,7 +14,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/cutils.h"
 #include "hw/pci/pci.h"
 #include "cpu.h"
 #include "qemu/cutils.h"
@@ -41,7 +40,7 @@ int pvrdma_ring_init(PvrdmaRing *ring, const char *name, PCIDevice *dev,
     qatomic_set(&ring->ring_state->cons_head, 0);
     */
     ring->npages = npages;
-    ring->pages = g_malloc0(npages * sizeof(void *));
+    ring->pages = g_new0(void *, npages);
 
     for (i = 0; i < npages; i++) {
         if (!tbl[i]) {

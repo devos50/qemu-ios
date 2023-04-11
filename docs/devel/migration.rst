@@ -389,19 +389,13 @@ Each version is associated with a series of fields saved.  The ``save_state`` al
 the state as the newer version.  But ``load_state`` sometimes is able to
 load state from an older version.
 
-You can see that there are several version fields:
+You can see that there are two version fields:
 
 - ``version_id``: the maximum version_id supported by VMState for that device.
 - ``minimum_version_id``: the minimum version_id that VMState is able to understand
   for that device.
-- ``minimum_version_id_old``: For devices that were not able to port to vmstate, we can
-  assign a function that knows how to read this old state. This field is
-  ignored if there is no ``load_state_old`` handler.
 
-VMState is able to read versions from minimum_version_id to
-version_id.  And the function ``load_state_old()`` (if present) is able to
-load state from minimum_version_id_old to minimum_version_id.  This
-function is deprecated and will be removed when no more users are left.
+VMState is able to read versions from minimum_version_id to version_id.
 
 There are *_V* forms of many ``VMSTATE_`` macros to load fields for version dependent fields,
 e.g.
@@ -488,15 +482,17 @@ An iterative device must provide:
   - A ``load_setup`` function that initialises the data structures on the
     destination.
 
-  - A ``save_live_pending`` function that is called repeatedly and must
-    indicate how much more data the iterative data must save.  The core
-    migration code will use this to determine when to pause the CPUs
-    and complete the migration.
+  - A ``state_pending_exact`` function that indicates how much more
+    data we must save.  The core migration code will use this to
+    determine when to pause the CPUs and complete the migration.
 
-  - A ``save_live_iterate`` function (called after ``save_live_pending``
-    when there is significant data still to be sent).  It should send
-    a chunk of data until the point that stream bandwidth limits tell it
-    to stop.  Each call generates one section.
+  - A ``state_pending_estimate`` function that indicates how much more
+    data we must save.  When the estimated amount is smaller than the
+    threshold, we call ``state_pending_exact``.
+
+  - A ``save_live_iterate`` function should send a chunk of data until
+    the point that stream bandwidth limits tell it to stop.  Each call
+    generates one section.
 
   - A ``save_live_complete_precopy`` function that must transmit the
     last section for the device containing any remaining data.

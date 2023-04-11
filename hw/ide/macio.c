@@ -24,7 +24,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/ppc/mac.h"
+#include "hw/irq.h"
 #include "hw/ppc/mac_dbdma.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
@@ -60,7 +60,7 @@ static void pmac_ide_atapi_transfer_cb(void *opaque, int ret)
 {
     DBDMA_io *io = opaque;
     MACIOIDEState *m = io->opaque;
-    IDEState *s = idebus_active_if(&m->bus);
+    IDEState *s = ide_bus_active_if(&m->bus);
     int64_t offset;
 
     MACIO_DPRINTF("pmac_ide_atapi_transfer_cb\n");
@@ -97,7 +97,7 @@ static void pmac_ide_atapi_transfer_cb(void *opaque, int ret)
         /* Non-block ATAPI transfer - just copy to RAM */
         s->io_buffer_size = MIN(s->io_buffer_size, io->len);
         dma_memory_write(&address_space_memory, io->addr, s->io_buffer,
-                         s->io_buffer_size);
+                         s->io_buffer_size, MEMTXATTRS_UNSPECIFIED);
         io->len = 0;
         ide_atapi_cmd_ok(s);
         m->dma_active = false;
@@ -136,7 +136,7 @@ static void pmac_ide_transfer_cb(void *opaque, int ret)
 {
     DBDMA_io *io = opaque;
     MACIOIDEState *m = io->opaque;
-    IDEState *s = idebus_active_if(&m->bus);
+    IDEState *s = ide_bus_active_if(&m->bus);
     int64_t offset;
 
     MACIO_DPRINTF("pmac_ide_transfer_cb\n");
@@ -160,7 +160,7 @@ static void pmac_ide_transfer_cb(void *opaque, int ret)
         MACIO_DPRINTF("End of IDE transfer\n");
         qemu_sglist_destroy(&s->sg);
         s->status = READY_STAT | SEEK_STAT;
-        ide_set_irq(s->bus);
+        ide_bus_set_irq(s->bus);
         m->dma_active = false;
         goto done;
     }
@@ -220,7 +220,7 @@ done:
 static void pmac_ide_transfer(DBDMA_io *io)
 {
     MACIOIDEState *m = io->opaque;
-    IDEState *s = idebus_active_if(&m->bus);
+    IDEState *s = ide_bus_active_if(&m->bus);
 
     MACIO_DPRINTF("\n");
 
@@ -251,7 +251,7 @@ static void pmac_ide_transfer(DBDMA_io *io)
 static void pmac_ide_flush(DBDMA_io *io)
 {
     MACIOIDEState *m = io->opaque;
-    IDEState *s = idebus_active_if(&m->bus);
+    IDEState *s = ide_bus_active_if(&m->bus);
 
     if (s->bus->dma->aiocb) {
         blk_drain(s->blk);
@@ -267,7 +267,9 @@ static uint64_t pmac_ide_read(void *opaque, hwaddr addr, unsigned size)
 
     switch (reg) {
     case 0x0:
-        if (size == 2) {
+        if (size == 1) {
+            retval = ide_data_readw(&d->bus, 0) & 0xFF;
+        } else if (size == 2) {
             retval = ide_data_readw(&d->bus, 0);
         } else if (size == 4) {
             retval = ide_data_readl(&d->bus, 0);
@@ -418,7 +420,7 @@ static void macio_ide_realizefn(DeviceState *dev, Error **errp)
 {
     MACIOIDEState *s = MACIO_IDE(dev);
 
-    ide_init2(&s->bus, s->ide_irq);
+    ide_bus_init_output_irq(&s->bus, s->ide_irq);
 
     /* Register DMA callbacks */
     s->dma.ops = &dbdma_ops;
@@ -499,7 +501,7 @@ void macio_ide_init_drives(MACIOIDEState *s, DriveInfo **hd_table)
 
     for (i = 0; i < 2; i++) {
         if (hd_table[i]) {
-            ide_create_drive(&s->bus, i, hd_table[i]);
+            ide_bus_create_drive(&s->bus, i, hd_table[i]);
         }
     }
 }

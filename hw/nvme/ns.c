@@ -14,8 +14,10 @@
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
+#include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
+#include "qemu/bitops.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/block-backend.h"
 
@@ -29,7 +31,8 @@ void nvme_ns_init_format(NvmeNamespace *ns)
 {
     NvmeIdNs *id_ns = &ns->id_ns;
     BlockDriverInfo bdi;
-    int npdg, nlbas, ret;
+    int npdg, ret;
+    int64_t nlbas;
 
     ns->lbaf = id_ns->lbaf[NVME_ID_NS_FLBAS_INDEX(id_ns->flbas)];
     ns->lbasz = 1 << ns->lbaf.ds;
@@ -42,7 +45,7 @@ void nvme_ns_init_format(NvmeNamespace *ns)
     id_ns->ncap = id_ns->nsze;
     id_ns->nuse = id_ns->ncap;
 
-    ns->moff = (int64_t)nlbas << ns->lbaf.ds;
+    ns->moff = nlbas << ns->lbaf.ds;
 
     npdg = ns->blkconf.discard_granularity / ns->lbasz;
 
@@ -58,6 +61,7 @@ static int nvme_ns_init(NvmeNamespace *ns, Error **errp)
 {
     static uint64_t ns_count;
     NvmeIdNs *id_ns = &ns->id_ns;
+    NvmeIdNsNvm *id_ns_nvm = &ns->id_ns_nvm;
     uint8_t ds;
     uint16_t ms;
     int i;
@@ -101,6 +105,8 @@ static int nvme_ns_init(NvmeNamespace *ns, Error **errp)
         id_ns->dps |= NVME_ID_NS_DPS_FIRST_EIGHT;
     }
 
+    ns->pif = ns->params.pif;
+
     static const NvmeLBAF lbaf[16] = {
         [0] = { .ds =  9           },
         [1] = { .ds =  9, .ms =  8 },
@@ -112,10 +118,11 @@ static int nvme_ns_init(NvmeNamespace *ns, Error **errp)
         [7] = { .ds = 12, .ms = 64 },
     };
 
-    memcpy(&id_ns->lbaf, &lbaf, sizeof(lbaf));
-    id_ns->nlbaf = 7;
+    ns->nlbaf = 8;
 
-    for (i = 0; i <= id_ns->nlbaf; i++) {
+    memcpy(&id_ns->lbaf, &lbaf, sizeof(lbaf));
+
+    for (i = 0; i < ns->nlbaf; i++) {
         NvmeLBAF *lbaf = &id_ns->lbaf[i];
         if (lbaf->ds == ds) {
             if (lbaf->ms == ms) {
@@ -126,12 +133,16 @@ static int nvme_ns_init(NvmeNamespace *ns, Error **errp)
     }
 
     /* add non-standard lba format */
-    id_ns->nlbaf++;
-    id_ns->lbaf[id_ns->nlbaf].ds = ds;
-    id_ns->lbaf[id_ns->nlbaf].ms = ms;
-    id_ns->flbas |= id_ns->nlbaf;
+    id_ns->lbaf[ns->nlbaf].ds = ds;
+    id_ns->lbaf[ns->nlbaf].ms = ms;
+    ns->nlbaf++;
+
+    id_ns->flbas |= i;
+
 
 lbaf_found:
+    id_ns_nvm->elbaf[i] = (ns->pif & 0x3) << 7;
+    id_ns->nlbaf = ns->nlbaf - 1;
     nvme_ns_init_format(ns);
 
     return 0;
@@ -260,19 +271,37 @@ static void nvme_ns_init_zoned(NvmeNamespace *ns)
 
     nvme_ns_zoned_init_state(ns);
 
-    id_ns_z = g_malloc0(sizeof(NvmeIdNsZoned));
+    id_ns_z = g_new0(NvmeIdNsZoned, 1);
 
     /* MAR/MOR are zeroes-based, FFFFFFFFFh means no limit */
     id_ns_z->mar = cpu_to_le32(ns->params.max_active_zones - 1);
     id_ns_z->mor = cpu_to_le32(ns->params.max_open_zones - 1);
     id_ns_z->zoc = 0;
-    id_ns_z->ozcs = ns->params.cross_zone_read ? 0x01 : 0x00;
+    id_ns_z->ozcs = ns->params.cross_zone_read ?
+        NVME_ID_NS_ZONED_OZCS_RAZB : 0x00;
 
     for (i = 0; i <= ns->id_ns.nlbaf; i++) {
         id_ns_z->lbafe[i].zsze = cpu_to_le64(ns->zone_size);
         id_ns_z->lbafe[i].zdes =
             ns->params.zd_extension_size >> 6; /* Units of 64B */
     }
+
+    if (ns->params.zrwas) {
+        ns->zns.numzrwa = ns->params.numzrwa ?
+            ns->params.numzrwa : ns->num_zones;
+
+        ns->zns.zrwas = ns->params.zrwas >> ns->lbaf.ds;
+        ns->zns.zrwafg = ns->params.zrwafg >> ns->lbaf.ds;
+
+        id_ns_z->ozcs |= NVME_ID_NS_ZONED_OZCS_ZRWASUP;
+        id_ns_z->zrwacap = NVME_ID_NS_ZONED_ZRWACAP_EXPFLUSHSUP;
+
+        id_ns_z->numzrwa = cpu_to_le32(ns->params.numzrwa);
+        id_ns_z->zrwas = cpu_to_le16(ns->zns.zrwas);
+        id_ns_z->zrwafg = cpu_to_le16(ns->zns.zrwafg);
+    }
+
+    id_ns_z->ozcs = cpu_to_le16(id_ns_z->ozcs);
 
     ns->csi = NVME_CSI_ZONED;
     ns->id_ns.nsze = cpu_to_le64(ns->num_zones * ns->zone_size);
@@ -314,6 +343,10 @@ static void nvme_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
         QTAILQ_INSERT_HEAD(&ns->closed_zones, zone, entry);
     } else {
         trace_pci_nvme_clear_ns_reset(state, zone->d.zslba);
+        if (zone->d.za & NVME_ZA_ZRWA_VALID) {
+            zone->d.za &= ~NVME_ZA_ZRWA_VALID;
+            ns->zns.numzrwa++;
+        }
         nvme_set_zone_state(zone, NVME_ZONE_STATE_EMPTY);
     }
 }
@@ -346,22 +379,172 @@ static void nvme_zoned_ns_shutdown(NvmeNamespace *ns)
     assert(ns->nr_open_zones == 0);
 }
 
+static NvmeRuHandle *nvme_find_ruh_by_attr(NvmeEnduranceGroup *endgrp,
+                                           uint8_t ruha, uint16_t *ruhid)
+{
+    for (uint16_t i = 0; i < endgrp->fdp.nruh; i++) {
+        NvmeRuHandle *ruh = &endgrp->fdp.ruhs[i];
+
+        if (ruh->ruha == ruha) {
+            *ruhid = i;
+            return ruh;
+        }
+    }
+
+    return NULL;
+}
+
+static bool nvme_ns_init_fdp(NvmeNamespace *ns, Error **errp)
+{
+    NvmeEnduranceGroup *endgrp = ns->endgrp;
+    NvmeRuHandle *ruh;
+    uint8_t lbafi = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
+    unsigned int *ruhid, *ruhids;
+    char *r, *p, *token;
+    uint16_t *ph;
+
+    if (!ns->params.fdp.ruhs) {
+        ns->fdp.nphs = 1;
+        ph = ns->fdp.phs = g_new(uint16_t, 1);
+
+        ruh = nvme_find_ruh_by_attr(endgrp, NVME_RUHA_CTRL, ph);
+        if (!ruh) {
+            ruh = nvme_find_ruh_by_attr(endgrp, NVME_RUHA_UNUSED, ph);
+            if (!ruh) {
+                error_setg(errp, "no unused reclaim unit handles left");
+                return false;
+            }
+
+            ruh->ruha = NVME_RUHA_CTRL;
+            ruh->lbafi = lbafi;
+            ruh->ruamw = endgrp->fdp.runs >> ns->lbaf.ds;
+
+            for (uint16_t rg = 0; rg < endgrp->fdp.nrg; rg++) {
+                ruh->rus[rg].ruamw = ruh->ruamw;
+            }
+        } else if (ruh->lbafi != lbafi) {
+            error_setg(errp, "lba format index of controller assigned "
+                       "reclaim unit handle does not match namespace lba "
+                       "format index");
+            return false;
+        }
+
+        return true;
+    }
+
+    ruhid = ruhids = g_new0(unsigned int, endgrp->fdp.nruh);
+    r = p = strdup(ns->params.fdp.ruhs);
+
+    /* parse the placement handle identifiers */
+    while ((token = qemu_strsep(&p, ";")) != NULL) {
+        ns->fdp.nphs += 1;
+        if (ns->fdp.nphs > NVME_FDP_MAXPIDS ||
+            ns->fdp.nphs == endgrp->fdp.nruh) {
+            error_setg(errp, "too many placement handles");
+            free(r);
+            return false;
+        }
+
+        if (qemu_strtoui(token, NULL, 0, ruhid++) < 0) {
+            error_setg(errp, "cannot parse reclaim unit handle identifier");
+            free(r);
+            return false;
+        }
+    }
+
+    free(r);
+
+    ph = ns->fdp.phs = g_new(uint16_t, ns->fdp.nphs);
+
+    ruhid = ruhids;
+
+    /* verify the identifiers */
+    for (unsigned int i = 0; i < ns->fdp.nphs; i++, ruhid++, ph++) {
+        if (*ruhid >= endgrp->fdp.nruh) {
+            error_setg(errp, "invalid reclaim unit handle identifier");
+            return false;
+        }
+
+        ruh = &endgrp->fdp.ruhs[*ruhid];
+
+        switch (ruh->ruha) {
+        case NVME_RUHA_UNUSED:
+            ruh->ruha = NVME_RUHA_HOST;
+            ruh->lbafi = lbafi;
+            ruh->ruamw = endgrp->fdp.runs >> ns->lbaf.ds;
+
+            for (uint16_t rg = 0; rg < endgrp->fdp.nrg; rg++) {
+                ruh->rus[rg].ruamw = ruh->ruamw;
+            }
+
+            break;
+
+        case NVME_RUHA_HOST:
+            if (ruh->lbafi != lbafi) {
+                error_setg(errp, "lba format index of host assigned"
+                           "reclaim unit handle does not match namespace "
+                           "lba format index");
+                return false;
+            }
+
+            break;
+
+        case NVME_RUHA_CTRL:
+            error_setg(errp, "reclaim unit handle is controller assigned");
+            return false;
+
+        default:
+            abort();
+        }
+
+        *ph = *ruhid;
+    }
+
+    return true;
+}
+
 static int nvme_ns_check_constraints(NvmeNamespace *ns, Error **errp)
 {
+    unsigned int pi_size;
+
     if (!ns->blkconf.blk) {
         error_setg(errp, "block backend not configured");
         return -1;
     }
 
-    if (ns->params.pi && ns->params.ms < 8) {
-        error_setg(errp, "at least 8 bytes of metadata required to enable "
-                   "protection information");
-        return -1;
+    if (ns->params.pi) {
+        if (ns->params.pi > NVME_ID_NS_DPS_TYPE_3) {
+            error_setg(errp, "invalid 'pi' value");
+            return -1;
+        }
+
+        switch (ns->params.pif) {
+        case NVME_PI_GUARD_16:
+            pi_size = 8;
+            break;
+        case NVME_PI_GUARD_64:
+            pi_size = 16;
+            break;
+        default:
+            error_setg(errp, "invalid 'pif'");
+            return -1;
+        }
+
+        if (ns->params.ms < pi_size) {
+            error_setg(errp, "at least %u bytes of metadata required to "
+                       "enable protection information", pi_size);
+            return -1;
+        }
     }
 
     if (ns->params.nsid > NVME_MAX_NAMESPACES) {
         error_setg(errp, "invalid namespace id (must be between 0 and %d)",
                    NVME_MAX_NAMESPACES);
+        return -1;
+    }
+
+    if (ns->params.zoned && ns->endgrp && ns->endgrp->fdp.enabled) {
+        error_setg(errp, "cannot be a zoned- in an FDP configuration");
         return -1;
     }
 
@@ -391,6 +574,40 @@ static int nvme_ns_check_constraints(NvmeNamespace *ns, Error **errp)
                 return -1;
             }
         }
+
+        if (ns->params.zrwas) {
+            if (ns->params.zrwas % ns->blkconf.logical_block_size) {
+                error_setg(errp, "zone random write area size (zoned.zrwas "
+                           "%"PRIu64") must be a multiple of the logical "
+                           "block size (logical_block_size %"PRIu32")",
+                           ns->params.zrwas, ns->blkconf.logical_block_size);
+                return -1;
+            }
+
+            if (ns->params.zrwafg == -1) {
+                ns->params.zrwafg = ns->blkconf.logical_block_size;
+            }
+
+            if (ns->params.zrwas % ns->params.zrwafg) {
+                error_setg(errp, "zone random write area size (zoned.zrwas "
+                           "%"PRIu64") must be a multiple of the zone random "
+                           "write area flush granularity (zoned.zrwafg, "
+                           "%"PRIu64")", ns->params.zrwas, ns->params.zrwafg);
+                return -1;
+            }
+
+            if (ns->params.max_active_zones) {
+                if (ns->params.numzrwa > ns->params.max_active_zones) {
+                    error_setg(errp, "number of zone random write area "
+                               "resources (zoned.numzrwa, %d) must be less "
+                               "than or equal to maximum active resources "
+                               "(zoned.max_active_zones, %d)",
+                               ns->params.numzrwa,
+                               ns->params.max_active_zones);
+                    return -1;
+                }
+            }
+        }
     }
 
     return 0;
@@ -416,6 +633,12 @@ int nvme_ns_setup(NvmeNamespace *ns, Error **errp)
         nvme_ns_init_zoned(ns);
     }
 
+    if (ns->endgrp && ns->endgrp->fdp.enabled) {
+        if (!nvme_ns_init_fdp(ns, errp)) {
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -439,6 +662,10 @@ void nvme_ns_cleanup(NvmeNamespace *ns)
         g_free(ns->zone_array);
         g_free(ns->zd_extensions);
     }
+
+    if (ns->endgrp && ns->endgrp->fdp.enabled) {
+        g_free(ns->fdp.phs);
+    }
 }
 
 static void nvme_ns_unrealize(DeviceState *dev)
@@ -460,6 +687,8 @@ static void nvme_ns_realize(DeviceState *dev, Error **errp)
     int i;
 
     if (!n->subsys) {
+        /* If no subsys, the ns cannot be attached to more than one ctrl. */
+        ns->params.shared = false;
         if (ns->params.detached) {
             error_setg(errp, "detached requires that the nvme device is "
                        "linked to an nvme-subsys device");
@@ -473,6 +702,8 @@ static void nvme_ns_realize(DeviceState *dev, Error **errp)
         if (!qdev_set_parent_bus(dev, &subsys->bus.parent_bus, errp)) {
             return;
         }
+        ns->subsys = subsys;
+        ns->endgrp = &subsys->endgrp;
     }
 
     if (nvme_ns_setup(ns, errp)) {
@@ -503,6 +734,8 @@ static void nvme_ns_realize(DeviceState *dev, Error **errp)
     if (subsys) {
         subsys->namespaces[nsid] = ns;
 
+        ns->id_ns.endgid = cpu_to_le16(0x1);
+
         if (ns->params.detached) {
             return;
         }
@@ -511,13 +744,14 @@ static void nvme_ns_realize(DeviceState *dev, Error **errp)
             for (i = 0; i < ARRAY_SIZE(subsys->ctrls); i++) {
                 NvmeCtrl *ctrl = subsys->ctrls[i];
 
-                if (ctrl) {
+                if (ctrl && ctrl != SUBSYS_SLOT_RSVD) {
                     nvme_attach_ns(ctrl, ns);
                 }
             }
 
             return;
         }
+
     }
 
     nvme_attach_ns(n, ns);
@@ -528,12 +762,13 @@ static Property nvme_ns_props[] = {
     DEFINE_PROP_BOOL("detached", NvmeNamespace, params.detached, false),
     DEFINE_PROP_BOOL("shared", NvmeNamespace, params.shared, true),
     DEFINE_PROP_UINT32("nsid", NvmeNamespace, params.nsid, 0),
-    DEFINE_PROP_UUID("uuid", NvmeNamespace, params.uuid),
+    DEFINE_PROP_UUID_NODEFAULT("uuid", NvmeNamespace, params.uuid),
     DEFINE_PROP_UINT64("eui64", NvmeNamespace, params.eui64, 0),
     DEFINE_PROP_UINT16("ms", NvmeNamespace, params.ms, 0),
     DEFINE_PROP_UINT8("mset", NvmeNamespace, params.mset, 0),
     DEFINE_PROP_UINT8("pi", NvmeNamespace, params.pi, 0),
     DEFINE_PROP_UINT8("pil", NvmeNamespace, params.pil, 0),
+    DEFINE_PROP_UINT8("pif", NvmeNamespace, params.pif, 0),
     DEFINE_PROP_UINT16("mssrl", NvmeNamespace, params.mssrl, 128),
     DEFINE_PROP_UINT32("mcl", NvmeNamespace, params.mcl, 128),
     DEFINE_PROP_UINT8("msrc", NvmeNamespace, params.msrc, 127),
@@ -550,8 +785,12 @@ static Property nvme_ns_props[] = {
                        params.max_open_zones, 0),
     DEFINE_PROP_UINT32("zoned.descr_ext_size", NvmeNamespace,
                        params.zd_extension_size, 0),
+    DEFINE_PROP_UINT32("zoned.numzrwa", NvmeNamespace, params.numzrwa, 0),
+    DEFINE_PROP_SIZE("zoned.zrwas", NvmeNamespace, params.zrwas, 0),
+    DEFINE_PROP_SIZE("zoned.zrwafg", NvmeNamespace, params.zrwafg, -1),
     DEFINE_PROP_BOOL("eui64-default", NvmeNamespace, params.eui64_default,
-                     true),
+                     false),
+    DEFINE_PROP_STRING("fdp.ruhs", NvmeNamespace, params.fdp.ruhs),
     DEFINE_PROP_END_OF_LIST(),
 };
 

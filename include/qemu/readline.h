@@ -5,7 +5,7 @@
 #define READLINE_MAX_CMDS 64
 #define READLINE_MAX_COMPLETIONS 256
 
-typedef void GCC_FMT_ATTR(2, 3) ReadLinePrintfFunc(void *opaque,
+typedef void G_GNUC_PRINTF(2, 3) ReadLinePrintfFunc(void *opaque,
                                                    const char *fmt, ...);
 typedef void ReadLineFlushFunc(void *opaque);
 typedef void ReadLineFunc(void *opaque, const char *str,
@@ -44,6 +44,8 @@ typedef struct ReadLineState {
 } ReadLineState;
 
 void readline_add_completion(ReadLineState *rs, const char *str);
+void readline_add_completion_of(ReadLineState *rs,
+                                const char *pfx, const char *str);
 void readline_set_completion_index(ReadLineState *rs, int completion_index);
 
 const char *readline_get_history(ReadLineState *rs, unsigned int index);

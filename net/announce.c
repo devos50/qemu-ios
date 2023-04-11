@@ -7,7 +7,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/cutils.h"
 #include "net/announce.h"
 #include "net/net.h"
 #include "qapi/clone-visitor.h"
@@ -46,7 +46,7 @@ void qemu_announce_timer_del(AnnounceTimer *timer, bool free_named)
     }
     qapi_free_strList(timer->params.interfaces);
     timer->params.interfaces = NULL;
-    if (free_named && timer->params.has_id) {
+    if (free_named && timer->params.id) {
         AnnounceTimer *list_timer;
         /*
          * Sanity check: There should only be one timer on the list with
@@ -120,6 +120,19 @@ static int announce_self_create(uint8_t *buf,
     return 60; /* len (FCS will be added by hardware) */
 }
 
+/*
+ * Helper to print ethernet mac address
+ */
+static const char *qemu_ether_ntoa(const MACAddr *mac)
+{
+    static char ret[18];
+
+    snprintf(ret, sizeof(ret), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac->a[0], mac->a[1], mac->a[2], mac->a[3], mac->a[4], mac->a[5]);
+
+    return ret;
+}
+
 static void qemu_announce_self_iter(NICState *nic, void *opaque)
 {
     AnnounceTimer *timer = opaque;
@@ -144,7 +157,7 @@ static void qemu_announce_self_iter(NICState *nic, void *opaque)
         skip = false;
     }
 
-    trace_qemu_announce_self_iter(timer->params.has_id ? timer->params.id : "_",
+    trace_qemu_announce_self_iter(timer->params.id ?: "_",
                                   nic->ncs->name,
                                   qemu_ether_ntoa(&nic->conf->macaddr), skip);
 
@@ -186,9 +199,9 @@ void qemu_announce_self(AnnounceTimer *timer, AnnounceParameters *params)
 void qmp_announce_self(AnnounceParameters *params, Error **errp)
 {
     AnnounceTimer *named_timer;
-    if (!params->has_id) {
+
+    if (!params->id) {
         params->id = g_strdup("");
-        params->has_id = true;
     }
 
     named_timer = g_datalist_get_data(&named_timers, params->id);

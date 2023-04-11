@@ -14,8 +14,7 @@
 
 #include "qemu/osdep.h"
 #include <glib/gstdio.h>
-#include "qemu-common.h"
-#include "libqos/libqtest.h"
+#include "libqtest.h"
 #include "boot-sector.h"
 #include "libqos/libqos-spapr.h"
 
@@ -108,6 +107,10 @@ static void test_batch(const testdef_t *tests, bool ipv6)
     for (i = 0; tests[i].machine; i++) {
         const testdef_t *test = &tests[i];
         char *testname;
+
+        if (!qtest_has_device(test->model)) {
+            continue;
+        }
 
         testname = g_strdup_printf("pxe/ipv4/%s/%s",
                                    test->machine, test->model);

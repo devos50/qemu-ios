@@ -17,6 +17,7 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "qemu/madvise.h"
 #include "hw/virtio/virtio.h"
 #include "hw/mem/pc-dimm.h"
 #include "hw/qdev-properties.h"
@@ -240,43 +241,41 @@ static void balloon_stats_poll_cb(void *opaque)
 static void balloon_stats_get_all(Object *obj, Visitor *v, const char *name,
                                   void *opaque, Error **errp)
 {
-    Error *err = NULL;
-    VirtIOBalloon *s = opaque;
+    VirtIOBalloon *s = VIRTIO_BALLOON(obj);
+    bool ok = false;
     int i;
 
-    if (!visit_start_struct(v, name, NULL, 0, &err)) {
-        goto out;
+    if (!visit_start_struct(v, name, NULL, 0, errp)) {
+        return;
     }
-    if (!visit_type_int(v, "last-update", &s->stats_last_update, &err)) {
+    if (!visit_type_int(v, "last-update", &s->stats_last_update, errp)) {
         goto out_end;
     }
 
-    if (!visit_start_struct(v, "stats", NULL, 0, &err)) {
+    if (!visit_start_struct(v, "stats", NULL, 0, errp)) {
         goto out_end;
     }
     for (i = 0; i < VIRTIO_BALLOON_S_NR; i++) {
-        if (!visit_type_uint64(v, balloon_stat_names[i], &s->stats[i], &err)) {
+        if (!visit_type_uint64(v, balloon_stat_names[i], &s->stats[i], errp)) {
             goto out_nested;
         }
     }
-    visit_check_struct(v, &err);
+    ok = visit_check_struct(v, errp);
 out_nested:
     visit_end_struct(v, NULL);
 
-    if (!err) {
-        visit_check_struct(v, &err);
+    if (ok) {
+        visit_check_struct(v, errp);
     }
 out_end:
     visit_end_struct(v, NULL);
-out:
-    error_propagate(errp, err);
 }
 
 static void balloon_stats_get_poll_interval(Object *obj, Visitor *v,
                                             const char *name, void *opaque,
                                             Error **errp)
 {
-    VirtIOBalloon *s = opaque;
+    VirtIOBalloon *s = VIRTIO_BALLOON(obj);
     visit_type_int(v, name, &s->stats_poll_interval, errp);
 }
 
@@ -284,7 +283,7 @@ static void balloon_stats_set_poll_interval(Object *obj, Visitor *v,
                                             const char *name, void *opaque,
                                             Error **errp)
 {
-    VirtIOBalloon *s = opaque;
+    VirtIOBalloon *s = VIRTIO_BALLOON(obj);
     int64_t value;
 
     if (!visit_type_int(v, name, &value, errp)) {
@@ -451,7 +450,6 @@ static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
     VirtQueueElement *elem;
     VirtIOBalloonStat stat;
     size_t offset = 0;
-    qemu_timeval tv;
 
     elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
     if (!elem) {
@@ -483,13 +481,7 @@ static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
             s->stats[tag] = val;
     }
     s->stats_vq_offset = offset;
-
-    if (qemu_gettimeofday(&tv) < 0) {
-        warn_report("%s: failed to get time of day", __func__);
-        goto out;
-    }
-
-    s->stats_last_update = tv.tv_sec;
+    s->stats_last_update = g_get_real_time() / G_USEC_PER_SEC;
 
 out:
     if (balloon_stats_enabled(s)) {
@@ -888,8 +880,7 @@ static void virtio_balloon_device_realize(DeviceState *dev, Error **errp)
     VirtIOBalloon *s = VIRTIO_BALLOON(dev);
     int ret;
 
-    virtio_init(vdev, "virtio-balloon", VIRTIO_ID_BALLOON,
-                virtio_balloon_config_size(s));
+    virtio_init(vdev, VIRTIO_ID_BALLOON, virtio_balloon_config_size(s));
 
     ret = qemu_add_balloon_handler(virtio_balloon_to_target,
                                    virtio_balloon_stat, s);
@@ -1014,12 +1005,12 @@ static void virtio_balloon_instance_init(Object *obj)
     s->free_page_hint_notify.notify = virtio_balloon_free_page_hint_notify;
 
     object_property_add(obj, "guest-stats", "guest statistics",
-                        balloon_stats_get_all, NULL, NULL, s);
+                        balloon_stats_get_all, NULL, NULL, NULL);
 
     object_property_add(obj, "guest-stats-polling-interval", "int",
                         balloon_stats_get_poll_interval,
                         balloon_stats_set_poll_interval,
-                        NULL, s);
+                        NULL, NULL);
 }
 
 static const VMStateDescription vmstate_virtio_balloon = {

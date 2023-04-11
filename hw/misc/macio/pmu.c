@@ -29,18 +29,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "hw/ppc/mac.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
-#include "hw/input/adb.h"
 #include "hw/irq.h"
-#include "hw/misc/mos6522.h"
-#include "hw/misc/macio/gpio.h"
 #include "hw/misc/macio/pmu.h"
-#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "sysemu/runstate.h"
+#include "sysemu/rtc.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
@@ -57,27 +52,14 @@
 
 #define VIA_TIMER_FREQ (4700000 / 6)
 
-static void via_update_irq(PMUState *s)
-{
-    MOS6522PMUState *mps = MOS6522_PMU(&s->mos6522_pmu);
-    MOS6522State *ms = MOS6522(mps);
-
-    bool new_state = !!(ms->ifr & ms->ier & (SR_INT | T1_INT | T2_INT));
-
-    if (new_state != s->via_irq_state) {
-        s->via_irq_state = new_state;
-        qemu_set_irq(s->via_irq, new_state);
-    }
-}
-
 static void via_set_sr_int(void *opaque)
 {
     PMUState *s = opaque;
     MOS6522PMUState *mps = MOS6522_PMU(&s->mos6522_pmu);
     MOS6522State *ms = MOS6522(mps);
-    MOS6522DeviceClass *mdc = MOS6522_GET_CLASS(ms);
+    qemu_irq irq = qdev_get_gpio_in(DEVICE(ms), SR_INT_BIT);
 
-    mdc->set_sr_int(ms);
+    qemu_set_irq(irq, 1);
 }
 
 static void pmu_update_extirq(PMUState *s)
@@ -808,36 +790,19 @@ static void mos6522_pmu_portB_write(MOS6522State *s)
     MOS6522PMUState *mps = container_of(s, MOS6522PMUState, parent_obj);
     PMUState *ps = container_of(mps, PMUState, mos6522_pmu);
 
-    if ((s->pcr & 0xe0) == 0x20 || (s->pcr & 0xe0) == 0x60) {
-        s->ifr &= ~CB2_INT;
-    }
-    s->ifr &= ~CB1_INT;
-
-    via_update_irq(ps);
     pmu_update(ps);
 }
 
-static void mos6522_pmu_portA_write(MOS6522State *s)
+static void mos6522_pmu_reset_hold(Object *obj)
 {
-    MOS6522PMUState *mps = container_of(s, MOS6522PMUState, parent_obj);
-    PMUState *ps = container_of(mps, PMUState, mos6522_pmu);
-
-    if ((s->pcr & 0x0e) == 0x02 || (s->pcr & 0x0e) == 0x06) {
-        s->ifr &= ~CA2_INT;
-    }
-    s->ifr &= ~CA1_INT;
-
-    via_update_irq(ps);
-}
-
-static void mos6522_pmu_reset(DeviceState *dev)
-{
-    MOS6522State *ms = MOS6522(dev);
+    MOS6522State *ms = MOS6522(obj);
     MOS6522PMUState *mps = container_of(ms, MOS6522PMUState, parent_obj);
     PMUState *s = container_of(mps, PMUState, mos6522_pmu);
     MOS6522DeviceClass *mdc = MOS6522_GET_CLASS(ms);
 
-    mdc->parent_reset(dev);
+    if (mdc->parent_phases.hold) {
+        mdc->parent_phases.hold(obj);
+    }
 
     ms->timers[0].frequency = VIA_TIMER_FREQ;
     ms->timers[1].frequency = (SCALE_US * 6000) / 4700;
@@ -847,12 +812,12 @@ static void mos6522_pmu_reset(DeviceState *dev)
 
 static void mos6522_pmu_class_init(ObjectClass *oc, void *data)
 {
-    DeviceClass *dc = DEVICE_CLASS(oc);
+    ResettableClass *rc = RESETTABLE_CLASS(oc);
     MOS6522DeviceClass *mdc = MOS6522_CLASS(oc);
 
-    dc->reset = mos6522_pmu_reset;
+    resettable_class_set_parent_phases(rc, NULL, mos6522_pmu_reset_hold,
+                                       NULL, &mdc->parent_phases);
     mdc->portB_write = mos6522_pmu_portB_write;
-    mdc->portA_write = mos6522_pmu_portA_write;
 }
 
 static const TypeInfo mos6522_pmu_type_info = {

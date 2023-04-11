@@ -159,9 +159,6 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
     for (i = 0; i < smp_cpus; i++) {
         o = OBJECT(&s->cpu[i]);
 
-        object_property_set_int(o, "psci-conduit", QEMU_PSCI_CONDUIT_SMC,
-                                &error_abort);
-
         /* On uniprocessor, the CBAR is set to 0 */
         if (smp_cpus > 1) {
             object_property_set_int(o, "reset-cbar", FSL_IMX7_A7MPCORE_ADDR,
@@ -169,7 +166,10 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
         }
 
         if (i) {
-            /* Secondary CPUs start in PSCI powered-down state */
+            /*
+             * Secondary CPUs start in powered-down state (and can be
+             * powered up via the SRC system reset controller)
+             */
             object_property_set_bool(o, "start-powered-off", true,
                                      &error_abort);
         }
@@ -219,9 +219,19 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
             FSL_IMX7_GPT4_ADDR,
         };
 
+        static const int FSL_IMX7_GPTn_IRQ[FSL_IMX7_NUM_GPTS] = {
+            FSL_IMX7_GPT1_IRQ,
+            FSL_IMX7_GPT2_IRQ,
+            FSL_IMX7_GPT3_IRQ,
+            FSL_IMX7_GPT4_IRQ,
+        };
+
         s->gpt[i].ccm = IMX_CCM(&s->ccm);
         sysbus_realize(SYS_BUS_DEVICE(&s->gpt[i]), &error_abort);
         sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpt[i]), 0, FSL_IMX7_GPTn_ADDR[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpt[i]), 0,
+                           qdev_get_gpio_in(DEVICE(&s->a7mpcore),
+                                            FSL_IMX7_GPTn_IRQ[i]));
     }
 
     for (i = 0; i < FSL_IMX7_NUM_GPIOS; i++) {
@@ -235,8 +245,37 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
             FSL_IMX7_GPIO7_ADDR,
         };
 
+        static const int FSL_IMX7_GPIOn_LOW_IRQ[FSL_IMX7_NUM_GPIOS] = {
+            FSL_IMX7_GPIO1_LOW_IRQ,
+            FSL_IMX7_GPIO2_LOW_IRQ,
+            FSL_IMX7_GPIO3_LOW_IRQ,
+            FSL_IMX7_GPIO4_LOW_IRQ,
+            FSL_IMX7_GPIO5_LOW_IRQ,
+            FSL_IMX7_GPIO6_LOW_IRQ,
+            FSL_IMX7_GPIO7_LOW_IRQ,
+        };
+
+        static const int FSL_IMX7_GPIOn_HIGH_IRQ[FSL_IMX7_NUM_GPIOS] = {
+            FSL_IMX7_GPIO1_HIGH_IRQ,
+            FSL_IMX7_GPIO2_HIGH_IRQ,
+            FSL_IMX7_GPIO3_HIGH_IRQ,
+            FSL_IMX7_GPIO4_HIGH_IRQ,
+            FSL_IMX7_GPIO5_HIGH_IRQ,
+            FSL_IMX7_GPIO6_HIGH_IRQ,
+            FSL_IMX7_GPIO7_HIGH_IRQ,
+        };
+
         sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), &error_abort);
-        sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[i]), 0, FSL_IMX7_GPIOn_ADDR[i]);
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[i]), 0,
+                        FSL_IMX7_GPIOn_ADDR[i]);
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[i]), 0,
+                           qdev_get_gpio_in(DEVICE(&s->a7mpcore),
+                                            FSL_IMX7_GPIOn_LOW_IRQ[i]));
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[i]), 1,
+                           qdev_get_gpio_in(DEVICE(&s->a7mpcore),
+                                            FSL_IMX7_GPIOn_HIGH_IRQ[i]));
     }
 
     /*

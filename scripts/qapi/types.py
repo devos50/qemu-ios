@@ -16,7 +16,11 @@ This work is licensed under the terms of the GNU GPL, version 2.
 from typing import List, Optional
 
 from .common import c_enum_const, c_name, mcgen
-from .gen import QAPISchemaModularCVisitor, gen_special_features, ifcontext
+from .gen import (
+    QAPISchemaModularCVisitor,
+    gen_special_features,
+    ifcontext,
+)
 from .schema import (
     QAPISchema,
     QAPISchemaEnumMember,
@@ -138,7 +142,7 @@ def gen_struct_members(members: List[QAPISchemaObjectTypeMember]) -> str:
     ret = ''
     for memb in members:
         ret += memb.ifcond.gen_if()
-        if memb.optional:
+        if memb.need_has():
             ret += mcgen('''
     bool has_%(c_name)s;
 ''',

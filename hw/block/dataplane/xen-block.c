@@ -21,9 +21,11 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
+#include "qemu/memalign.h"
 #include "qapi/error.h"
-#include "hw/xen/xen_common.h"
+#include "hw/xen/xen.h"
 #include "hw/block/xen_blkif.h"
+#include "hw/xen/interface/io/ring.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/iothread.h"
 #include "xen-block.h"
@@ -100,9 +102,9 @@ static XenBlockRequest *xen_block_start_request(XenBlockDataPlane *dataplane)
          * re-use requests, allocate the memory once here. It will be freed
          * xen_block_dataplane_destroy() when the request list is freed.
          */
-        request->buf = qemu_memalign(XC_PAGE_SIZE,
+        request->buf = qemu_memalign(XEN_PAGE_SIZE,
                                      BLKIF_MAX_SEGMENTS_PER_REQUEST *
-                                     XC_PAGE_SIZE);
+                                     XEN_PAGE_SIZE);
         dataplane->requests_total++;
         qemu_iovec_init(&request->v, 1);
     } else {
@@ -184,7 +186,7 @@ static int xen_block_parse_request(XenBlockRequest *request)
             goto err;
         }
         if (request->req.seg[i].last_sect * dataplane->sector_size >=
-            XC_PAGE_SIZE) {
+            XEN_PAGE_SIZE) {
             error_report("error: page crossing");
             goto err;
         }
@@ -704,6 +706,7 @@ void xen_block_dataplane_stop(XenBlockDataPlane *dataplane)
         Error *local_err = NULL;
 
         xen_device_unmap_grant_refs(xendev, dataplane->sring,
+                                    dataplane->ring_ref,
                                     dataplane->nr_ring_ref, &local_err);
         dataplane->sring = NULL;
 
@@ -738,7 +741,7 @@ void xen_block_dataplane_start(XenBlockDataPlane *dataplane,
 
     dataplane->protocol = protocol;
 
-    ring_size = XC_PAGE_SIZE * dataplane->nr_ring_ref;
+    ring_size = XEN_PAGE_SIZE * dataplane->nr_ring_ref;
     switch (dataplane->protocol) {
     case BLKIF_PROTOCOL_NATIVE:
     {

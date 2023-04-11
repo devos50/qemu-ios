@@ -207,13 +207,13 @@ static void portb_changed(SH7750State *s, uint16_t prev)
 
 static void error_access(const char *kind, hwaddr addr)
 {
-    fprintf(stderr, "%s to %s (0x" TARGET_FMT_plx ") not supported\n",
+    fprintf(stderr, "%s to %s (0x" HWADDR_FMT_plx ") not supported\n",
             kind, regname(addr), addr);
 }
 
 static void ignore_access(const char *kind, hwaddr addr)
 {
-    fprintf(stderr, "%s to %s (0x" TARGET_FMT_plx ") ignored\n",
+    fprintf(stderr, "%s to %s (0x" HWADDR_FMT_plx ") ignored\n",
             kind, regname(addr), addr);
 }
 
@@ -770,7 +770,7 @@ SH7750State *sh7750_init(SuperHCPU *cpu, MemoryRegion *sysmem)
     SysBusDevice *sb;
     MemoryRegion *mr, *alias;
 
-    s = g_malloc0(sizeof(SH7750State));
+    s = g_new0(SH7750State, 1);
     s->cpu = cpu;
     s->periph_freq = 60000000; /* 60MHz */
     memory_region_init_io(&s->iomem, NULL, &sh7750_mem_ops, s,

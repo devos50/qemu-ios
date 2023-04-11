@@ -21,21 +21,18 @@
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
-#include "monitor/monitor.h"
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
 #include "hw/isa/isa.h"
 
 static ISABus *isabus;
 
-static void isabus_dev_print(Monitor *mon, DeviceState *dev, int indent);
 static char *isabus_get_fw_dev_path(DeviceState *dev);
 
 static void isa_bus_class_init(ObjectClass *klass, void *data)
 {
     BusClass *k = BUS_CLASS(klass);
 
-    k->print_dev = isabus_dev_print;
     k->get_fw_dev_path = isabus_get_fw_dev_path;
 }
 
@@ -70,13 +67,20 @@ ISABus *isa_bus_new(DeviceState *dev, MemoryRegion* address_space,
     return isabus;
 }
 
-void isa_bus_irqs(ISABus *bus, qemu_irq *irqs)
+void isa_bus_register_input_irqs(ISABus *bus, qemu_irq *irqs_in)
 {
-    bus->irqs = irqs;
+    bus->irqs_in = irqs_in;
+}
+
+qemu_irq isa_bus_get_irq(ISABus *bus, unsigned irqnum)
+{
+    assert(irqnum < ISA_NUM_IRQS);
+    assert(bus->irqs_in);
+    return bus->irqs_in[irqnum];
 }
 
 /*
- * isa_get_irq() returns the corresponding qemu_irq entry for the i8259.
+ * isa_get_irq() returns the corresponding input qemu_irq entry for the i8259.
  *
  * This function is only for special cases such as the 'ferr', and
  * temporary use for normal devices until they are converted to qdev.
@@ -84,24 +88,13 @@ void isa_bus_irqs(ISABus *bus, qemu_irq *irqs)
 qemu_irq isa_get_irq(ISADevice *dev, unsigned isairq)
 {
     assert(!dev || ISA_BUS(qdev_get_parent_bus(DEVICE(dev))) == isabus);
-    assert(isairq < ISA_NUM_IRQS);
-    return isabus->irqs[isairq];
-}
-
-void isa_init_irq(ISADevice *dev, qemu_irq *p, unsigned isairq)
-{
-    assert(dev->nirqs < ARRAY_SIZE(dev->isairq));
-    assert(isairq < ISA_NUM_IRQS);
-    dev->isairq[dev->nirqs] = isairq;
-    *p = isa_get_irq(dev, isairq);
-    dev->nirqs++;
+    return isa_bus_get_irq(isabus, isairq);
 }
 
 void isa_connect_gpio_out(ISADevice *isadev, int gpioirq, unsigned isairq)
 {
-    qemu_irq irq;
-    isa_init_irq(isadev, &irq, isairq);
-    qdev_connect_gpio_out(DEVICE(isadev), gpioirq, irq);
+    qemu_irq input_irq = isa_get_irq(isadev, isairq);
+    qdev_connect_gpio_out(DEVICE(isadev), gpioirq, input_irq);
 }
 
 void isa_bus_dma(ISABus *bus, IsaDma *dma8, IsaDma *dma16)
@@ -112,7 +105,7 @@ void isa_bus_dma(ISABus *bus, IsaDma *dma8, IsaDma *dma16)
     bus->dma[1] = dma16;
 }
 
-IsaDma *isa_get_dma(ISABus *bus, int nchan)
+IsaDma *isa_bus_get_dma(ISABus *bus, int nchan)
 {
     assert(bus);
     return bus->dma[nchan > 3 ? 1 : 0];
@@ -127,7 +120,7 @@ static inline void isa_init_ioport(ISADevice *dev, uint16_t ioport)
 
 void isa_register_ioport(ISADevice *dev, MemoryRegion *io, uint16_t start)
 {
-    memory_region_add_subregion(isabus->address_space_io, start, io);
+    memory_region_add_subregion(isa_address_space_io(dev), start, io);
     isa_init_ioport(dev, start);
 }
 
@@ -148,17 +141,9 @@ int isa_register_portio_list(ISADevice *dev,
     isa_init_ioport(dev, start);
 
     portio_list_init(piolist, OBJECT(dev), pio_start, opaque, name);
-    portio_list_add(piolist, isabus->address_space_io, start);
+    portio_list_add(piolist, isa_address_space_io(dev), start);
 
     return 0;
-}
-
-static void isa_device_init(Object *obj)
-{
-    ISADevice *dev = ISA_DEVICE(obj);
-
-    dev->isairq[0] = -1;
-    dev->isairq[1] = -1;
 }
 
 ISADevice *isa_new(const char *name)
@@ -185,8 +170,14 @@ bool isa_realize_and_unref(ISADevice *dev, ISABus *bus, Error **errp)
     return qdev_realize_and_unref(&dev->parent_obj, &bus->parent_obj, errp);
 }
 
+ISABus *isa_bus_from_device(ISADevice *dev)
+{
+    return ISA_BUS(qdev_get_parent_bus(DEVICE(dev)));
+}
+
 ISADevice *isa_vga_init(ISABus *bus)
 {
+    vga_interface_created = true;
     switch (vga_interface_type) {
     case VGA_CIRRUS:
         return isa_create_simple(bus, "isa-cirrus-vga");
@@ -204,34 +195,6 @@ ISADevice *isa_vga_init(ISABus *bus)
     case VGA_NONE:
     default:
         return NULL;
-    }
-}
-
-void isa_build_aml(ISABus *bus, Aml *scope)
-{
-    BusChild *kid;
-    ISADevice *dev;
-    ISADeviceClass *dc;
-
-    QTAILQ_FOREACH(kid, &bus->parent_obj.children, sibling) {
-        dev = ISA_DEVICE(kid->child);
-        dc = ISA_DEVICE_GET_CLASS(dev);
-        if (dc->build_aml) {
-            dc->build_aml(dev, scope);
-        }
-    }
-}
-
-static void isabus_dev_print(Monitor *mon, DeviceState *dev, int indent)
-{
-    ISADevice *d = ISA_DEVICE(dev);
-
-    if (d->isairq[1] != -1) {
-        monitor_printf(mon, "%*sisa irqs %d,%d\n", indent, "",
-                       d->isairq[0], d->isairq[1]);
-    } else if (d->isairq[0] != -1) {
-        monitor_printf(mon, "%*sisa irq %d\n", indent, "",
-                       d->isairq[0]);
     }
 }
 
@@ -260,9 +223,7 @@ static const TypeInfo isa_device_type_info = {
     .name = TYPE_ISA_DEVICE,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(ISADevice),
-    .instance_init = isa_device_init,
     .abstract = true,
-    .class_size = sizeof(ISADeviceClass),
     .class_init = isa_device_class_init,
 };
 

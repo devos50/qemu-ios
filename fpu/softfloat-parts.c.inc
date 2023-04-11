@@ -214,16 +214,33 @@ static void partsN(uncanon_normal)(FloatPartsN *p, float_status *s,
                 p->frac_lo &= ~round_mask;
             }
         } else if (unlikely(exp >= exp_max)) {
-            flags |= float_flag_overflow | float_flag_inexact;
-            if (overflow_norm) {
+            flags |= float_flag_overflow;
+            if (s->rebias_overflow) {
+                exp -= fmt->exp_re_bias;
+            } else if (overflow_norm) {
+                flags |= float_flag_inexact;
                 exp = exp_max - 1;
                 frac_allones(p);
                 p->frac_lo &= ~round_mask;
             } else {
+                flags |= float_flag_inexact;
                 p->cls = float_class_inf;
                 exp = exp_max;
                 frac_clear(p);
             }
+        }
+        frac_shr(p, frac_shift);
+    } else if (unlikely(s->rebias_underflow)) {
+        flags |= float_flag_underflow;
+        exp += fmt->exp_re_bias;
+        if (p->frac_lo & round_mask) {
+            flags |= float_flag_inexact;
+            if (frac_addi(p, p, inc)) {
+                frac_shr(p, 1);
+                p->frac_hi |= DECOMPOSED_IMPLICIT_BIT;
+                exp++;
+            }
+            p->frac_lo &= ~round_mask;
         }
         frac_shr(p, frac_shift);
     } else if (s->flush_to_zero) {
@@ -1327,16 +1344,19 @@ static FloatRelation partsN(compare)(FloatPartsN *a, FloatPartsN *b,
                                      float_status *s, bool is_quiet)
 {
     int ab_mask = float_cmask(a->cls) | float_cmask(b->cls);
-    int cmp;
 
     if (likely(ab_mask == float_cmask_normal)) {
+        FloatRelation cmp;
+
         if (a->sign != b->sign) {
             goto a_sign;
         }
-        if (a->exp != b->exp) {
-            cmp = a->exp < b->exp ? -1 : 1;
-        } else {
+        if (a->exp == b->exp) {
             cmp = frac_cmp(a, b);
+        } else if (a->exp < b->exp) {
+            cmp = float_relation_less;
+        } else {
+            cmp = float_relation_greater;
         }
         if (a->sign) {
             cmp = -cmp;
@@ -1416,6 +1436,7 @@ static void partsN(log2)(FloatPartsN *a, float_status *s, const FloatFmt *fmt)
             parts_return_nan(a, s);
             return;
         case float_class_zero:
+            float_raise(float_flag_divbyzero, s);
             /* log2(0) = -inf */
             a->cls = float_class_inf;
             a->sign = 1;

@@ -2,7 +2,7 @@
 #
 # Haiku VM image
 #
-# Copyright 2020 Haiku, Inc.
+# Copyright 2020-2022 Haiku, Inc.
 #
 # Authors:
 #  Alexander von Gluck IV <kallisti5@unixzen.com>
@@ -48,8 +48,8 @@ class HaikuVM(basevm.BaseVM):
     name = "haiku"
     arch = "x86_64"
 
-    link = "https://app.vagrantup.com/haiku-os/boxes/r1beta2-x86_64/versions/20200702/providers/libvirt.box"
-    csum = "41c38b316e0cbdbc66b5dbaf3612b866700a4f35807cb1eb266a5bf83e9e68d5"
+    link = "https://app.vagrantup.com/haiku-os/boxes/r1beta4-x86_64/versions/20230114/providers/libvirt.box"
+    csum = "6e72a2a470e03dbc3c5e808664e057bb4022b390dca88e4c7da6188f26f6a3c9"
 
     poweroff = "shutdown"
 
@@ -71,6 +71,7 @@ class HaikuVM(basevm.BaseVM):
         "devel:libpixman_1",
         "devel:libpng16",
         "devel:libsdl2_2.0",
+        "devel:libslirp",
         "devel:libsnappy",
         "devel:libssh2",
         "devel:libtasn1",
@@ -79,17 +80,16 @@ class HaikuVM(basevm.BaseVM):
         "ninja",
     ]
 
-    # https://dev.haiku-os.org/ticket/16512 virtio disk1 shows up as 0 (reversed order)
     BUILD_SCRIPT = """
         set -e;
         rm -rf /tmp/qemu-test.*
         cd $(mktemp -d /tmp/qemu-test.XXXXXX);
         mkdir src build; cd src;
-        tar -xf /dev/disk/virtual/virtio_block/0/raw;
+        tar -xf /dev/disk/virtual/virtio_block/1/raw;
         mkdir -p /usr/bin
         ln -s /boot/system/bin/env /usr/bin/env
         cd ../build
-        ../src/configure --disable-slirp {configure_opts};
+        ../src/configure {configure_opts};
         make --output-sync -j{jobs} {target} {verbose};
     """
 
@@ -99,7 +99,7 @@ class HaikuVM(basevm.BaseVM):
 
         self.print_step("Extracting disk image")
 
-        subprocess.check_call(["tar", "xzf", tarball, "./box.img", "-O"],
+        subprocess.check_call(["tar", "xzf", tarball, "box.img", "-O"],
                               stdout=open(img, 'wb'))
 
         self.print_step("Preparing disk image")

@@ -18,10 +18,12 @@
  */
 #include "qemu/osdep.h"
 #include "qemu/thread.h"
+#include "qemu/error-report.h"
 #include "hw/i386/apic_internal.h"
 #include "hw/i386/apic.h"
-#include "hw/i386/ioapic.h"
+#include "hw/intc/ioapic.h"
 #include "hw/intc/i8259.h"
+#include "hw/intc/kvm_irqcount.h"
 #include "hw/pci/msi.h"
 #include "qemu/host-utils.h"
 #include "sysemu/kvm.h"
@@ -399,7 +401,7 @@ void apic_poll_irq(DeviceState *dev)
 
 static void apic_set_irq(APICCommonState *s, int vector_num, int trigger_mode)
 {
-    apic_report_irq_delivered(!apic_get_bit(s->irr, vector_num));
+    kvm_report_irq_delivered(!apic_get_bit(s->irr, vector_num));
 
     apic_set_bit(s->irr, vector_num);
     if (trigger_mode)

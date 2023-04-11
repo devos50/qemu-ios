@@ -29,10 +29,11 @@
 #define TYPE_POWERPC_CPU "powerpc-cpu"
 #endif
 
-OBJECT_DECLARE_TYPE(PowerPCCPU, PowerPCCPUClass,
-                    POWERPC_CPU)
+OBJECT_DECLARE_CPU_TYPE(PowerPCCPU, PowerPCCPUClass, POWERPC_CPU)
 
-typedef struct CPUPPCState CPUPPCState;
+ObjectClass *ppc_cpu_class_by_name(const char *name);
+
+typedef struct CPUArchState CPUPPCState;
 typedef struct ppc_tb_t ppc_tb_t;
 typedef struct ppc_dcr_t ppc_dcr_t;
 
@@ -61,8 +62,6 @@ enum powerpc_mmu_t {
     POWERPC_MMU_BOOKE      = 0x00000008,
     /* BookE 2.06 MMU model                                    */
     POWERPC_MMU_BOOKE206   = 0x00000009,
-    /* PowerPC 601 MMU model (specific BATs format)            */
-    POWERPC_MMU_601        = 0x0000000A,
 #define POWERPC_MMU_64       0x00010000
     /* 64 bits PowerPC MMU                                     */
     POWERPC_MMU_64B        = POWERPC_MMU_64 | 0x00000001,
@@ -90,20 +89,10 @@ enum powerpc_excp_t {
     POWERPC_EXCP_STD,
     /* PowerPC 40x exception model      */
     POWERPC_EXCP_40x,
-    /* PowerPC 601 exception model      */
-    POWERPC_EXCP_601,
-    /* PowerPC 602 exception model      */
-    POWERPC_EXCP_602,
-    /* PowerPC 603 exception model      */
-    POWERPC_EXCP_603,
-    /* PowerPC G2 exception model       */
-    POWERPC_EXCP_G2,
-    /* PowerPC 604 exception model      */
-    POWERPC_EXCP_604,
-    /* PowerPC 7x0 exception model      */
-    POWERPC_EXCP_7x0,
-    /* PowerPC 7x5 exception model      */
-    POWERPC_EXCP_7x5,
+    /* PowerPC 603/604/G2 exception model */
+    POWERPC_EXCP_6xx,
+    /* PowerPC 7xx exception model      */
+    POWERPC_EXCP_7xx,
     /* PowerPC 74xx exception model     */
     POWERPC_EXCP_74xx,
     /* BookE exception model            */
@@ -156,7 +145,7 @@ typedef struct PPCHash64Options PPCHash64Options;
 /**
  * PowerPCCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * A PowerPC CPU model.
  */
@@ -167,11 +156,15 @@ struct PowerPCCPUClass {
 
     DeviceRealize parent_realize;
     DeviceUnrealize parent_unrealize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
     void (*parent_parse_features)(const char *type, char *str, Error **errp);
 
     uint32_t pvr;
-    bool (*pvr_match)(struct PowerPCCPUClass *pcc, uint32_t pvr);
+    /*
+     * If @best is false, match if pcc is in the family of pvr
+     * Else match only if pcc is the best match for pvr in this family.
+     */
+    bool (*pvr_match)(struct PowerPCCPUClass *pcc, uint32_t pvr, bool best);
     uint64_t pcr_mask;          /* Available bits in PCR register */
     uint64_t pcr_supported;     /* Bits for supported PowerISA versions */
     uint32_t svr;

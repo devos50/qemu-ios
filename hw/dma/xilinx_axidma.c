@@ -456,7 +456,7 @@ static uint64_t axidma_read(void *opaque, hwaddr addr,
             break;
         default:
             r = s->regs[addr];
-            D(qemu_log("%s ch=%d addr=" TARGET_FMT_plx " v=%x\n",
+            D(qemu_log("%s ch=%d addr=" HWADDR_FMT_plx " v=%x\n",
                            __func__, sid, addr * 4, r));
             break;
     }
@@ -509,7 +509,7 @@ static void axidma_write(void *opaque, hwaddr addr,
             }
             break;
         default:
-            D(qemu_log("%s: ch=%d addr=" TARGET_FMT_plx " v=%x\n",
+            D(qemu_log("%s: ch=%d addr=" HWADDR_FMT_plx " v=%x\n",
                   __func__, sid, addr * 4, (unsigned)value));
             s->regs[addr] = value;
             break;
@@ -552,7 +552,7 @@ static void xilinx_axidma_realize(DeviceState *dev, Error **errp)
 
         st->dma = s;
         st->nr = i;
-        st->ptimer = ptimer_init(timer_hit, st, PTIMER_POLICY_DEFAULT);
+        st->ptimer = ptimer_init(timer_hit, st, PTIMER_POLICY_LEGACY);
         ptimer_transaction_begin(st->ptimer);
         ptimer_set_freq(st->ptimer, s->freqhz);
         ptimer_transaction_commit(st->ptimer);

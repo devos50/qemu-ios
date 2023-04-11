@@ -22,8 +22,12 @@
 #ifdef CONFIG_LIBATTR
 #  include <attr/xattr.h>
 #else
-#  define ENOATTR ENODATA
-#  include <sys/xattr.h>
+#  if !defined(ENOATTR)
+#    define ENOATTR ENODATA
+#  endif
+#  ifndef CONFIG_WIN32
+#    include <sys/xattr.h>
+#  endif
 #endif
 
 #endif

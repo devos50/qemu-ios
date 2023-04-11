@@ -20,7 +20,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "libqos/libqtest.h"
+#include "libqtest.h"
 #include "libqos/libqos-spapr.h"
 
 #define MAGIC   0xcafec0de
@@ -58,8 +58,8 @@ static void test_machine(const void *machine)
             " -machine " PSERIES_DEFAULT_CAPABILITIES;
     }
 
-    qts = qtest_initf("-M %s -accel tcg %s -prom-env 'use-nvramrc?=true' "
-                      "-prom-env 'nvramrc=%x %x l!' ", (const char *)machine,
+    qts = qtest_initf("-M %s -accel tcg %s -prom-env \"use-nvramrc?=true\" "
+                      "-prom-env \"nvramrc=%x %x l!\" ", (const char *)machine,
                       extra_args, MAGIC, ADDRESS);
     check_guest_memory(qts);
     qtest_quit(qts);

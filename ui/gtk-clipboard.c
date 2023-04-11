@@ -19,7 +19,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/main-loop.h"
 
 #include "ui/gtk.h"
@@ -83,7 +82,7 @@ static void gd_clipboard_update_info(GtkDisplayState *gd,
     if (info != qemu_clipboard_info(s)) {
         gd->cbpending[s] = 0;
         if (!self_update) {
-            GtkTargetList *list;
+            g_autoptr(GtkTargetList) list = NULL;
             GtkTargetEntry *targets;
             gint n_targets;
 
@@ -94,15 +93,16 @@ static void gd_clipboard_update_info(GtkDisplayState *gd,
             targets = gtk_target_table_new_from_list(list, &n_targets);
 
             gtk_clipboard_clear(gd->gtkcb[s]);
-            gd->cbowner[s] = true;
-            gtk_clipboard_set_with_data(gd->gtkcb[s],
-                                        targets, n_targets,
-                                        gd_clipboard_get_data,
-                                        gd_clipboard_clear,
-                                        gd);
+            if (targets) {
+                gd->cbowner[s] = true;
+                gtk_clipboard_set_with_data(gd->gtkcb[s],
+                                            targets, n_targets,
+                                            gd_clipboard_get_data,
+                                            gd_clipboard_clear,
+                                            gd);
 
-            gtk_target_table_free(targets, n_targets);
-            gtk_target_list_unref(list);
+                gtk_target_table_free(targets, n_targets);
+            }
         }
         return;
     }

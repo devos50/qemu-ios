@@ -263,12 +263,15 @@ static bool qemu_laio_poll_cb(void *opaque)
     LinuxAioState *s = container_of(e, LinuxAioState, e);
     struct io_event *events;
 
-    if (!io_getevents_peek(s->ctx, &events)) {
-        return false;
-    }
+    return io_getevents_peek(s->ctx, &events);
+}
+
+static void qemu_laio_poll_ready(EventNotifier *opaque)
+{
+    EventNotifier *e = opaque;
+    LinuxAioState *s = container_of(e, LinuxAioState, e);
 
     qemu_laio_process_completions_and_submit(s);
-    return true;
 }
 
 static void ioq_init(LaioQueue *io_q)
@@ -360,8 +363,16 @@ void laio_io_unplug(BlockDriverState *bs, LinuxAioState *s,
                     uint64_t dev_max_batch)
 {
     assert(s->io_q.plugged);
+    s->io_q.plugged--;
+
+    /*
+     * Why max batch checking is performed here:
+     * Another BDS may have queued requests with a higher dev_max_batch and
+     * therefore in_queue could now exceed our dev_max_batch. Re-check the max
+     * batch so we can honor our device's dev_max_batch.
+     */
     if (s->io_q.in_queue >= laio_max_batch(s, dev_max_batch) ||
-        (--s->io_q.plugged == 0 &&
+        (!s->io_q.plugged &&
          !s->io_q.blocked && !QSIMPLEQ_EMPTY(&s->io_q.pending))) {
         ioq_submit(s);
     }
@@ -427,7 +438,7 @@ int coroutine_fn laio_co_submit(BlockDriverState *bs, LinuxAioState *s, int fd,
 
 void laio_detach_aio_context(LinuxAioState *s, AioContext *old_context)
 {
-    aio_set_event_notifier(old_context, &s->e, false, NULL, NULL);
+    aio_set_event_notifier(old_context, &s->e, false, NULL, NULL, NULL);
     qemu_bh_delete(s->completion_bh);
     s->aio_context = NULL;
 }
@@ -438,7 +449,8 @@ void laio_attach_aio_context(LinuxAioState *s, AioContext *new_context)
     s->completion_bh = aio_bh_new(new_context, qemu_laio_completion_bh, s);
     aio_set_event_notifier(new_context, &s->e, false,
                            qemu_laio_completion_cb,
-                           qemu_laio_poll_cb);
+                           qemu_laio_poll_cb,
+                           qemu_laio_poll_ready);
 }
 
 LinuxAioState *laio_init(Error **errp)
@@ -449,7 +461,7 @@ LinuxAioState *laio_init(Error **errp)
     s = g_malloc0(sizeof(*s));
     rc = event_notifier_init(&s->e, false);
     if (rc < 0) {
-        error_setg_errno(errp, -rc, "failed to to initialize event notifier");
+        error_setg_errno(errp, -rc, "failed to initialize event notifier");
         goto out_free_state;
     }
 

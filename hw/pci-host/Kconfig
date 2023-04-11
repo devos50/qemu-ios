@@ -77,3 +77,13 @@ config MV64361
     bool
     select PCI
     select I8259
+
+config DINO
+    bool
+    select PCI
+
+config GT64120
+    bool
+    select PCI
+    select EMPTY_SLOT
+    select I8259

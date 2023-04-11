@@ -9,6 +9,9 @@
 #ifndef PLUGIN_MEMORY_H
 #define PLUGIN_MEMORY_H
 
+#include "exec/cpu-defs.h"
+#include "exec/hwaddr.h"
+
 struct qemu_plugin_hwaddr {
     bool is_io;
     bool is_store;
@@ -37,4 +40,4 @@ struct qemu_plugin_hwaddr {
 bool tlb_plugin_lookup(CPUState *cpu, target_ulong addr, int mmu_idx,
                        bool is_store, struct qemu_plugin_hwaddr *data);
 
-#endif /* _PLUGIN_MEMORY_H_ */
+#endif /* PLUGIN_MEMORY_H */

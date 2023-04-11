@@ -7,14 +7,14 @@
  */
 
 #include "qemu/osdep.h"
-#include "libqos/libqtest.h"
+#include "libqtest.h"
 
 /*
  * This used to trigger the out-of-bounds read in xlnx_dp_read
  */
 static void test_fuzz_xlnx_dp_0x3ac(void)
 {
-    QTestState *s = qtest_init("-M xlnx-zcu102 -display none ");
+    QTestState *s = qtest_init("-M xlnx-zcu102 ");
     qtest_readl(s, 0xfd4a03ac);
     qtest_quit(s);
 }

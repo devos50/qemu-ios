@@ -28,7 +28,7 @@ config APIC
     select MSI_NONBROKEN
     select I8259
 
-config ARM_GIC_TCG
+config ARM_GICV3_TCG
     bool
     default y
     depends on ARM_GIC && TCG
@@ -73,11 +73,38 @@ config LOONGSON_LIOINTC
 config RISCV_ACLINT
     bool
 
+config RISCV_APLIC
+    bool
+    select MSI_NONBROKEN
+
+config RISCV_IMSIC
+    bool
+    select MSI_NONBROKEN
+
 config SIFIVE_PLIC
     bool
+    select MSI_NONBROKEN
 
 config GOLDFISH_PIC
     bool
 
 config M68K_IRQC
+    bool
+
+config NIOS2_VIC
+    bool
+
+config LOONGARCH_IPI
+    bool
+
+config LOONGARCH_PCH_PIC
+    bool
+    select UNIMP
+
+config LOONGARCH_PCH_MSI
+    select MSI_NONBROKEN
+    bool
+    select UNIMP
+
+config LOONGARCH_EXTIOI
     bool

@@ -14,7 +14,6 @@
 
 #include <linux/kvm.h>
 
-#include "qemu-common.h"
 #include "cpu.h"
 #include "internal.h"
 #include "qemu/error-report.h"
@@ -1269,22 +1268,13 @@ int kvm_arch_msi_data_to_gsi(uint32_t data)
 
 int mips_kvm_type(MachineState *machine, const char *vm_type)
 {
-#if defined(KVM_CAP_MIPS_VZ) || defined(KVM_CAP_MIPS_TE)
+#if defined(KVM_CAP_MIPS_VZ)
     int r;
     KVMState *s = KVM_STATE(machine->accelerator);
-#endif
 
-#if defined(KVM_CAP_MIPS_VZ)
     r = kvm_check_extension(s, KVM_CAP_MIPS_VZ);
     if (r > 0) {
         return KVM_VM_MIPS_VZ;
-    }
-#endif
-
-#if defined(KVM_CAP_MIPS_TE)
-    r = kvm_check_extension(s, KVM_CAP_MIPS_TE);
-    if (r > 0) {
-        return KVM_VM_MIPS_TE;
     }
 #endif
 
@@ -1294,4 +1284,8 @@ int mips_kvm_type(MachineState *machine, const char *vm_type)
 bool kvm_arch_cpu_check_are_resettable(void)
 {
     return true;
+}
+
+void kvm_arch_accel_class_init(ObjectClass *oc)
+{
 }

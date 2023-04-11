@@ -40,8 +40,8 @@ ssize_t load_image_size(const char *filename, void *addr, size_t size);
  *
  * Returns the size of the loaded image on success, -1 otherwise.
  */
-int load_image_targphys_as(const char *filename,
-                           hwaddr addr, uint64_t max_sz, AddressSpace *as);
+ssize_t load_image_targphys_as(const char *filename,
+                               hwaddr addr, uint64_t max_sz, AddressSpace *as);
 
 /**load_targphys_hex_as:
  * @filename: Path to the .hex file
@@ -53,14 +53,15 @@ int load_image_targphys_as(const char *filename,
  *
  * Returns the size of the loaded .hex file on success, -1 otherwise.
  */
-int load_targphys_hex_as(const char *filename, hwaddr *entry, AddressSpace *as);
+ssize_t load_targphys_hex_as(const char *filename, hwaddr *entry,
+                             AddressSpace *as);
 
 /** load_image_targphys:
  * Same as load_image_targphys_as(), but doesn't allow the caller to specify
  * an AddressSpace.
  */
-int load_image_targphys(const char *filename, hwaddr,
-                        uint64_t max_sz);
+ssize_t load_image_targphys(const char *filename, hwaddr,
+                            uint64_t max_sz);
 
 /**
  * load_image_mr: load an image into a memory region
@@ -73,7 +74,7 @@ int load_image_targphys(const char *filename, hwaddr,
  * If the file is larger than the memory region's size the call will fail.
  * Returns -1 on failure, or the size of the file.
  */
-int load_image_mr(const char *filename, MemoryRegion *mr);
+ssize_t load_image_mr(const char *filename, MemoryRegion *mr);
 
 /* This is the limit on the maximum uncompressed image size that
  * load_image_gzipped_buffer() and load_image_gzipped() will read. It prevents
@@ -81,9 +82,28 @@ int load_image_mr(const char *filename, MemoryRegion *mr);
  */
 #define LOAD_IMAGE_MAX_GUNZIP_BYTES (256 << 20)
 
-int load_image_gzipped_buffer(const char *filename, uint64_t max_sz,
-                              uint8_t **buffer);
-int load_image_gzipped(const char *filename, hwaddr addr, uint64_t max_sz);
+ssize_t load_image_gzipped_buffer(const char *filename, uint64_t max_sz,
+                                  uint8_t **buffer);
+ssize_t load_image_gzipped(const char *filename, hwaddr addr, uint64_t max_sz);
+
+/**
+ * unpack_efi_zboot_image:
+ * @buffer: pointer to a variable holding the address of a buffer containing the
+ *          image
+ * @size: pointer to a variable holding the size of the buffer
+ *
+ * Check whether the buffer contains a EFI zboot image, and if it does, extract
+ * the compressed payload and decompress it into a new buffer. If successful,
+ * the old buffer is freed, and the *buffer and size variables pointed to by the
+ * function arguments are updated to refer to the newly populated buffer.
+ *
+ * Returns 0 if the image could not be identified as a EFI zboot image.
+ * Returns -1 if the buffer contents were identified as a EFI zboot image, but
+ * unpacking failed for any reason.
+ * Returns the size of the decompressed payload if decompression was performed
+ * successfully.
+ */
+ssize_t unpack_efi_zboot_image(uint8_t **buffer, int *size);
 
 #define ELF_LOAD_FAILED       -1
 #define ELF_LOAD_NOT_ELF      -2
@@ -183,8 +203,8 @@ ssize_t load_elf(const char *filename,
  */
 void load_elf_hdr(const char *filename, void *hdr, bool *is64, Error **errp);
 
-int load_aout(const char *filename, hwaddr addr, int max_sz,
-              int bswap_needed, hwaddr target_page_size);
+ssize_t load_aout(const char *filename, hwaddr addr, int max_sz,
+                  int bswap_needed, hwaddr target_page_size);
 
 #define LOAD_UIMAGE_LOADADDR_INVALID (-1)
 
@@ -205,19 +225,19 @@ int load_aout(const char *filename, hwaddr addr, int max_sz,
  *
  * Returns the size of the loaded image on success, -1 otherwise.
  */
-int load_uimage_as(const char *filename, hwaddr *ep,
-                   hwaddr *loadaddr, int *is_linux,
-                   uint64_t (*translate_fn)(void *, uint64_t),
-                   void *translate_opaque, AddressSpace *as);
+ssize_t load_uimage_as(const char *filename, hwaddr *ep,
+                       hwaddr *loadaddr, int *is_linux,
+                       uint64_t (*translate_fn)(void *, uint64_t),
+                       void *translate_opaque, AddressSpace *as);
 
 /** load_uimage:
  * Same as load_uimage_as(), but doesn't allow the caller to specify an
  * AddressSpace.
  */
-int load_uimage(const char *filename, hwaddr *ep,
-                hwaddr *loadaddr, int *is_linux,
-                uint64_t (*translate_fn)(void *, uint64_t),
-                void *translate_opaque);
+ssize_t load_uimage(const char *filename, hwaddr *ep,
+                    hwaddr *loadaddr, int *is_linux,
+                    uint64_t (*translate_fn)(void *, uint64_t),
+                    void *translate_opaque);
 
 /**
  * load_ramdisk_as:
@@ -232,15 +252,15 @@ int load_uimage(const char *filename, hwaddr *ep,
  *
  * Returns the size of the loaded image on success, -1 otherwise.
  */
-int load_ramdisk_as(const char *filename, hwaddr addr, uint64_t max_sz,
-                    AddressSpace *as);
+ssize_t load_ramdisk_as(const char *filename, hwaddr addr, uint64_t max_sz,
+                        AddressSpace *as);
 
 /**
  * load_ramdisk:
  * Same as load_ramdisk_as(), but doesn't allow the caller to specify
  * an AddressSpace.
  */
-int load_ramdisk(const char *filename, hwaddr addr, uint64_t max_sz);
+ssize_t load_ramdisk(const char *filename, hwaddr addr, uint64_t max_sz);
 
 ssize_t gunzip(void *dst, size_t dstlen, uint8_t *src, size_t srclen);
 
@@ -250,12 +270,9 @@ void pstrcpy_targphys(const char *name,
                       hwaddr dest, int buf_size,
                       const char *source);
 
-extern bool option_rom_has_mr;
-extern bool rom_file_has_mr;
-
-int rom_add_file(const char *file, const char *fw_dir,
-                 hwaddr addr, int32_t bootindex,
-                 bool option_rom, MemoryRegion *mr, AddressSpace *as);
+ssize_t rom_add_file(const char *file, const char *fw_dir,
+                     hwaddr addr, int32_t bootindex,
+                     bool option_rom, MemoryRegion *mr, AddressSpace *as);
 MemoryRegion *rom_add_blob(const char *name, const void *blob, size_t len,
                            size_t max_len, hwaddr addr,
                            const char *fw_file_name,
@@ -336,11 +353,25 @@ void hmp_info_roms(Monitor *mon, const QDict *qdict);
 #define rom_add_blob_fixed_as(_f, _b, _l, _a, _as)      \
     rom_add_blob(_f, _b, _l, _l, _a, NULL, NULL, NULL, _as, true)
 
-int rom_add_vga(const char *file);
-int rom_add_option(const char *file, int32_t bootindex);
+ssize_t rom_add_vga(const char *file);
+ssize_t rom_add_option(const char *file, int32_t bootindex);
 
 /* This is the usual maximum in uboot, so if a uImage overflows this, it would
  * overflow on real hardware too. */
 #define UBOOT_MAX_GUNZIP_BYTES (64 << 20)
+
+typedef struct RomGap {
+    hwaddr base;
+    size_t size;
+} RomGap;
+
+/**
+ * rom_find_largest_gap_between: return largest gap between ROMs in given range
+ *
+ * Given a range of addresses, this function finds the largest
+ * contiguous subrange which has no ROMs loaded to it. That is,
+ * it finds the biggest gap which is free for use for other things.
+ */
+RomGap rom_find_largest_gap_between(hwaddr base, size_t size);
 
 #endif

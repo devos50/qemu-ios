@@ -4,7 +4,6 @@
 #include "ui/qemu-pixman.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
-#include "qemu/error-report.h"
 #include "qapi/qapi-types-ui.h"
 
 #ifdef CONFIG_OPENGL
@@ -65,11 +64,12 @@ void qemu_remove_led_event_handler(QEMUPutLEDEntry *entry);
 
 void kbd_put_ledstate(int ledstate);
 
-void hmp_mouse_set(Monitor *mon, const QDict *qdict);
+bool qemu_mouse_set(int index, Error **errp);
 
 /* keysym is a unicode code except for special keys (see QEMU_KEY_xxx
    constants) */
 #define QEMU_KEY_ESC1(c) ((c) | 0xe100)
+#define QEMU_KEY_TAB        0x0009
 #define QEMU_KEY_BACKSPACE  0x007f
 #define QEMU_KEY_UP         QEMU_KEY_ESC1('A')
 #define QEMU_KEY_DOWN       QEMU_KEY_ESC1('B')
@@ -139,6 +139,7 @@ typedef struct QemuUIInfo {
     int       yoff;
     uint32_t  width;
     uint32_t  height;
+    uint32_t  refresh_rate;
 } QemuUIInfo;
 
 /* cursor data format is 32bit RGBA */
@@ -150,8 +151,8 @@ typedef struct QEMUCursor {
 } QEMUCursor;
 
 QEMUCursor *cursor_alloc(int width, int height);
-void cursor_get(QEMUCursor *c);
-void cursor_put(QEMUCursor *c);
+QEMUCursor *cursor_ref(QEMUCursor *c);
+void cursor_unref(QEMUCursor *c);
 QEMUCursor *cursor_builtin_hidden(void);
 QEMUCursor *cursor_builtin_left_ptr(void);
 void cursor_print_ascii_art(QEMUCursor *c, const char *prefix);
@@ -282,23 +283,28 @@ struct DisplayChangeListener {
 };
 
 typedef struct DisplayGLCtxOps {
-    /*
-     * We only check if the GLCtx is compatible with a DCL via ops. A natural
-     * evolution of this would be a callback to check some runtime requirements
-     * and allow various DCL kinds.
-     */
-    const DisplayChangeListenerOps *compatible_dcl;
-
+    bool (*dpy_gl_ctx_is_compatible_dcl)(DisplayGLCtx *dgc,
+                                         DisplayChangeListener *dcl);
     QEMUGLContext (*dpy_gl_ctx_create)(DisplayGLCtx *dgc,
                                        QEMUGLParams *params);
     void (*dpy_gl_ctx_destroy)(DisplayGLCtx *dgc,
                                QEMUGLContext ctx);
     int (*dpy_gl_ctx_make_current)(DisplayGLCtx *dgc,
                                    QEMUGLContext ctx);
+    void (*dpy_gl_ctx_create_texture)(DisplayGLCtx *dgc,
+                                      DisplaySurface *surface);
+    void (*dpy_gl_ctx_destroy_texture)(DisplayGLCtx *dgc,
+                                      DisplaySurface *surface);
+    void (*dpy_gl_ctx_update_texture)(DisplayGLCtx *dgc,
+                                      DisplaySurface *surface,
+                                      int x, int y, int w, int h);
 } DisplayGLCtxOps;
 
 struct DisplayGLCtx {
     const DisplayGLCtxOps *ops;
+#ifdef CONFIG_OPENGL
+    QemuGLShader *gls; /* optional shared shader */
+#endif
 };
 
 DisplayState *init_displaystate(void);
@@ -426,8 +432,7 @@ typedef struct GraphicHwOps {
     void (*gfx_update)(void *opaque);
     bool gfx_update_async; /* if true, calls graphic_hw_update_done() */
     void (*text_update)(void *opaque, console_ch_t *text);
-    void (*update_interval)(void *opaque, uint64_t interval);
-    int (*ui_info)(void *opaque, uint32_t head, QemuUIInfo *info);
+    void (*ui_info)(void *opaque, uint32_t head, QemuUIInfo *info);
     void (*gl_block)(void *opaque, bool block);
 } GraphicHwOps;
 
@@ -454,10 +459,12 @@ QemuConsole *qemu_console_lookup_by_device(DeviceState *dev, uint32_t head);
 QemuConsole *qemu_console_lookup_by_device_name(const char *device_id,
                                                 uint32_t head, Error **errp);
 QemuConsole *qemu_console_lookup_unused(void);
+QEMUCursor *qemu_console_get_cursor(QemuConsole *con);
 bool qemu_console_is_visible(QemuConsole *con);
 bool qemu_console_is_graphic(QemuConsole *con);
 bool qemu_console_is_fixedsize(QemuConsole *con);
 bool qemu_console_is_gl_blocked(QemuConsole *con);
+bool qemu_console_is_multihead(DeviceState *dev);
 char *qemu_console_get_label(QemuConsole *con);
 int qemu_console_get_index(QemuConsole *con);
 uint32_t qemu_console_get_head(QemuConsole *con);
@@ -513,6 +520,7 @@ int vnc_display_pw_expire(const char *id, time_t expires);
 void vnc_parse(const char *str);
 int vnc_init_func(void *opaque, QemuOpts *opts, Error **errp);
 bool vnc_display_reload_certs(const char *id,  Error **errp);
+bool vnc_display_update(DisplayUpdateOptionsVNC *arg, Error **errp);
 
 /* input.c */
 int index_from_key(const char *key, size_t key_length);

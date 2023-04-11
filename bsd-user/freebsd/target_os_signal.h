@@ -1,11 +1,11 @@
-#ifndef _TARGET_OS_SIGNAL_H_
-#define _TARGET_OS_SIGNAL_H_
-
-/* FreeBSD's sys/ucontext.h defines this */
-#define TARGET_MC_GET_CLEAR_RET 0x0001
+#ifndef TARGET_OS_SIGNAL_H
+#define TARGET_OS_SIGNAL_H
 
 #include "target_os_siginfo.h"
 #include "target_arch_signal.h"
+
+abi_long setup_sigframe_arch(CPUArchState *env, abi_ulong frame_addr,
+                             struct target_sigframe *frame, int flags);
 
 /* Compare to sys/signal.h */
 #define TARGET_SIGHUP  1       /* hangup */
@@ -78,4 +78,4 @@
 #define TARGET_SS_ONSTACK 0x0001  /* take signals on alternate stack */
 #define TARGET_SS_DISABLE 0x0004  /* disable taking signals on alternate stack*/
 
-#endif /* !_TARGET_OS_SIGNAL_H_ */
+#endif /* TARGET_OS_SIGNAL_H */

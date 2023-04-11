@@ -10,7 +10,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/error-report.h"
 
 #include "sysemu/runstate.h"
@@ -18,6 +17,7 @@
 #include "sysemu/hvf_int.h"
 #include "sysemu/hw_accel.h"
 #include "hvf_arm.h"
+#include "cpregs.h"
 
 #include <mach/mach_time.h>
 
@@ -35,9 +35,34 @@
         ENCODE_AA64_CP_REG(CP_REG_ARM64_SYSREG_CP, crn, crm, op0, op1, op2)
 #define PL1_WRITE_MASK 0x4
 
+#define SYSREG_OP0_SHIFT      20
+#define SYSREG_OP0_MASK       0x3
+#define SYSREG_OP0(sysreg)    ((sysreg >> SYSREG_OP0_SHIFT) & SYSREG_OP0_MASK)
+#define SYSREG_OP1_SHIFT      14
+#define SYSREG_OP1_MASK       0x7
+#define SYSREG_OP1(sysreg)    ((sysreg >> SYSREG_OP1_SHIFT) & SYSREG_OP1_MASK)
+#define SYSREG_CRN_SHIFT      10
+#define SYSREG_CRN_MASK       0xf
+#define SYSREG_CRN(sysreg)    ((sysreg >> SYSREG_CRN_SHIFT) & SYSREG_CRN_MASK)
+#define SYSREG_CRM_SHIFT      1
+#define SYSREG_CRM_MASK       0xf
+#define SYSREG_CRM(sysreg)    ((sysreg >> SYSREG_CRM_SHIFT) & SYSREG_CRM_MASK)
+#define SYSREG_OP2_SHIFT      17
+#define SYSREG_OP2_MASK       0x7
+#define SYSREG_OP2(sysreg)    ((sysreg >> SYSREG_OP2_SHIFT) & SYSREG_OP2_MASK)
+
 #define SYSREG(op0, op1, crn, crm, op2) \
-    ((op0 << 20) | (op2 << 17) | (op1 << 14) | (crn << 10) | (crm << 1))
-#define SYSREG_MASK           SYSREG(0x3, 0x7, 0xf, 0xf, 0x7)
+    ((op0 << SYSREG_OP0_SHIFT) | \
+     (op1 << SYSREG_OP1_SHIFT) | \
+     (crn << SYSREG_CRN_SHIFT) | \
+     (crm << SYSREG_CRM_SHIFT) | \
+     (op2 << SYSREG_OP2_SHIFT))
+#define SYSREG_MASK \
+    SYSREG(SYSREG_OP0_MASK, \
+           SYSREG_OP1_MASK, \
+           SYSREG_CRN_MASK, \
+           SYSREG_CRM_MASK, \
+           SYSREG_OP2_MASK)
 #define SYSREG_OSLAR_EL1      SYSREG(2, 0, 1, 0, 4)
 #define SYSREG_OSLSR_EL1      SYSREG(2, 0, 1, 1, 4)
 #define SYSREG_OSDLR_EL1      SYSREG(2, 0, 1, 3, 4)
@@ -54,6 +79,33 @@
 #define SYSREG_PMCEID1_EL0    SYSREG(3, 3, 9, 12, 7)
 #define SYSREG_PMCCNTR_EL0    SYSREG(3, 3, 9, 13, 0)
 #define SYSREG_PMCCFILTR_EL0  SYSREG(3, 3, 14, 15, 7)
+
+#define SYSREG_ICC_AP0R0_EL1     SYSREG(3, 0, 12, 8, 4)
+#define SYSREG_ICC_AP0R1_EL1     SYSREG(3, 0, 12, 8, 5)
+#define SYSREG_ICC_AP0R2_EL1     SYSREG(3, 0, 12, 8, 6)
+#define SYSREG_ICC_AP0R3_EL1     SYSREG(3, 0, 12, 8, 7)
+#define SYSREG_ICC_AP1R0_EL1     SYSREG(3, 0, 12, 9, 0)
+#define SYSREG_ICC_AP1R1_EL1     SYSREG(3, 0, 12, 9, 1)
+#define SYSREG_ICC_AP1R2_EL1     SYSREG(3, 0, 12, 9, 2)
+#define SYSREG_ICC_AP1R3_EL1     SYSREG(3, 0, 12, 9, 3)
+#define SYSREG_ICC_ASGI1R_EL1    SYSREG(3, 0, 12, 11, 6)
+#define SYSREG_ICC_BPR0_EL1      SYSREG(3, 0, 12, 8, 3)
+#define SYSREG_ICC_BPR1_EL1      SYSREG(3, 0, 12, 12, 3)
+#define SYSREG_ICC_CTLR_EL1      SYSREG(3, 0, 12, 12, 4)
+#define SYSREG_ICC_DIR_EL1       SYSREG(3, 0, 12, 11, 1)
+#define SYSREG_ICC_EOIR0_EL1     SYSREG(3, 0, 12, 8, 1)
+#define SYSREG_ICC_EOIR1_EL1     SYSREG(3, 0, 12, 12, 1)
+#define SYSREG_ICC_HPPIR0_EL1    SYSREG(3, 0, 12, 8, 2)
+#define SYSREG_ICC_HPPIR1_EL1    SYSREG(3, 0, 12, 12, 2)
+#define SYSREG_ICC_IAR0_EL1      SYSREG(3, 0, 12, 8, 0)
+#define SYSREG_ICC_IAR1_EL1      SYSREG(3, 0, 12, 12, 0)
+#define SYSREG_ICC_IGRPEN0_EL1   SYSREG(3, 0, 12, 12, 6)
+#define SYSREG_ICC_IGRPEN1_EL1   SYSREG(3, 0, 12, 12, 7)
+#define SYSREG_ICC_PMR_EL1       SYSREG(3, 0, 4, 6, 0)
+#define SYSREG_ICC_RPR_EL1       SYSREG(3, 0, 12, 11, 3)
+#define SYSREG_ICC_SGI0R_EL1     SYSREG(3, 0, 12, 11, 7)
+#define SYSREG_ICC_SGI1R_EL1     SYSREG(3, 0, 12, 11, 5)
+#define SYSREG_ICC_SRE_EL1       SYSREG(3, 0, 12, 12, 5)
 
 #define WFX_IS_WFE (1 << 0)
 
@@ -540,7 +592,7 @@ int hvf_arch_init_vcpu(CPUState *cpu)
     hv_return_t ret;
     int i;
 
-    env->aarch64 = 1;
+    env->aarch64 = true;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(arm_cpu->gt_cntfrq_hz));
 
     /* Allocate enough space for our sysreg sync */
@@ -653,7 +705,7 @@ static bool hvf_handle_psci_call(CPUState *cpu)
 
     switch (param[0]) {
     case QEMU_PSCI_0_2_FN_PSCI_VERSION:
-        ret = QEMU_PSCI_0_2_RET_VERSION_0_2;
+        ret = QEMU_PSCI_VERSION_1_1;
         break;
     case QEMU_PSCI_0_2_FN_MIGRATE_INFO_TYPE:
         ret = QEMU_PSCI_0_2_RET_TOS_MIGRATION_NOT_REQUIRED; /* No trusted OS */
@@ -721,12 +773,83 @@ static bool hvf_handle_psci_call(CPUState *cpu)
     case QEMU_PSCI_0_2_FN_MIGRATE:
         ret = QEMU_PSCI_RET_NOT_SUPPORTED;
         break;
+    case QEMU_PSCI_1_0_FN_PSCI_FEATURES:
+        switch (param[1]) {
+        case QEMU_PSCI_0_2_FN_PSCI_VERSION:
+        case QEMU_PSCI_0_2_FN_MIGRATE_INFO_TYPE:
+        case QEMU_PSCI_0_2_FN_AFFINITY_INFO:
+        case QEMU_PSCI_0_2_FN64_AFFINITY_INFO:
+        case QEMU_PSCI_0_2_FN_SYSTEM_RESET:
+        case QEMU_PSCI_0_2_FN_SYSTEM_OFF:
+        case QEMU_PSCI_0_1_FN_CPU_ON:
+        case QEMU_PSCI_0_2_FN_CPU_ON:
+        case QEMU_PSCI_0_2_FN64_CPU_ON:
+        case QEMU_PSCI_0_1_FN_CPU_OFF:
+        case QEMU_PSCI_0_2_FN_CPU_OFF:
+        case QEMU_PSCI_0_1_FN_CPU_SUSPEND:
+        case QEMU_PSCI_0_2_FN_CPU_SUSPEND:
+        case QEMU_PSCI_0_2_FN64_CPU_SUSPEND:
+        case QEMU_PSCI_1_0_FN_PSCI_FEATURES:
+            ret = 0;
+            break;
+        case QEMU_PSCI_0_1_FN_MIGRATE:
+        case QEMU_PSCI_0_2_FN_MIGRATE:
+        default:
+            ret = QEMU_PSCI_RET_NOT_SUPPORTED;
+        }
+        break;
     default:
         return false;
     }
 
     env->xregs[0] = ret;
     return true;
+}
+
+static bool is_id_sysreg(uint32_t reg)
+{
+    return SYSREG_OP0(reg) == 3 &&
+           SYSREG_OP1(reg) == 0 &&
+           SYSREG_CRN(reg) == 0 &&
+           SYSREG_CRM(reg) >= 1 &&
+           SYSREG_CRM(reg) < 8;
+}
+
+static uint32_t hvf_reg2cp_reg(uint32_t reg)
+{
+    return ENCODE_AA64_CP_REG(CP_REG_ARM64_SYSREG_CP,
+                              (reg >> SYSREG_CRN_SHIFT) & SYSREG_CRN_MASK,
+                              (reg >> SYSREG_CRM_SHIFT) & SYSREG_CRM_MASK,
+                              (reg >> SYSREG_OP0_SHIFT) & SYSREG_OP0_MASK,
+                              (reg >> SYSREG_OP1_SHIFT) & SYSREG_OP1_MASK,
+                              (reg >> SYSREG_OP2_SHIFT) & SYSREG_OP2_MASK);
+}
+
+static bool hvf_sysreg_read_cp(CPUState *cpu, uint32_t reg, uint64_t *val)
+{
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+    const ARMCPRegInfo *ri;
+
+    ri = get_arm_cp_reginfo(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
+    if (ri) {
+        if (ri->accessfn) {
+            if (ri->accessfn(env, ri, true) != CP_ACCESS_OK) {
+                return false;
+            }
+        }
+        if (ri->type & ARM_CP_CONST) {
+            *val = ri->resetvalue;
+        } else if (ri->readfn) {
+            *val = ri->readfn(env, ri);
+        } else {
+            *val = CPREG_FIELD64(env, ri);
+        }
+        trace_hvf_vgic_read(ri->name, *val);
+        return true;
+    }
+
+    return false;
 }
 
 static int hvf_sysreg_read(CPUState *cpu, uint32_t reg, uint32_t rt)
@@ -780,24 +903,59 @@ static int hvf_sysreg_read(CPUState *cpu, uint32_t reg, uint32_t rt)
     case SYSREG_OSDLR_EL1:
         /* Dummy register */
         break;
+    case SYSREG_ICC_AP0R0_EL1:
+    case SYSREG_ICC_AP0R1_EL1:
+    case SYSREG_ICC_AP0R2_EL1:
+    case SYSREG_ICC_AP0R3_EL1:
+    case SYSREG_ICC_AP1R0_EL1:
+    case SYSREG_ICC_AP1R1_EL1:
+    case SYSREG_ICC_AP1R2_EL1:
+    case SYSREG_ICC_AP1R3_EL1:
+    case SYSREG_ICC_ASGI1R_EL1:
+    case SYSREG_ICC_BPR0_EL1:
+    case SYSREG_ICC_BPR1_EL1:
+    case SYSREG_ICC_DIR_EL1:
+    case SYSREG_ICC_EOIR0_EL1:
+    case SYSREG_ICC_EOIR1_EL1:
+    case SYSREG_ICC_HPPIR0_EL1:
+    case SYSREG_ICC_HPPIR1_EL1:
+    case SYSREG_ICC_IAR0_EL1:
+    case SYSREG_ICC_IAR1_EL1:
+    case SYSREG_ICC_IGRPEN0_EL1:
+    case SYSREG_ICC_IGRPEN1_EL1:
+    case SYSREG_ICC_PMR_EL1:
+    case SYSREG_ICC_SGI0R_EL1:
+    case SYSREG_ICC_SGI1R_EL1:
+    case SYSREG_ICC_SRE_EL1:
+    case SYSREG_ICC_CTLR_EL1:
+        /* Call the TCG sysreg handler. This is only safe for GICv3 regs. */
+        if (!hvf_sysreg_read_cp(cpu, reg, &val)) {
+            hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
+        }
+        break;
     default:
+        if (is_id_sysreg(reg)) {
+            /* ID system registers read as RES0 */
+            val = 0;
+            break;
+        }
         cpu_synchronize_state(cpu);
         trace_hvf_unhandled_sysreg_read(env->pc, reg,
-                                        (reg >> 20) & 0x3,
-                                        (reg >> 14) & 0x7,
-                                        (reg >> 10) & 0xf,
-                                        (reg >> 1) & 0xf,
-                                        (reg >> 17) & 0x7);
+                                        SYSREG_OP0(reg),
+                                        SYSREG_OP1(reg),
+                                        SYSREG_CRN(reg),
+                                        SYSREG_CRM(reg),
+                                        SYSREG_OP2(reg));
         hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
         return 1;
     }
 
     trace_hvf_sysreg_read(reg,
-                          (reg >> 20) & 0x3,
-                          (reg >> 14) & 0x7,
-                          (reg >> 10) & 0xf,
-                          (reg >> 1) & 0xf,
-                          (reg >> 17) & 0x7,
+                          SYSREG_OP0(reg),
+                          SYSREG_OP1(reg),
+                          SYSREG_CRN(reg),
+                          SYSREG_CRM(reg),
+                          SYSREG_OP2(reg),
                           val);
     hvf_set_reg(cpu, rt, val);
 
@@ -880,17 +1038,44 @@ static void pmswinc_write(CPUARMState *env, uint64_t value)
     }
 }
 
+static bool hvf_sysreg_write_cp(CPUState *cpu, uint32_t reg, uint64_t val)
+{
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+    const ARMCPRegInfo *ri;
+
+    ri = get_arm_cp_reginfo(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
+
+    if (ri) {
+        if (ri->accessfn) {
+            if (ri->accessfn(env, ri, false) != CP_ACCESS_OK) {
+                return false;
+            }
+        }
+        if (ri->writefn) {
+            ri->writefn(env, ri, val);
+        } else {
+            CPREG_FIELD64(env, ri) = val;
+        }
+
+        trace_hvf_vgic_write(ri->name, val);
+        return true;
+    }
+
+    return false;
+}
+
 static int hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
 {
     ARMCPU *arm_cpu = ARM_CPU(cpu);
     CPUARMState *env = &arm_cpu->env;
 
     trace_hvf_sysreg_write(reg,
-                           (reg >> 20) & 0x3,
-                           (reg >> 14) & 0x7,
-                           (reg >> 10) & 0xf,
-                           (reg >> 1) & 0xf,
-                           (reg >> 17) & 0x7,
+                           SYSREG_OP0(reg),
+                           SYSREG_OP1(reg),
+                           SYSREG_CRN(reg),
+                           SYSREG_CRM(reg),
+                           SYSREG_OP2(reg),
                            val);
 
     switch (reg) {
@@ -914,8 +1099,8 @@ static int hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
             }
         }
 
-        env->cp15.c9_pmcr &= ~PMCR_WRITEABLE_MASK;
-        env->cp15.c9_pmcr |= (val & PMCR_WRITEABLE_MASK);
+        env->cp15.c9_pmcr &= ~PMCR_WRITABLE_MASK;
+        env->cp15.c9_pmcr |= (val & PMCR_WRITABLE_MASK);
 
         pmu_op_finish(env);
         break;
@@ -957,14 +1142,44 @@ static int hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
     case SYSREG_OSDLR_EL1:
         /* Dummy register */
         break;
+    case SYSREG_ICC_AP0R0_EL1:
+    case SYSREG_ICC_AP0R1_EL1:
+    case SYSREG_ICC_AP0R2_EL1:
+    case SYSREG_ICC_AP0R3_EL1:
+    case SYSREG_ICC_AP1R0_EL1:
+    case SYSREG_ICC_AP1R1_EL1:
+    case SYSREG_ICC_AP1R2_EL1:
+    case SYSREG_ICC_AP1R3_EL1:
+    case SYSREG_ICC_ASGI1R_EL1:
+    case SYSREG_ICC_BPR0_EL1:
+    case SYSREG_ICC_BPR1_EL1:
+    case SYSREG_ICC_CTLR_EL1:
+    case SYSREG_ICC_DIR_EL1:
+    case SYSREG_ICC_EOIR0_EL1:
+    case SYSREG_ICC_EOIR1_EL1:
+    case SYSREG_ICC_HPPIR0_EL1:
+    case SYSREG_ICC_HPPIR1_EL1:
+    case SYSREG_ICC_IAR0_EL1:
+    case SYSREG_ICC_IAR1_EL1:
+    case SYSREG_ICC_IGRPEN0_EL1:
+    case SYSREG_ICC_IGRPEN1_EL1:
+    case SYSREG_ICC_PMR_EL1:
+    case SYSREG_ICC_SGI0R_EL1:
+    case SYSREG_ICC_SGI1R_EL1:
+    case SYSREG_ICC_SRE_EL1:
+        /* Call the TCG sysreg handler. This is only safe for GICv3 regs. */
+        if (!hvf_sysreg_write_cp(cpu, reg, val)) {
+            hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
+        }
+        break;
     default:
         cpu_synchronize_state(cpu);
         trace_hvf_unhandled_sysreg_write(env->pc, reg,
-                                         (reg >> 20) & 0x3,
-                                         (reg >> 14) & 0x7,
-                                         (reg >> 10) & 0xf,
-                                         (reg >> 1) & 0xf,
-                                         (reg >> 17) & 0x7);
+                                         SYSREG_OP0(reg),
+                                         SYSREG_OP1(reg),
+                                         SYSREG_CRN(reg),
+                                         SYSREG_CRM(reg),
+                                         SYSREG_OP2(reg));
         hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
         return 1;
     }
@@ -1137,7 +1352,7 @@ int hvf_vcpu_exec(CPUState *cpu)
         /* we got kicked, no exit to process */
         return 0;
     default:
-        assert(0);
+        g_assert_not_reached();
     }
 
     hvf_sync_vtimer(cpu);

@@ -18,13 +18,10 @@
 #define HW_I386_X86_H
 
 #include "exec/hwaddr.h"
-#include "qemu/notify.h"
 
-#include "hw/i386/topology.h"
 #include "hw/boards.h"
-#include "hw/nmi.h"
+#include "hw/intc/ioapic.h"
 #include "hw/isa/isa.h"
-#include "hw/i386/ioapic.h"
 #include "qom/object.h"
 
 struct X86MachineClass {
@@ -35,8 +32,6 @@ struct X86MachineClass {
 
     /* TSC rate migration: */
     bool save_tsc_khz;
-    /* Enables contiguous-apic-ID mode */
-    bool compat_apic_id_mode;
     /* use DMA capable linuxboot option rom */
     bool fwcfg_dma_enabled;
 };
@@ -58,6 +53,9 @@ struct X86MachineState {
     /* RAM information (sizes, addresses, configuration): */
     ram_addr_t below_4g_mem_size, above_4g_mem_size;
 
+    /* Start address of the initial RAM above 4G */
+    uint64_t above_4g_mem_start;
+
     /* CPU and apic information: */
     bool apic_xrupt_override;
     unsigned pci_irq_mask;
@@ -67,6 +65,8 @@ struct X86MachineState {
 
     OnOffAuto smm;
     OnOffAuto acpi;
+    OnOffAuto pit;
+    OnOffAuto pic;
 
     char *oem_id;
     char *oem_table_id;
@@ -86,14 +86,14 @@ struct X86MachineState {
 
 #define X86_MACHINE_SMM              "smm"
 #define X86_MACHINE_ACPI             "acpi"
+#define X86_MACHINE_PIT              "pit"
+#define X86_MACHINE_PIC              "pic"
 #define X86_MACHINE_OEM_ID           "x-oem-id"
 #define X86_MACHINE_OEM_TABLE_ID     "x-oem-table-id"
 #define X86_MACHINE_BUS_LOCK_RATELIMIT  "bus-lock-ratelimit"
 
 #define TYPE_X86_MACHINE   MACHINE_TYPE_NAME("x86")
 OBJECT_DECLARE_TYPE(X86MachineState, X86MachineClass, X86_MACHINE)
-
-void init_topo_info(X86CPUTopoInfo *topo_info, const X86MachineState *x86ms);
 
 uint32_t x86_cpu_apic_id_from_index(X86MachineState *pcms,
                                     unsigned int cpu_index);
@@ -128,7 +128,6 @@ bool x86_machine_is_acpi_enabled(const X86MachineState *x86ms);
 
 /* Global System Interrupts */
 
-#define GSI_NUM_PINS IOAPIC_NUM_PINS
 #define ACPI_BUILD_PCI_IRQS ((1<<5) | (1<<9) | (1<<10) | (1<<11))
 
 typedef struct GSIState {
@@ -141,5 +140,8 @@ qemu_irq x86_allocate_cpu_irq(void);
 void gsi_handler(void *opaque, int n, int level);
 void ioapic_init_gsi(GSIState *gsi_state, const char *parent_name);
 DeviceState *ioapic_init_secondary(GSIState *gsi_state);
+
+/* pc_sysfw.c */
+void x86_firmware_configure(void *ptr, int size);
 
 #endif

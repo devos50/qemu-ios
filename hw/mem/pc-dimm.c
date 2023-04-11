@@ -216,6 +216,11 @@ static void pc_dimm_realize(DeviceState *dev, Error **errp)
 static void pc_dimm_unrealize(DeviceState *dev)
 {
     PCDIMMDevice *dimm = PC_DIMM(dev);
+    PCDIMMDeviceClass *ddc = PC_DIMM_GET_CLASS(dimm);
+
+    if (ddc->unrealize) {
+        ddc->unrealize(dimm);
+    }
 
     host_memory_backend_set_mapped(dimm->hostmem, false);
 }
@@ -247,7 +252,6 @@ static void pc_dimm_md_fill_device_info(const MemoryDeviceState *md,
     const DeviceState *dev = DEVICE(md);
 
     if (dev->id) {
-        di->has_id = true;
         di->id = g_strdup(dev->id);
     }
     di->hotplugged = dev->hotplugged;
@@ -286,7 +290,7 @@ static void pc_dimm_class_init(ObjectClass *oc, void *data)
     mdc->fill_device_info = pc_dimm_md_fill_device_info;
 }
 
-static TypeInfo pc_dimm_info = {
+static const TypeInfo pc_dimm_info = {
     .name          = TYPE_PC_DIMM,
     .parent        = TYPE_DEVICE,
     .instance_size = sizeof(PCDIMMDevice),

@@ -31,7 +31,6 @@
 #include "net/net.h"
 #include "net/checksum.h"
 
-#include "hw/hw.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/stream.h"
@@ -524,7 +523,7 @@ static uint64_t enet_read(void *opaque, hwaddr addr, unsigned size)
             if (addr < ARRAY_SIZE(s->regs)) {
                 r = s->regs[addr];
             }
-            DENET(qemu_log("%s addr=" TARGET_FMT_plx " v=%x\n",
+            DENET(qemu_log("%s addr=" HWADDR_FMT_plx " v=%x\n",
                             __func__, addr * 4, r));
             break;
     }
@@ -630,7 +629,7 @@ static void enet_write(void *opaque, hwaddr addr,
             break;
 
         default:
-            DENET(qemu_log("%s addr=" TARGET_FMT_plx " v=%x\n",
+            DENET(qemu_log("%s addr=" HWADDR_FMT_plx " v=%x\n",
                            __func__, addr * 4, (unsigned)value));
             if (addr < ARRAY_SIZE(s->regs)) {
                 s->regs[addr] = value;

@@ -67,7 +67,7 @@ cryptodev_vhost_user_get_vhost(
 {
     CryptoDevBackendVhostUser *s =
                       CRYPTODEV_BACKEND_VHOST_USER(b);
-    assert(cc->type == CRYPTODEV_BACKEND_TYPE_VHOST_USER);
+    assert(cc->type == QCRYPTODEV_BACKEND_TYPE_VHOST_USER);
     assert(queue < MAX_CRYPTO_QUEUE_NUM);
 
     return s->vhost_crypto[queue];
@@ -198,12 +198,11 @@ static void cryptodev_vhost_user_init(
     s->opened = true;
 
     for (i = 0; i < queues; i++) {
-        cc = cryptodev_backend_new_client(
-                  "cryptodev-vhost-user", NULL);
+        cc = cryptodev_backend_new_client();
         cc->info_str = g_strdup_printf("cryptodev-vhost-user%zu to %s ",
                                        i, chr->label);
         cc->queue_index = i;
-        cc->type = CRYPTODEV_BACKEND_TYPE_VHOST_USER;
+        cc->type = QCRYPTODEV_BACKEND_TYPE_VHOST_USER;
 
         backend->conf.peers.ccs[i] = cc;
 
@@ -222,9 +221,9 @@ static void cryptodev_vhost_user_init(
                      cryptodev_vhost_user_event, NULL, s, NULL, true);
 
     backend->conf.crypto_services =
-                         1u << VIRTIO_CRYPTO_SERVICE_CIPHER |
-                         1u << VIRTIO_CRYPTO_SERVICE_HASH |
-                         1u << VIRTIO_CRYPTO_SERVICE_MAC;
+                         1u << QCRYPTODEV_BACKEND_SERVICE_CIPHER |
+                         1u << QCRYPTODEV_BACKEND_SERVICE_HASH |
+                         1u << QCRYPTODEV_BACKEND_SERVICE_MAC;
     backend->conf.cipher_algo_l = 1u << VIRTIO_CRYPTO_CIPHER_AES_CBC;
     backend->conf.hash_algo = 1u << VIRTIO_CRYPTO_HASH_SHA1;
 
@@ -259,15 +258,61 @@ static int64_t cryptodev_vhost_user_sym_create_session(
     return -1;
 }
 
-static int cryptodev_vhost_user_sym_close_session(
+static int cryptodev_vhost_user_create_session(
+           CryptoDevBackend *backend,
+           CryptoDevBackendSessionInfo *sess_info,
+           uint32_t queue_index,
+           CryptoDevCompletionFunc cb,
+           void *opaque)
+{
+    uint32_t op_code = sess_info->op_code;
+    CryptoDevBackendSymSessionInfo *sym_sess_info;
+    int64_t ret;
+    Error *local_error = NULL;
+    int status;
+
+    switch (op_code) {
+    case VIRTIO_CRYPTO_CIPHER_CREATE_SESSION:
+    case VIRTIO_CRYPTO_HASH_CREATE_SESSION:
+    case VIRTIO_CRYPTO_MAC_CREATE_SESSION:
+    case VIRTIO_CRYPTO_AEAD_CREATE_SESSION:
+        sym_sess_info = &sess_info->u.sym_sess_info;
+        ret = cryptodev_vhost_user_sym_create_session(backend, sym_sess_info,
+                   queue_index, &local_error);
+        break;
+
+    default:
+        error_setg(&local_error, "Unsupported opcode :%" PRIu32 "",
+                   sess_info->op_code);
+        return -VIRTIO_CRYPTO_NOTSUPP;
+    }
+
+    if (local_error) {
+        error_report_err(local_error);
+    }
+    if (ret < 0) {
+        status = -VIRTIO_CRYPTO_ERR;
+    } else {
+        sess_info->session_id = ret;
+        status = VIRTIO_CRYPTO_OK;
+    }
+    if (cb) {
+        cb(opaque, status);
+    }
+    return 0;
+}
+
+static int cryptodev_vhost_user_close_session(
            CryptoDevBackend *backend,
            uint64_t session_id,
-           uint32_t queue_index, Error **errp)
+           uint32_t queue_index,
+           CryptoDevCompletionFunc cb,
+           void *opaque)
 {
     CryptoDevBackendClient *cc =
                   backend->conf.peers.ccs[queue_index];
     CryptoDevBackendVhost *vhost_crypto;
-    int ret;
+    int ret = -1, status;
 
     vhost_crypto = cryptodev_vhost_user_get_vhost(cc, backend, queue_index);
     if (vhost_crypto) {
@@ -275,12 +320,17 @@ static int cryptodev_vhost_user_sym_close_session(
         ret = dev->vhost_ops->vhost_crypto_close_session(dev,
                                                          session_id);
         if (ret < 0) {
-            return -1;
+            status = -VIRTIO_CRYPTO_ERR;
         } else {
-            return 0;
+            status = VIRTIO_CRYPTO_OK;
         }
+    } else {
+        status = -VIRTIO_CRYPTO_NOTSUPP;
     }
-    return -1;
+    if (cb) {
+        cb(opaque, status);
+    }
+    return 0;
 }
 
 static void cryptodev_vhost_user_cleanup(
@@ -313,7 +363,7 @@ static void cryptodev_vhost_user_set_chardev(Object *obj,
                       CRYPTODEV_BACKEND_VHOST_USER(obj);
 
     if (s->opened) {
-        error_setg(errp, QERR_PERMISSION_DENIED);
+        error_setg(errp, "Property 'chardev' can no longer be set");
     } else {
         g_free(s->chr_name);
         s->chr_name = g_strdup(value);
@@ -351,9 +401,9 @@ cryptodev_vhost_user_class_init(ObjectClass *oc, void *data)
 
     bc->init = cryptodev_vhost_user_init;
     bc->cleanup = cryptodev_vhost_user_cleanup;
-    bc->create_session = cryptodev_vhost_user_sym_create_session;
-    bc->close_session = cryptodev_vhost_user_sym_close_session;
-    bc->do_sym_op = NULL;
+    bc->create_session = cryptodev_vhost_user_create_session;
+    bc->close_session = cryptodev_vhost_user_close_session;
+    bc->do_op = NULL;
 
     object_class_property_add_str(oc, "chardev",
                                   cryptodev_vhost_user_get_chardev,

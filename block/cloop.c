@@ -24,6 +24,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "block/block-io.h"
 #include "block/block_int.h"
 #include "qemu/module.h"
 #include "qemu/bswap.h"
@@ -71,14 +72,13 @@ static int cloop_open(BlockDriverState *bs, QDict *options, int flags,
         return ret;
     }
 
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
-                               BDRV_CHILD_IMAGE, false, errp);
-    if (!bs->file) {
-        return -EINVAL;
+    ret = bdrv_open_file_child(NULL, options, "file", bs, errp);
+    if (ret < 0) {
+        return ret;
     }
 
     /* read header */
-    ret = bdrv_pread(bs->file, 128, &s->block_size, 4);
+    ret = bdrv_pread(bs->file, 128, 4, &s->block_size, 0);
     if (ret < 0) {
         return ret;
     }
@@ -104,7 +104,7 @@ static int cloop_open(BlockDriverState *bs, QDict *options, int flags,
         return -EINVAL;
     }
 
-    ret = bdrv_pread(bs->file, 128 + 4, &s->n_blocks, 4);
+    ret = bdrv_pread(bs->file, 128 + 4, 4, &s->n_blocks, 0);
     if (ret < 0) {
         return ret;
     }
@@ -135,7 +135,7 @@ static int cloop_open(BlockDriverState *bs, QDict *options, int flags,
         return -ENOMEM;
     }
 
-    ret = bdrv_pread(bs->file, 128 + 4 + 4, s->offsets, offsets_size);
+    ret = bdrv_pread(bs->file, 128 + 4 + 4, offsets_size, s->offsets, 0);
     if (ret < 0) {
         goto fail;
     }
@@ -220,9 +220,9 @@ static inline int cloop_read_block(BlockDriverState *bs, int block_num)
         int ret;
         uint32_t bytes = s->offsets[block_num + 1] - s->offsets[block_num];
 
-        ret = bdrv_pread(bs->file, s->offsets[block_num],
-                         s->compressed_block, bytes);
-        if (ret != bytes) {
+        ret = bdrv_pread(bs->file, s->offsets[block_num], bytes,
+                         s->compressed_block, 0);
+        if (ret < 0) {
             return -1;
         }
 

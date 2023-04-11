@@ -84,7 +84,7 @@ class TestDirtyBitmapPostcopyMigration(iotests.QMPTestCase):
                 e['vm'] = 'SRC'
             for e in self.vm_b_events:
                 e['vm'] = 'DST'
-            events = (self.vm_a_events + self.vm_b_events)
+            events = self.vm_a_events + self.vm_b_events
             events = [(e['timestamp']['seconds'],
                        e['timestamp']['microseconds'],
                        e['vm'],
@@ -272,4 +272,5 @@ class TestDirtyBitmapPostcopyMigration(iotests.QMPTestCase):
 
 
 if __name__ == '__main__':
-    iotests.main(supported_fmts=['qcow2'])
+    iotests.main(supported_fmts=['qcow2'],
+                 unsupported_imgopts=['compat'])

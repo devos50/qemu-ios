@@ -16,10 +16,11 @@
  *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _TARGET_ARCH_CPU_H_
-#define _TARGET_ARCH_CPU_H_
+#ifndef TARGET_ARCH_CPU_H
+#define TARGET_ARCH_CPU_H
 
 #include "target_arch.h"
+#include "signal-common.h"
 
 #define TARGET_DEFAULT_CPU_MODEL "qemu32"
 
@@ -115,55 +116,45 @@ static inline void target_cpu_loop(CPUX86State *env)
         process_queued_cpu_work(cs);
 
         switch (trapnr) {
-        case 0x80:
+        case 0x80: {
             /* syscall from int $0x80 */
-            if (bsd_type == target_freebsd) {
-                abi_ulong params = (abi_ulong) env->regs[R_ESP] +
-                    sizeof(int32_t);
-                int32_t syscall_nr = env->regs[R_EAX];
-                int32_t arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8;
+            abi_ulong params = (abi_ulong) env->regs[R_ESP] +
+                sizeof(int32_t);
+            int32_t syscall_nr = env->regs[R_EAX];
+            int32_t arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8;
 
-                if (syscall_nr == TARGET_FREEBSD_NR_syscall) {
-                    get_user_s32(syscall_nr, params);
-                    params += sizeof(int32_t);
-                } else if (syscall_nr == TARGET_FREEBSD_NR___syscall) {
-                    get_user_s32(syscall_nr, params);
-                    params += sizeof(int64_t);
-                }
-                get_user_s32(arg1, params);
+            if (syscall_nr == TARGET_FREEBSD_NR_syscall) {
+                get_user_s32(syscall_nr, params);
                 params += sizeof(int32_t);
-                get_user_s32(arg2, params);
-                params += sizeof(int32_t);
-                get_user_s32(arg3, params);
-                params += sizeof(int32_t);
-                get_user_s32(arg4, params);
-                params += sizeof(int32_t);
-                get_user_s32(arg5, params);
-                params += sizeof(int32_t);
-                get_user_s32(arg6, params);
-                params += sizeof(int32_t);
-                get_user_s32(arg7, params);
-                params += sizeof(int32_t);
-                get_user_s32(arg8, params);
-                env->regs[R_EAX] = do_freebsd_syscall(env,
-                                                      syscall_nr,
-                                                      arg1,
-                                                      arg2,
-                                                      arg3,
-                                                      arg4,
-                                                      arg5,
-                                                      arg6,
-                                                      arg7,
-                                                      arg8);
-            } else { /* if (bsd_type == target_openbsd) */
-                env->regs[R_EAX] = do_openbsd_syscall(env,
-                                                      env->regs[R_EAX],
-                                                      env->regs[R_EBX],
-                                                      env->regs[R_ECX],
-                                                      env->regs[R_EDX],
-                                                      env->regs[R_ESI],
-                                                      env->regs[R_EDI],
-                                                      env->regs[R_EBP]);
+            } else if (syscall_nr == TARGET_FREEBSD_NR___syscall) {
+                get_user_s32(syscall_nr, params);
+                params += sizeof(int64_t);
+            }
+            get_user_s32(arg1, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg2, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg3, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg4, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg5, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg6, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg7, params);
+            params += sizeof(int32_t);
+            get_user_s32(arg8, params);
+            env->regs[R_EAX] = do_freebsd_syscall(env,
+                                                  syscall_nr,
+                                                  arg1,
+                                                  arg2,
+                                                  arg3,
+                                                  arg4,
+                                                  arg5,
+                                                  arg6,
+                                                  arg7,
+                                                  arg8);
             }
             if (((abi_ulong)env->regs[R_EAX]) >= (abi_ulong)(-515)) {
                 env->regs[R_EAX] = -env->regs[R_EAX];
@@ -199,9 +190,9 @@ static inline void target_cpu_clone_regs(CPUX86State *env, target_ulong newsp)
     env->regs[R_EAX] = 0;
 }
 
-static inline void target_cpu_reset(CPUArchState *cpu)
+static inline void target_cpu_reset(CPUArchState *env)
 {
-    cpu_reset(env_cpu(cpu));
+    cpu_reset(env_cpu(env));
 }
 
-#endif /* ! _TARGET_ARCH_CPU_H_ */
+#endif /* TARGET_ARCH_CPU_H */

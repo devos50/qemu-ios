@@ -32,7 +32,6 @@
 
 #include "qemu/osdep.h"
 #include "hw/irq.h"
-#include "hw/ppc/mac.h"
 #include "hw/pci/pci.h"
 #include "hw/ppc/openpic.h"
 #include "hw/ppc/ppc_e500.h"
@@ -729,7 +728,7 @@ static void openpic_tmr_set_tmr(OpenPICTimer *tmr, uint32_t val, bool enabled)
 }
 
 /*
- * Returns the currrent tccr value, i.e., timer value (in clocks) with
+ * Returns the current tccr value, i.e., timer value (in clocks) with
  * appropriate TOG.
  */
 static uint64_t openpic_tmr_get_timer(OpenPICTimer *tmr)

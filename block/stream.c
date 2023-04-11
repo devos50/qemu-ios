@@ -16,7 +16,6 @@
 #include "block/block_int.h"
 #include "block/blockjob_int.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qerror.h"
 #include "qapi/qmp/qdict.h"
 #include "qemu/ratelimit.h"
 #include "sysemu/block-backend.h"
@@ -33,6 +32,7 @@ enum {
 
 typedef struct StreamBlockJob {
     BlockJob common;
+    BlockBackend *blk;
     BlockDriverState *base_overlay; /* COW overlay (stream from this) */
     BlockDriverState *above_base;   /* Node directly above the base */
     BlockDriverState *cor_filter_bs;
@@ -63,6 +63,15 @@ static int stream_prepare(Job *job)
     bdrv_cor_filter_drop(s->cor_filter_bs);
     s->cor_filter_bs = NULL;
 
+    /*
+     * bdrv_set_backing_hd() requires that unfiltered_bs is drained. Drain
+     * already here and use bdrv_set_backing_hd_drained() instead because
+     * the polling during drained_begin() might change the graph, and if we do
+     * this only later, we may end up working with the wrong base node (or it
+     * might even have gone away by the time we want to use it).
+     */
+    bdrv_drained_begin(unfiltered_bs);
+
     base = bdrv_filter_or_cow_bs(s->above_base);
     unfiltered_base = bdrv_skip_filters(base);
 
@@ -74,31 +83,42 @@ static int stream_prepare(Job *job)
                 base_fmt = unfiltered_base->drv->format_name;
             }
         }
-        bdrv_set_backing_hd(unfiltered_bs, base, &local_err);
+
+        bdrv_set_backing_hd_drained(unfiltered_bs, base, &local_err);
+
+        /*
+         * This call will do I/O, so the graph can change again from here on.
+         * We have already completed the graph change, so we are not in danger
+         * of operating on the wrong node any more if this happens.
+         */
         ret = bdrv_change_backing_file(unfiltered_bs, base_id, base_fmt, false);
         if (local_err) {
             error_report_err(local_err);
-            return -EPERM;
+            ret = -EPERM;
+            goto out;
         }
     }
 
+out:
+    bdrv_drained_end(unfiltered_bs);
     return ret;
 }
 
 static void stream_clean(Job *job)
 {
     StreamBlockJob *s = container_of(job, StreamBlockJob, common.job);
-    BlockJob *bjob = &s->common;
 
     if (s->cor_filter_bs) {
         bdrv_cor_filter_drop(s->cor_filter_bs);
         s->cor_filter_bs = NULL;
     }
 
+    blk_unref(s->blk);
+    s->blk = NULL;
+
     /* Reopen the image back in read-only mode if necessary */
     if (s->bs_read_only) {
         /* Give up write permissions before making it read-only */
-        blk_set_perm(bjob->blk, 0, BLK_PERM_ALL, &error_abort);
         bdrv_reopen_set_read_only(s->target_bs, true, NULL);
     }
 
@@ -108,7 +128,6 @@ static void stream_clean(Job *job)
 static int coroutine_fn stream_run(Job *job, Error **errp)
 {
     StreamBlockJob *s = container_of(job, StreamBlockJob, common.job);
-    BlockBackend *blk = s->common.blk;
     BlockDriverState *unfiltered_bs = bdrv_skip_filters(s->target_bs);
     int64_t len;
     int64_t offset = 0;
@@ -121,9 +140,11 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
         return 0;
     }
 
-    len = bdrv_getlength(s->target_bs);
-    if (len < 0) {
-        return len;
+    WITH_GRAPH_RDLOCK_GUARD() {
+        len = bdrv_co_getlength(s->target_bs);
+        if (len < 0) {
+            return len;
+        }
     }
     job_progress_set_remaining(&s->common.job, len);
 
@@ -141,25 +162,29 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
 
         copy = false;
 
-        ret = bdrv_is_allocated(unfiltered_bs, offset, STREAM_CHUNK, &n);
-        if (ret == 1) {
-            /* Allocated in the top, no need to copy.  */
-        } else if (ret >= 0) {
-            /* Copy if allocated in the intermediate images.  Limit to the
-             * known-unallocated area [offset, offset+n*BDRV_SECTOR_SIZE).  */
-            ret = bdrv_is_allocated_above(bdrv_cow_bs(unfiltered_bs),
-                                          s->base_overlay, true,
-                                          offset, n, &n);
-            /* Finish early if end of backing file has been reached */
-            if (ret == 0 && n == 0) {
-                n = len - offset;
-            }
+        WITH_GRAPH_RDLOCK_GUARD() {
+            ret = bdrv_is_allocated(unfiltered_bs, offset, STREAM_CHUNK, &n);
+            if (ret == 1) {
+                /* Allocated in the top, no need to copy.  */
+            } else if (ret >= 0) {
+                /*
+                 * Copy if allocated in the intermediate images.  Limit to the
+                 * known-unallocated area [offset, offset+n*BDRV_SECTOR_SIZE).
+                 */
+                ret = bdrv_is_allocated_above(bdrv_cow_bs(unfiltered_bs),
+                                            s->base_overlay, true,
+                                            offset, n, &n);
+                /* Finish early if end of backing file has been reached */
+                if (ret == 0 && n == 0) {
+                    n = len - offset;
+                }
 
-            copy = (ret > 0);
+                copy = (ret > 0);
+            }
         }
         trace_stream_one_iteration(s, offset, n, ret);
         if (copy) {
-            ret = stream_populate(blk, offset, n);
+            ret = stream_populate(s->blk, offset, n);
         }
         if (ret < 0) {
             BlockErrorAction action =
@@ -218,6 +243,8 @@ void stream_start(const char *job_id, BlockDriverState *bs,
     BlockDriverState *above_base;
     QDict *opts;
     int ret;
+
+    GLOBAL_STATE_CODE();
 
     assert(!(base && bottom));
     assert(!(backing_file_str && bottom));
@@ -294,12 +321,23 @@ void stream_start(const char *job_id, BlockDriverState *bs,
     }
 
     s = block_job_create(job_id, &stream_job_driver, NULL, cor_filter_bs,
-                         BLK_PERM_CONSISTENT_READ,
-                         basic_flags | BLK_PERM_WRITE,
+                         0, BLK_PERM_ALL,
                          speed, creation_flags, NULL, NULL, errp);
     if (!s) {
         goto fail;
     }
+
+    s->blk = blk_new_with_bs(cor_filter_bs, BLK_PERM_CONSISTENT_READ,
+                             basic_flags | BLK_PERM_WRITE, errp);
+    if (!s->blk) {
+        goto fail;
+    }
+    /*
+     * Disable request queuing in the BlockBackend to avoid deadlocks on drain:
+     * The job reports that it's busy until it reaches a pause point.
+     */
+    blk_set_disable_request_queuing(s->blk, true);
+    blk_set_allow_aio_context_change(s->blk, true);
 
     /*
      * Prevent concurrent jobs trying to modify the graph structure here, we

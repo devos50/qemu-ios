@@ -1,30 +1,30 @@
 static void glue(bswap_ehdr, SZ)(struct elfhdr *ehdr)
 {
-    bswap16s(&ehdr->e_type);			/* Object file type */
-    bswap16s(&ehdr->e_machine);		/* Architecture */
-    bswap32s(&ehdr->e_version);		/* Object file version */
-    bswapSZs(&ehdr->e_entry);		/* Entry point virtual address */
-    bswapSZs(&ehdr->e_phoff);		/* Program header table file offset */
-    bswapSZs(&ehdr->e_shoff);		/* Section header table file offset */
-    bswap32s(&ehdr->e_flags);		/* Processor-specific flags */
-    bswap16s(&ehdr->e_ehsize);		/* ELF header size in bytes */
-    bswap16s(&ehdr->e_phentsize);		/* Program header table entry size */
-    bswap16s(&ehdr->e_phnum);		/* Program header table entry count */
-    bswap16s(&ehdr->e_shentsize);		/* Section header table entry size */
-    bswap16s(&ehdr->e_shnum);		/* Section header table entry count */
-    bswap16s(&ehdr->e_shstrndx);		/* Section header string table index */
+    bswap16s(&ehdr->e_type);      /* Object file type */
+    bswap16s(&ehdr->e_machine);   /* Architecture */
+    bswap32s(&ehdr->e_version);   /* Object file version */
+    bswapSZs(&ehdr->e_entry);     /* Entry point virtual address */
+    bswapSZs(&ehdr->e_phoff);     /* Program header table file offset */
+    bswapSZs(&ehdr->e_shoff);     /* Section header table file offset */
+    bswap32s(&ehdr->e_flags);     /* Processor-specific flags */
+    bswap16s(&ehdr->e_ehsize);    /* ELF header size in bytes */
+    bswap16s(&ehdr->e_phentsize); /* Program header table entry size */
+    bswap16s(&ehdr->e_phnum);     /* Program header table entry count */
+    bswap16s(&ehdr->e_shentsize); /* Section header table entry size */
+    bswap16s(&ehdr->e_shnum);     /* Section header table entry count */
+    bswap16s(&ehdr->e_shstrndx);  /* Section header string table index */
 }
 
 static void glue(bswap_phdr, SZ)(struct elf_phdr *phdr)
 {
-    bswap32s(&phdr->p_type);			/* Segment type */
-    bswapSZs(&phdr->p_offset);		/* Segment file offset */
-    bswapSZs(&phdr->p_vaddr);		/* Segment virtual address */
-    bswapSZs(&phdr->p_paddr);		/* Segment physical address */
-    bswapSZs(&phdr->p_filesz);		/* Segment size in file */
-    bswapSZs(&phdr->p_memsz);		/* Segment size in memory */
-    bswap32s(&phdr->p_flags);		/* Segment flags */
-    bswapSZs(&phdr->p_align);		/* Segment alignment */
+    bswap32s(&phdr->p_type);   /* Segment type */
+    bswapSZs(&phdr->p_offset); /* Segment file offset */
+    bswapSZs(&phdr->p_vaddr);  /* Segment virtual address */
+    bswapSZs(&phdr->p_paddr);  /* Segment physical address */
+    bswapSZs(&phdr->p_filesz); /* Segment size in file */
+    bswapSZs(&phdr->p_memsz);  /* Segment size in memory */
+    bswap32s(&phdr->p_flags);  /* Segment flags */
+    bswapSZs(&phdr->p_align);  /* Segment alignment */
 }
 
 static void glue(bswap_shdr, SZ)(struct elf_shdr *shdr)
@@ -117,7 +117,7 @@ static void glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
     shdr_table = load_at(fd, ehdr->e_shoff,
                          sizeof(struct elf_shdr) * ehdr->e_shnum);
     if (!shdr_table) {
-        return ;
+        return;
     }
 
     if (must_swab) {
@@ -554,6 +554,19 @@ static ssize_t glue(load_elf, SZ)(const char *name, int fd,
                                               data, file_size);
                     if (res != MEMTX_OK) {
                         goto fail;
+                    }
+                    /*
+                     * We need to zero'ify the space that is not copied
+                     * from file
+                     */
+                    if (file_size < mem_size) {
+                        res = address_space_set(as ? as : &address_space_memory,
+                                                addr + file_size, 0,
+                                                mem_size - file_size,
+                                                MEMTXATTRS_UNSPECIFIED);
+                        if (res != MEMTX_OK) {
+                            goto fail;
+                        }
                     }
                 }
             }

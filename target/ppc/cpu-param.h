@@ -6,7 +6,7 @@
  */
 
 #ifndef PPC_CPU_PARAM_H
-#define PPC_CPU_PARAM_H 1
+#define PPC_CPU_PARAM_H
 
 #ifdef TARGET_PPC64
 # define TARGET_LONG_BITS 64
@@ -32,6 +32,5 @@
 # define TARGET_VIRT_ADDR_SPACE_BITS 32
 #endif
 #define TARGET_PAGE_BITS 12
-#define NB_MMU_MODES 10
 
 #endif

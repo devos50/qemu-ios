@@ -103,7 +103,7 @@ typedef struct {
 #define make_floatx80(exp, mant) ((floatx80) { mant, exp })
 #define make_floatx80_init(exp, mant) { .low = mant, .high = exp }
 typedef struct {
-#ifdef HOST_WORDS_BIGENDIAN
+#if HOST_BIG_ENDIAN
     uint64_t high, low;
 #else
     uint64_t low, high;
@@ -195,6 +195,10 @@ typedef struct float_status {
     bool snan_bit_is_one;
     bool use_first_nan;
     bool no_signaling_nans;
+    /* should overflowed results subtract re_bias to its exponent? */
+    bool rebias_overflow;
+    /* should underflowed results add re_bias to its exponent? */
+    bool rebias_underflow;
 } float_status;
 
 #endif /* SOFTFLOAT_TYPES_H */

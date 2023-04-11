@@ -25,8 +25,8 @@
 #ifndef BLOCK_QAPI_H
 #define BLOCK_QAPI_H
 
-#include "block/block.h"
 #include "block/snapshot.h"
+#include "qapi/qapi-types-block-core.h"
 
 BlockDeviceInfo *bdrv_block_device_info(BlockBackend *blk,
                                         BlockDriverState *bs,
@@ -35,11 +35,21 @@ BlockDeviceInfo *bdrv_block_device_info(BlockBackend *blk,
 int bdrv_query_snapshot_info_list(BlockDriverState *bs,
                                   SnapshotInfoList **p_list,
                                   Error **errp);
+void bdrv_query_block_node_info(BlockDriverState *bs,
+                                BlockNodeInfo **p_info,
+                                Error **errp);
 void bdrv_query_image_info(BlockDriverState *bs,
                            ImageInfo **p_info,
+                           bool flat,
+                           bool skip_implicit_filters,
                            Error **errp);
+void bdrv_query_block_graph_info(BlockDriverState *bs,
+                                 BlockGraphInfo **p_info,
+                                 Error **errp);
 
 void bdrv_snapshot_dump(QEMUSnapshotInfo *sn);
-void bdrv_image_info_specific_dump(ImageInfoSpecific *info_spec);
-void bdrv_image_info_dump(ImageInfo *info);
+void bdrv_image_info_specific_dump(ImageInfoSpecific *info_spec,
+                                   const char *prefix,
+                                   int indentation);
+void bdrv_node_info_dump(BlockNodeInfo *info, int indentation, bool protocol);
 #endif

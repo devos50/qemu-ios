@@ -27,8 +27,6 @@
 #define SMMU_PCI_DEVFN_MAX    256
 #define SMMU_PCI_DEVFN(sid)   (sid & 0xFF)
 
-#define SMMU_MAX_VA_BITS      48
-
 /*
  * Page table walk error types
  */
@@ -71,6 +69,7 @@ typedef struct SMMUTransCfg {
     bool disabled;             /* smmu is disabled */
     bool bypassed;             /* translation is bypassed */
     bool aborted;              /* translation is aborted */
+    bool record_faults;        /* record fault events */
     uint64_t ttb;              /* TT base address */
     uint8_t oas;               /* output address width */
     uint8_t tbi;               /* Top Byte Ignore */
@@ -171,8 +170,5 @@ void smmu_iotlb_inv_iova(SMMUState *s, int asid, dma_addr_t iova,
 
 /* Unmap the range of all the notifiers registered to any IOMMU mr */
 void smmu_inv_notifiers_all(SMMUState *s);
-
-/* Unmap the range of all the notifiers registered to @mr */
-void smmu_inv_notifiers_mr(IOMMUMemoryRegion *mr);
 
 #endif /* HW_ARM_SMMU_COMMON_H */

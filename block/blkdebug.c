@@ -27,6 +27,7 @@
 #include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "qemu/config-file.h"
+#include "block/block-io.h"
 #include "block/block_int.h"
 #include "block/qdict.h"
 #include "qemu/module.h"
@@ -297,9 +298,7 @@ static int read_config(BDRVBlkdebugState *s, const char *filename,
         }
     }
 
-    qemu_config_parse_qdict(options, config_groups, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!qemu_config_parse_qdict(options, config_groups, errp)) {
         ret = -EINVAL;
         goto fail;
     }
@@ -503,12 +502,9 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
     }
 
     /* Open the image file */
-    bs->file = bdrv_open_child(qemu_opt_get(opts, "x-image"), options, "image",
-                               bs, &child_of_bds,
-                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
-                               false, errp);
-    if (!bs->file) {
-        ret = -EINVAL;
+    ret = bdrv_open_file_child(qemu_opt_get(opts, "x-image"), options, "image",
+                               bs, errp);
+    if (ret < 0) {
         goto out;
     }
 
@@ -630,7 +626,7 @@ static int rule_check(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
     return -error;
 }
 
-static int coroutine_fn
+static int coroutine_fn GRAPH_RDLOCK
 blkdebug_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
                    QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
@@ -651,7 +647,7 @@ blkdebug_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
     return bdrv_co_preadv(bs->file, offset, bytes, qiov, flags);
 }
 
-static int coroutine_fn
+static int coroutine_fn GRAPH_RDLOCK
 blkdebug_co_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
                     QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
@@ -672,7 +668,7 @@ blkdebug_co_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
     return bdrv_co_pwritev(bs->file, offset, bytes, qiov, flags);
 }
 
-static int blkdebug_co_flush(BlockDriverState *bs)
+static int GRAPH_RDLOCK coroutine_fn blkdebug_co_flush(BlockDriverState *bs)
 {
     int err = rule_check(bs, 0, 0, BLKDEBUG_IO_TYPE_FLUSH);
 
@@ -683,9 +679,9 @@ static int blkdebug_co_flush(BlockDriverState *bs)
     return bdrv_co_flush(bs->file->bs);
 }
 
-static int coroutine_fn blkdebug_co_pwrite_zeroes(BlockDriverState *bs,
-                                                  int64_t offset, int64_t bytes,
-                                                  BdrvRequestFlags flags)
+static int coroutine_fn GRAPH_RDLOCK
+blkdebug_co_pwrite_zeroes(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                          BdrvRequestFlags flags)
 {
     uint32_t align = MAX(bs->bl.request_alignment,
                          bs->bl.pwrite_zeroes_alignment);
@@ -716,8 +712,8 @@ static int coroutine_fn blkdebug_co_pwrite_zeroes(BlockDriverState *bs,
     return bdrv_co_pwrite_zeroes(bs->file, offset, bytes, flags);
 }
 
-static int coroutine_fn blkdebug_co_pdiscard(BlockDriverState *bs,
-                                             int64_t offset, int64_t bytes)
+static int coroutine_fn GRAPH_RDLOCK
+blkdebug_co_pdiscard(BlockDriverState *bs, int64_t offset, int64_t bytes)
 {
     uint32_t align = bs->bl.pdiscard_alignment;
     int err;
@@ -840,7 +836,8 @@ static void process_rule(BlockDriverState *bs, struct BlkdebugRule *rule,
     }
 }
 
-static void blkdebug_debug_event(BlockDriverState *bs, BlkdebugEvent event)
+static void coroutine_fn
+blkdebug_co_debug_event(BlockDriverState *bs, BlkdebugEvent event)
 {
     BDRVBlkdebugState *s = bs->opaque;
     struct BlkdebugRule *rule, *next;
@@ -970,9 +967,10 @@ static bool blkdebug_debug_is_suspended(BlockDriverState *bs, const char *tag)
     return false;
 }
 
-static int64_t blkdebug_getlength(BlockDriverState *bs)
+static int64_t coroutine_fn GRAPH_RDLOCK
+blkdebug_co_getlength(BlockDriverState *bs)
 {
-    return bdrv_getlength(bs->file->bs);
+    return bdrv_co_getlength(bs->file->bs);
 }
 
 static void blkdebug_refresh_filename(BlockDriverState *bs)
@@ -1079,7 +1077,7 @@ static BlockDriver bdrv_blkdebug = {
     .bdrv_reopen_prepare    = blkdebug_reopen_prepare,
     .bdrv_child_perm        = blkdebug_child_perm,
 
-    .bdrv_getlength         = blkdebug_getlength,
+    .bdrv_co_getlength      = blkdebug_co_getlength,
     .bdrv_refresh_filename  = blkdebug_refresh_filename,
     .bdrv_refresh_limits    = blkdebug_refresh_limits,
 
@@ -1090,7 +1088,7 @@ static BlockDriver bdrv_blkdebug = {
     .bdrv_co_pdiscard       = blkdebug_co_pdiscard,
     .bdrv_co_block_status   = blkdebug_co_block_status,
 
-    .bdrv_debug_event           = blkdebug_debug_event,
+    .bdrv_co_debug_event        = blkdebug_co_debug_event,
     .bdrv_debug_breakpoint      = blkdebug_debug_breakpoint,
     .bdrv_debug_remove_breakpoint
                                 = blkdebug_debug_remove_breakpoint,

@@ -480,6 +480,29 @@ static uint8_t spapr_xive_get_block_id(XiveRouter *xrtr)
     return SPAPR_XIVE_BLOCK_ID;
 }
 
+static int spapr_xive_get_pq(XiveRouter *xrtr, uint8_t blk, uint32_t idx,
+                             uint8_t *pq)
+{
+    SpaprXive *xive = SPAPR_XIVE(xrtr);
+
+    assert(SPAPR_XIVE_BLOCK_ID == blk);
+
+    *pq = xive_source_esb_get(&xive->source, idx);
+    return 0;
+}
+
+static int spapr_xive_set_pq(XiveRouter *xrtr, uint8_t blk, uint32_t idx,
+                             uint8_t *pq)
+{
+    SpaprXive *xive = SPAPR_XIVE(xrtr);
+
+    assert(SPAPR_XIVE_BLOCK_ID == blk);
+
+    *pq = xive_source_esb_set(&xive->source, idx, *pq);
+    return 0;
+}
+
+
 static const VMStateDescription vmstate_spapr_xive_end = {
     .name = TYPE_SPAPR_XIVE "/end",
     .version_id = 1,
@@ -788,6 +811,8 @@ static void spapr_xive_class_init(ObjectClass *klass, void *data)
     dc->vmsd    = &vmstate_spapr_xive;
 
     xrc->get_eas = spapr_xive_get_eas;
+    xrc->get_pq  = spapr_xive_get_pq;
+    xrc->set_pq  = spapr_xive_set_pq;
     xrc->get_end = spapr_xive_get_end;
     xrc->write_end = spapr_xive_write_end;
     xrc->get_nvt = spapr_xive_get_nvt;
@@ -1684,7 +1709,8 @@ static target_ulong h_int_esb(PowerPCCPU *cpu,
         mmio_addr = xive->vc_base + xive_source_esb_mgmt(xsrc, lisn) + offset;
 
         if (dma_memory_rw(&address_space_memory, mmio_addr, &data, 8,
-                          (flags & SPAPR_XIVE_ESB_STORE))) {
+                          (flags & SPAPR_XIVE_ESB_STORE),
+                          MEMTXATTRS_UNSPECIFIED)) {
             qemu_log_mask(LOG_GUEST_ERROR, "XIVE: failed to access ESB @0x%"
                           HWADDR_PRIx "\n", mmio_addr);
             return H_HARDWARE;

@@ -68,8 +68,8 @@ struct dfe {
 static int df_extract_val(DisasContext *ctx, int x, const struct dfe *s)
 {
     for (unsigned i = 0; i < 4; i++) {
-        if (extract32(x, s->start, s->length) == s->mask) {
-            return extract32(x, 0, s->start);
+        if (extract32(x, s[i].start, s[i].length) == s[i].mask) {
+            return extract32(x, 0, s[i].start);
         }
     }
     return -1;
@@ -82,7 +82,7 @@ static int df_extract_val(DisasContext *ctx, int x, const struct dfe *s)
 static int df_extract_df(DisasContext *ctx, int x, const struct dfe *s)
 {
     for (unsigned i = 0; i < 4; i++) {
-        if (extract32(x, s->start, s->length) == s->mask) {
+        if (extract32(x, s[i].start, s[i].length) == s[i].mask) {
             return i;
         }
     }
@@ -217,8 +217,6 @@ static void gen_check_zero_element(TCGv tresult, uint8_t df, uint8_t wt,
     /* if some bit is non-zero then some element is zero */
     tcg_gen_setcondi_i64(cond, t0, t0, 0);
     tcg_gen_trunc_i64_tl(tresult, t0);
-    tcg_temp_free_i64(t0);
-    tcg_temp_free_i64(t1);
 }
 
 static bool gen_msa_BxZ_V(DisasContext *ctx, int wt, int sa, TCGCond cond)
@@ -237,7 +235,6 @@ static bool gen_msa_BxZ_V(DisasContext *ctx, int wt, int sa, TCGCond cond)
     tcg_gen_or_i64(t0, msa_wr_d[wt << 1], msa_wr_d[(wt << 1) + 1]);
     tcg_gen_setcondi_i64(cond, t0, t0, 0);
     tcg_gen_trunc_i64_tl(bcond, t0);
-    tcg_temp_free_i64(t0);
 
     ctx->btarget = ctx->base.pc_next + (sa << 2) + 4;
 
@@ -399,7 +396,7 @@ TRANS(BSETI,    trans_msa_bit, gen_helper_msa_bseti_df);
 TRANS(BNEGI,    trans_msa_bit, gen_helper_msa_bnegi_df);
 TRANS(BINSLI,   trans_msa_bit, gen_helper_msa_binsli_df);
 TRANS(BINSRI,   trans_msa_bit, gen_helper_msa_binsri_df);
-TRANS(SAT_S,    trans_msa_bit, gen_helper_msa_sat_u_df);
+TRANS(SAT_S,    trans_msa_bit, gen_helper_msa_sat_s_df);
 TRANS(SAT_U,    trans_msa_bit, gen_helper_msa_sat_u_df);
 TRANS(SRARI,    trans_msa_bit, gen_helper_msa_srari_df);
 TRANS(SRLRI,    trans_msa_bit, gen_helper_msa_srlri_df);
@@ -545,8 +542,6 @@ static bool trans_CTCMSA(DisasContext *ctx, arg_msa_elm *a)
     gen_load_gpr(telm, a->ws);
     gen_helper_msa_ctcmsa(cpu_env, telm, tcg_constant_i32(a->wd));
 
-    tcg_temp_free(telm);
-
     return true;
 }
 
@@ -562,8 +557,6 @@ static bool trans_CFCMSA(DisasContext *ctx, arg_msa_elm *a)
 
     gen_helper_msa_cfcmsa(telm, cpu_env, tcg_constant_i32(a->ws));
     gen_store_gpr(telm, a->wd);
-
-    tcg_temp_free(telm);
 
     return true;
 }
@@ -599,12 +592,7 @@ static bool trans_msa_elm_fn(DisasContext *ctx, arg_msa_elm_df *a,
         return false;
     }
 
-    if (check_msa_enabled(ctx)) {
-        return true;
-    }
-
-    if (a->wd == 0) {
-        /* Treat as NOP. */
+    if (!check_msa_enabled(ctx)) {
         return true;
     }
 
@@ -624,6 +612,11 @@ static bool trans_msa_elm_fn(DisasContext *ctx, arg_msa_elm_df *a,
 
 static bool trans_COPY_U(DisasContext *ctx, arg_msa_elm_df *a)
 {
+    if (a->wd == 0) {
+        /* Treat as NOP. */
+        return true;
+    }
+
     static gen_helper_piii * const gen_msa_copy_u[4] = {
         gen_helper_msa_copy_u_b, gen_helper_msa_copy_u_h,
         NULL_IF_MIPS32(gen_helper_msa_copy_u_w), NULL
@@ -634,6 +627,11 @@ static bool trans_COPY_U(DisasContext *ctx, arg_msa_elm_df *a)
 
 static bool trans_COPY_S(DisasContext *ctx, arg_msa_elm_df *a)
 {
+    if (a->wd == 0) {
+        /* Treat as NOP. */
+        return true;
+    }
+
     static gen_helper_piii * const gen_msa_copy_s[4] = {
         gen_helper_msa_copy_s_b, gen_helper_msa_copy_s_h,
         gen_helper_msa_copy_s_w, NULL_IF_MIPS32(gen_helper_msa_copy_s_d)
@@ -747,8 +745,8 @@ static bool trans_msa_2rf(DisasContext *ctx, arg_msa_r *a,
 }
 
 TRANS(FCLASS,   trans_msa_2rf, gen_helper_msa_fclass_df);
-TRANS(FTRUNC_S, trans_msa_2rf, gen_helper_msa_fclass_df);
-TRANS(FTRUNC_U, trans_msa_2rf, gen_helper_msa_ftrunc_s_df);
+TRANS(FTRUNC_S, trans_msa_2rf, gen_helper_msa_ftrunc_s_df);
+TRANS(FTRUNC_U, trans_msa_2rf, gen_helper_msa_ftrunc_u_df);
 TRANS(FSQRT,    trans_msa_2rf, gen_helper_msa_fsqrt_df);
 TRANS(FRSQRT,   trans_msa_2rf, gen_helper_msa_frsqrt_df);
 TRANS(FRCP,     trans_msa_2rf, gen_helper_msa_frcp_df);
@@ -776,8 +774,6 @@ static bool trans_msa_ldst(DisasContext *ctx, arg_msa_i *a,
 
     gen_base_offset_addr(ctx, taddr, a->ws, a->sa << a->df);
     gen_msa_ldst(cpu_env, tcg_constant_i32(a->wd), taddr);
-
-    tcg_temp_free(taddr);
 
     return true;
 }

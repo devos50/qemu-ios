@@ -23,7 +23,6 @@
 #include "qemu/main-loop.h"
 #include "cpu.h"
 #include "s390x-internal.h"
-#include "exec/memory.h"
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
 #include "qemu/timer.h"
@@ -157,6 +156,13 @@ void HELPER(spx)(CPUS390XState *env, uint64_t a1)
 
     if (prefix == old_prefix) {
         return;
+    }
+    /*
+     * Since prefix got aligned to 8k and memory increments are a multiple of
+     * 8k checking the first page is sufficient
+     */
+    if (!mmu_absolute_addr_valid(prefix, true)) {
+        tcg_s390_program_interrupt(env, PGM_ADDRESSING, GETPC());
     }
 
     env->psa = prefix;
@@ -326,7 +332,7 @@ uint32_t HELPER(stsi)(CPUS390XState *env, uint64_t a0, uint64_t r0, uint64_t r1)
             /* same as machine type number in STORE CPU ID, but in EBCDIC */
             snprintf(type, ARRAY_SIZE(type), "%X", cpu->model->def->type);
             ebcdic_put(sysib.sysib_111.type, type, 4);
-            /* model number (not stored in STORE CPU ID for z/Architecure) */
+            /* model number (not stored in STORE CPU ID for z/Architecture) */
             ebcdic_put(sysib.sysib_111.model, "QEMU            ", 16);
             ebcdic_put(sysib.sysib_111.sequence, "QEMU            ", 16);
             ebcdic_put(sysib.sysib_111.plant, "QEMU", 4);

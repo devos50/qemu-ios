@@ -15,6 +15,8 @@
 #ifndef QEMU_ATOMIC_H
 #define QEMU_ATOMIC_H
 
+#include "compiler.h"
+
 /* Compiler barrier */
 #define barrier()   ({ asm volatile("" ::: "memory"); (void)0; })
 
@@ -81,7 +83,7 @@
  * no processors except Alpha need a barrier here.  Leave it in if
  * using Thread Sanitizer to avoid warnings, otherwise optimize it away.
  */
-#if defined(__SANITIZE_THREAD__)
+#ifdef QEMU_SANITIZE_THREAD
 #define smp_read_barrier_depends()   ({ barrier(); __atomic_thread_fence(__ATOMIC_CONSUME); })
 #elif defined(__alpha__)
 #define smp_read_barrier_depends()   asm volatile("mb":::"memory")
@@ -131,7 +133,7 @@
 
 #define qatomic_read(ptr)                              \
     ({                                                 \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE); \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE); \
     qatomic_read__nocheck(ptr);                        \
     })
 
@@ -139,14 +141,14 @@
     __atomic_store_n(ptr, i, __ATOMIC_RELAXED)
 
 #define qatomic_set(ptr, i)  do {                      \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE); \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE); \
     qatomic_set__nocheck(ptr, i);                      \
 } while(0)
 
 /* See above: most compilers currently treat consume and acquire the
  * same, but this slows down qatomic_rcu_read unnecessarily.
  */
-#ifdef __SANITIZE_THREAD__
+#ifdef QEMU_SANITIZE_THREAD
 #define qatomic_rcu_read__nocheck(ptr, valptr)           \
     __atomic_load(ptr, valptr, __ATOMIC_CONSUME);
 #else
@@ -157,27 +159,27 @@
 
 #define qatomic_rcu_read(ptr)                          \
     ({                                                 \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE); \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE); \
     typeof_strip_qual(*ptr) _val;                      \
     qatomic_rcu_read__nocheck(ptr, &_val);             \
     _val;                                              \
     })
 
 #define qatomic_rcu_set(ptr, i) do {                   \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE); \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE); \
     __atomic_store_n(ptr, i, __ATOMIC_RELEASE);        \
 } while(0)
 
 #define qatomic_load_acquire(ptr)                       \
     ({                                                  \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE);  \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE); \
     typeof_strip_qual(*ptr) _val;                       \
     __atomic_load(ptr, &_val, __ATOMIC_ACQUIRE);        \
     _val;                                               \
     })
 
 #define qatomic_store_release(ptr, i)  do {             \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE);  \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE); \
     __atomic_store_n(ptr, i, __ATOMIC_RELEASE);         \
 } while(0)
 
@@ -189,7 +191,7 @@
 })
 
 #define qatomic_xchg(ptr, i)    ({                          \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE);      \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE);     \
     qatomic_xchg__nocheck(ptr, i);                          \
 })
 
@@ -202,7 +204,7 @@
 })
 
 #define qatomic_cmpxchg(ptr, old, new)    ({                            \
-    QEMU_BUILD_BUG_ON(sizeof(*ptr) > ATOMIC_REG_SIZE);                  \
+    qemu_build_assert(sizeof(*ptr) <= ATOMIC_REG_SIZE);                 \
     qatomic_cmpxchg__nocheck(ptr, old, new);                            \
 })
 
@@ -243,6 +245,20 @@
 #define smp_wmb()   smp_mb_release()
 #define smp_rmb()   smp_mb_acquire()
 
+/*
+ * SEQ_CST is weaker than the older __sync_* builtins and Linux
+ * kernel read-modify-write atomics.  Provide a macro to obtain
+ * the same semantics.
+ */
+#if !defined(QEMU_SANITIZE_THREAD) && \
+    (defined(__i386__) || defined(__x86_64__) || defined(__s390x__))
+# define smp_mb__before_rmw() signal_barrier()
+# define smp_mb__after_rmw() signal_barrier()
+#else
+# define smp_mb__before_rmw() smp_mb()
+# define smp_mb__after_rmw() smp_mb()
+#endif
+
 /* qatomic_mb_read/set semantics map Java volatile variables. They are
  * less expensive on some platforms (notably POWER) than fully
  * sequentially consistent operations.
@@ -254,10 +270,11 @@
 #define qatomic_mb_read(ptr)                             \
     qatomic_load_acquire(ptr)
 
-#if !defined(__SANITIZE_THREAD__) && \
+#if !defined(QEMU_SANITIZE_THREAD) && \
     (defined(__i386__) || defined(__x86_64__) || defined(__s390x__))
 /* This is more efficient than a store plus a fence.  */
-# define qatomic_mb_set(ptr, i)  ((void)qatomic_xchg(ptr, i))
+# define qatomic_mb_set(ptr, i) \
+    ({ (void)qatomic_xchg(ptr, i); smp_mb__after_rmw(); })
 #else
 # define qatomic_mb_set(ptr, i) \
    ({ qatomic_store_release(ptr, i); smp_mb(); })

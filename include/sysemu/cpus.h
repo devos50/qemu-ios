@@ -1,11 +1,13 @@
 #ifndef QEMU_CPUS_H
 #define QEMU_CPUS_H
 
-#include "qemu/timer.h"
 #include "sysemu/accel-ops.h"
 
 /* register accel-specific operations */
 void cpus_register_accel(const AccelOpsClass *i);
+
+/* return registers ops */
+const AccelOpsClass *cpus_get_accel(void);
 
 /* accel/dummy-cpus.c */
 
@@ -54,7 +56,5 @@ void cpu_synchronize_all_pre_loadvm(void);
 extern int smp_cores;
 extern int smp_threads;
 #endif
-
-void list_cpus(const char *optarg);
 
 #endif

@@ -98,7 +98,7 @@ default_role = 'any'
 
 # General information about the project.
 project = u'QEMU'
-copyright = u'2021, The QEMU Project Developers'
+copyright = u'2022, The QEMU Project Developers'
 author = u'The QEMU Project Developers'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -126,7 +126,7 @@ finally:
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = 'en'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -290,25 +290,8 @@ man_pages = [
     ('tools/virtfs-proxy-helper', 'virtfs-proxy-helper',
      'QEMU 9p virtfs proxy filesystem helper',
      ['M. Mohan Kumar'], 1),
-    ('tools/virtiofsd', 'virtiofsd',
-     'QEMU virtio-fs shared file system daemon',
-     ['Stefan Hajnoczi <stefanha@redhat.com>',
-      'Masayoshi Mizuma <m.mizuma@jp.fujitsu.com>'], 1),
 ]
 man_make_section_directory = False
-
-# -- Options for Texinfo output -------------------------------------------
-
-# Grouping the document tree into Texinfo files. List of tuples
-# (source start file, target name, title, author,
-#  dir menu entry, description, category)
-texinfo_documents = [
-    (master_doc, 'QEMU', u'QEMU Documentation',
-     author, 'QEMU', 'One line description of project.',
-     'Miscellaneous'),
-]
-
-
 
 # We use paths starting from qemu_docdir here so that you can run
 # sphinx-build from anywhere and the kerneldoc extension can still

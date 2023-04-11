@@ -27,8 +27,7 @@ struct arm_boot_info;
 
 #define TYPE_ARM_CPU "arm-cpu"
 
-OBJECT_DECLARE_TYPE(ARMCPU, ARMCPUClass,
-                    ARM_CPU)
+OBJECT_DECLARE_CPU_TYPE(ARMCPU, ARMCPUClass, ARM_CPU)
 
 #define TYPE_ARM_MAX_CPU "max-" TYPE_ARM_CPU
 
@@ -44,7 +43,7 @@ void aarch64_cpu_register(const ARMCPUInfo *info);
 /**
  * ARMCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * An ARM CPU model.
  */
@@ -55,7 +54,7 @@ struct ARMCPUClass {
 
     const ARMCPUInfo *info;
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
 };
 
 

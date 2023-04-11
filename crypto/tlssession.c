@@ -373,6 +373,12 @@ qcrypto_tls_session_check_certificate(QCryptoTLSSession *session,
                                session->hostname);
                     goto error;
                 }
+            } else {
+                if (session->creds->endpoint ==
+                    QCRYPTO_TLS_CREDS_ENDPOINT_CLIENT) {
+                    error_setg(errp, "No hostname for certificate validation");
+                    goto error;
+                }
             }
         }
 
@@ -484,6 +490,13 @@ qcrypto_tls_session_read(QCryptoTLSSession *session,
     }
 
     return ret;
+}
+
+
+size_t
+qcrypto_tls_session_check_pending(QCryptoTLSSession *session)
+{
+    return gnutls_record_check_pending(session->handle);
 }
 
 
@@ -606,6 +619,13 @@ qcrypto_tls_session_read(QCryptoTLSSession *sess,
 {
     errno = -EIO;
     return -1;
+}
+
+
+size_t
+qcrypto_tls_session_check_pending(QCryptoTLSSession *session)
+{
+    return 0;
 }
 
 

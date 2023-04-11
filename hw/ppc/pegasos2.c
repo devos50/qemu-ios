@@ -8,10 +8,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
 #include "hw/ppc/ppc.h"
 #include "hw/sysbus.h"
 #include "hw/pci/pci_host.h"
@@ -75,6 +73,8 @@ struct Pegasos2MachineState {
     MachineState parent_obj;
     PowerPCCPU *cpu;
     DeviceState *mv;
+    qemu_irq mv_pirq[PCI_NUM_PINS];
+    qemu_irq via_pirq[PCI_NUM_PINS];
     Vof *vof;
     void *fdt_blob;
     uint64_t kernel_addr;
@@ -97,17 +97,27 @@ static void pegasos2_cpu_reset(void *opaque)
     }
 }
 
+static void pegasos2_pci_irq(void *opaque, int n, int level)
+{
+    Pegasos2MachineState *pm = opaque;
+
+    /* PCI interrupt lines are connected to both MV64361 and VT8231 */
+    qemu_set_irq(pm->mv_pirq[n], level);
+    qemu_set_irq(pm->via_pirq[n], level);
+}
+
 static void pegasos2_init(MachineState *machine)
 {
     Pegasos2MachineState *pm = PEGASOS2_MACHINE(machine);
     CPUPPCState *env;
     MemoryRegion *rom = g_new(MemoryRegion, 1);
     PCIBus *pci_bus;
+    Object *via;
     PCIDevice *dev;
     I2CBus *i2c_bus;
     const char *fwname = machine->firmware ?: PROM_FILENAME;
     char *filename;
-    int sz;
+    int i, sz;
     uint8_t *spd_data;
 
     /* init CPU */
@@ -156,33 +166,32 @@ static void pegasos2_init(MachineState *machine)
 
     /* Marvell Discovery II system controller */
     pm->mv = DEVICE(sysbus_create_simple(TYPE_MV64361, -1,
-                             ((qemu_irq *)env->irq_inputs)[PPC6xx_INPUT_INT]));
+                          qdev_get_gpio_in(DEVICE(pm->cpu), PPC6xx_INPUT_INT)));
+    for (i = 0; i < PCI_NUM_PINS; i++) {
+        pm->mv_pirq[i] = qdev_get_gpio_in_named(pm->mv, "gpp", 12 + i);
+    }
     pci_bus = mv64361_get_pci_bus(pm->mv, 1);
+    pci_bus_irqs(pci_bus, pegasos2_pci_irq, pm, PCI_NUM_PINS);
 
     /* VIA VT8231 South Bridge (multifunction PCI device) */
-    /* VT8231 function 0: PCI-to-ISA Bridge */
-    dev = pci_create_simple_multifunction(pci_bus, PCI_DEVFN(12, 0), true,
-                                          TYPE_VT8231_ISA);
-    qdev_connect_gpio_out(DEVICE(dev), 0,
+    via = OBJECT(pci_create_simple_multifunction(pci_bus, PCI_DEVFN(12, 0),
+                                                 true, TYPE_VT8231_ISA));
+    for (i = 0; i < PCI_NUM_PINS; i++) {
+        pm->via_pirq[i] = qdev_get_gpio_in_named(DEVICE(via), "pirq", i);
+    }
+    object_property_add_alias(OBJECT(machine), "rtc-time",
+                              object_resolve_path_component(via, "rtc"),
+                              "date");
+    qdev_connect_gpio_out(DEVICE(via), 0,
                           qdev_get_gpio_in_named(pm->mv, "gpp", 31));
 
-    /* VT8231 function 1: IDE Controller */
-    dev = pci_create_simple(pci_bus, PCI_DEVFN(12, 1), "via-ide");
+    dev = PCI_DEVICE(object_resolve_path_component(via, "ide"));
     pci_ide_create_devs(dev);
 
-    /* VT8231 function 2-3: USB Ports */
-    pci_create_simple(pci_bus, PCI_DEVFN(12, 2), "vt82c686b-usb-uhci");
-    pci_create_simple(pci_bus, PCI_DEVFN(12, 3), "vt82c686b-usb-uhci");
-
-    /* VT8231 function 4: Power Management Controller */
-    dev = pci_create_simple(pci_bus, PCI_DEVFN(12, 4), TYPE_VT8231_PM);
+    dev = PCI_DEVICE(object_resolve_path_component(via, "pm"));
     i2c_bus = I2C_BUS(qdev_get_child_bus(DEVICE(dev), "i2c"));
     spd_data = spd_data_generate(DDR, machine->ram_size);
     smbus_eeprom_init_one(i2c_bus, 0x57, spd_data);
-
-    /* VT8231 function 5-6: AC97 Audio & Modem */
-    pci_create_simple(pci_bus, PCI_DEVFN(12, 5), TYPE_VIA_AC97);
-    pci_create_simple(pci_bus, PCI_DEVFN(12, 6), TYPE_VIA_MC97);
 
     /* other PC hardware */
     pci_vga_init(pci_bus);
@@ -249,14 +258,14 @@ static void pegasos2_pci_config_write(Pegasos2MachineState *pm, int bus,
     pegasos2_mv_reg_write(pm, pcicfg + 4, len, val);
 }
 
-static void pegasos2_machine_reset(MachineState *machine)
+static void pegasos2_machine_reset(MachineState *machine, ShutdownCause reason)
 {
     Pegasos2MachineState *pm = PEGASOS2_MACHINE(machine);
     void *fdt;
     uint64_t d[2];
     int sz;
 
-    qemu_devices_reset();
+    qemu_devices_reset(reason);
     if (!pm->vof) {
         return; /* Firmware should set up machine so nothing to do */
     }
@@ -276,6 +285,12 @@ static void pegasos2_machine_reset(MachineState *machine)
                               PCI_INTERRUPT_LINE, 2, 0x9);
     pegasos2_pci_config_write(pm, 1, (PCI_DEVFN(12, 0) << 8) |
                               0x50, 1, 0x2);
+    pegasos2_pci_config_write(pm, 1, (PCI_DEVFN(12, 0) << 8) |
+                              0x55, 1, 0x90);
+    pegasos2_pci_config_write(pm, 1, (PCI_DEVFN(12, 0) << 8) |
+                              0x56, 1, 0x99);
+    pegasos2_pci_config_write(pm, 1, (PCI_DEVFN(12, 0) << 8) |
+                              0x57, 1, 0x90);
 
     pegasos2_pci_config_write(pm, 1, (PCI_DEVFN(12, 1) << 8) |
                               PCI_INTERRUPT_LINE, 2, 0x109);
@@ -332,6 +347,10 @@ static void pegasos2_machine_reset(MachineState *machine)
 
     vof_build_dt(fdt, pm->vof);
     vof_client_open_store(fdt, pm->vof, "/chosen", "stdout", "/failsafe");
+
+    /* Set machine->fdt for 'dumpdtb' QMP/HMP command */
+    machine->fdt = fdt;
+
     pm->cpu->vhyp = PPC_VIRTUAL_HYPERVISOR(machine);
 }
 
@@ -449,6 +468,11 @@ static target_ulong pegasos2_rtas(PowerPCCPU *cpu, Pegasos2MachineState *pm,
     }
 }
 
+static bool pegasos2_cpu_in_nested(PowerPCCPU *cpu)
+{
+    return false;
+}
+
 static void pegasos2_hypercall(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu)
 {
     Pegasos2MachineState *pm = PEGASOS2_MACHINE(vhyp);
@@ -457,7 +481,7 @@ static void pegasos2_hypercall(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu)
     /* The TCG path should also be holding the BQL at this point */
     g_assert(qemu_mutex_iothread_locked());
 
-    if (msr_pr) {
+    if (FIELD_EX64(env->msr, MSR, PR)) {
         qemu_log_mask(LOG_GUEST_ERROR, "Hypercall made with MSR[PR]=1\n");
         env->gpr[3] = H_PRIVILEGE;
     } else if (env->gpr[3] == KVMPPC_H_RTAS) {
@@ -504,6 +528,7 @@ static void pegasos2_machine_class_init(ObjectClass *oc, void *data)
     mc->default_ram_id = "pegasos2.ram";
     mc->default_ram_size = 512 * MiB;
 
+    vhc->cpu_in_nested = pegasos2_cpu_in_nested;
     vhc->hypercall = pegasos2_hypercall;
     vhc->cpu_exec_enter = vhyp_nop;
     vhc->cpu_exec_exit = vhyp_nop;
@@ -562,7 +587,7 @@ static void dt_isa(PCIBus *bus, PCIDevice *d, FDTInfo *fi)
     qemu_fdt_setprop_string(fi->fdt, fi->path, "device_type", "isa");
     qemu_fdt_setprop_string(fi->fdt, fi->path, "name", "isa");
 
-    /* addional devices */
+    /* additional devices */
     g_string_printf(name, "%s/lpt@i3bc", fi->path);
     qemu_fdt_add_subnode(fi->fdt, name->str);
     qemu_fdt_setprop_cell(fi->fdt, name->str, "clock-frequency", 0);

@@ -29,7 +29,6 @@
 #include "qemu/osdep.h"
 #include "tap_int.h"
 
-#include "qemu-common.h"
 #include "clients.h"            /* net_init_tap */
 #include "net/eth.h"
 #include "net/net.h"
@@ -790,8 +789,7 @@ static int tap_win32_init(NetClientState *peer, const char *model,
 
     s = DO_UPCAST(TAPState, nc, nc);
 
-    snprintf(s->nc.info_str, sizeof(s->nc.info_str),
-             "tap: ifname=%s", ifname);
+    qemu_set_info_str(&s->nc, "tap: ifname=%s", ifname);
 
     s->handle = handle;
 
@@ -809,7 +807,7 @@ int net_init_tap(const Netdev *netdev, const char *name,
     assert(netdev->type == NET_CLIENT_DRIVER_TAP);
     tap = &netdev->u.tap;
 
-    if (!tap->has_ifname) {
+    if (!tap->ifname) {
         error_report("tap: no interface name");
         return -1;
     }

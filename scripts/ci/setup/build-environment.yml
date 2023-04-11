@@ -19,6 +19,13 @@
           - '((ansible_version.major == 2) and (ansible_version.minor >= 8)) or (ansible_version.major >= 3)'
         msg: "Unsuitable ansible version, please use version 2.8.0 or later"
 
+    - name: Add armhf foreign architecture to aarch64 hosts
+      command: dpkg --add-architecture armhf
+      when:
+        - ansible_facts['distribution'] == 'Ubuntu'
+        - ansible_facts['architecture'] == 'aarch64'
+        - ansible_facts['distribution_version'] == '20.04'
+
     - name: Update apt cache / upgrade packages via apt
       apt:
         update_cache: yes
@@ -26,10 +33,9 @@
       when:
         - ansible_facts['distribution'] == 'Ubuntu'
 
-    - name: Install basic packages to build QEMU on Ubuntu 18.04/20.04
+    - name: Install basic packages to build QEMU on Ubuntu 20.04
       package:
         name:
-        # Originally from tests/docker/dockerfiles/ubuntu1804.docker
           - ccache
           - gcc
           - gettext
@@ -40,6 +46,7 @@
           - libbrlapi-dev
           - libbz2-dev
           - libcacard-dev
+          - libcapstone-dev
           - libcap-ng-dev
           - libcurl4-gnutls-dev
           - libdrm-dev
@@ -83,7 +90,7 @@
       when:
         - ansible_facts['distribution'] == 'Ubuntu'
 
-    - name: Install packages to build QEMU on Ubuntu 18.04/20.04 on non-s390x
+    - name: Install packages to build QEMU on Ubuntu 20.04 on non-s390x
       package:
         name:
           - libspice-server-dev
@@ -91,16 +98,7 @@
         state: present
       when:
         - ansible_facts['distribution'] == 'Ubuntu'
-        - ansible_facts['architecture'] != 's390x'
-
-    - name: Install basic packages to build QEMU on Ubuntu 18.04
-      package:
-        name:
-        # Originally from tests/docker/dockerfiles/ubuntu1804.docker
-          - clang
-      when:
-        - ansible_facts['distribution'] == 'Ubuntu'
-        - ansible_facts['distribution_version'] == '18.04'
+        - ansible_facts['architecture'] == 'aarch64' or ansible_facts['architecture'] == 'x86_64'
 
     - name: Install basic packages to build QEMU on Ubuntu 20.04
       package:
@@ -115,6 +113,43 @@
         - ansible_facts['distribution'] == 'Ubuntu'
         - ansible_facts['distribution_version'] == '20.04'
 
+    - name: Install armhf cross-compile packages to build QEMU on AArch64 Ubuntu 20.04
+      package:
+        name:
+          - binutils-arm-linux-gnueabihf
+          - gcc-arm-linux-gnueabihf
+          - libblkid-dev:armhf
+          - libc6-dev:armhf
+          - libffi-dev:armhf
+          - libglib2.0-dev:armhf
+          - libmount-dev:armhf
+          - libpcre2-dev:armhf
+          - libpixman-1-dev:armhf
+          - zlib1g-dev:armhf
+      when:
+        - ansible_facts['distribution'] == 'Ubuntu'
+        - ansible_facts['distribution_version'] == '20.04'
+        - ansible_facts['architecture'] == 'aarch64'
+
+    - name: Enable EPEL repo on EL8
+      dnf:
+        name:
+          - epel-release
+        state: present
+      when:
+        - ansible_facts['distribution_file_variety'] in ['RedHat', 'CentOS']
+        - ansible_facts['distribution_major_version'] == '8'
+
+    - name: Enable PowerTools repo on CentOS 8
+      ini_file:
+        path: /etc/yum.repos.d/CentOS-Stream-PowerTools.repo
+        section: powertools
+        option: enabled
+        value: "1"
+      when:
+        - ansible_facts['distribution_file_variety'] == 'CentOS'
+        - ansible_facts['distribution_major_version'] == '8'
+
     - name: Install basic packages to build QEMU on EL8
       dnf:
         # This list of packages start with tests/docker/dockerfiles/centos8.docker
@@ -123,7 +158,9 @@
         name:
           - bzip2
           - bzip2-devel
+          - capstone-devel
           - dbus-daemon
+          - device-mapper-multipath-devel
           - diffutils
           - gcc
           - gcc-c++
@@ -131,24 +168,64 @@
           - gettext
           - git
           - glib2-devel
+          - glusterfs-api-devel
+          - gnutls-devel
           - libaio-devel
+          - libcap-ng-devel
+          - libcurl-devel
           - libepoxy-devel
+          - libfdt-devel
           - libgcrypt-devel
+          - libiscsi-devel
+          - libpmem-devel
+          - librados-devel
+          - librbd-devel
+          - libseccomp-devel
+          - libssh-devel
+          - libxkbcommon-devel
           - lzo-devel
           - make
           - mesa-libEGL-devel
           - nettle-devel
+          - ninja-build
           - nmap-ncat
-          - perl-Test-Harness
+          - numactl-devel
           - pixman-devel
-          - python36
+          - python38
+          - python3-sphinx
           - rdma-core-devel
+          - redhat-rpm-config
+          - snappy-devel
           - spice-glib-devel
-          - spice-server
+          - systemd-devel
           - systemtap-sdt-devel
           - tar
           - zlib-devel
         state: present
       when:
-        - ansible_facts['distribution_file_variety'] == 'RedHat'
+        - ansible_facts['distribution_file_variety'] in ['RedHat', 'CentOS']
         - ansible_facts['distribution_version'] == '8'
+
+    - name: Install packages only available on x86 and aarch64
+      dnf:
+        # Spice server not available in ppc64le
+        name:
+          - spice-server
+          - spice-server-devel
+        state: present
+      when:
+        - ansible_facts['distribution_file_variety'] in ['RedHat', 'CentOS']
+        - ansible_facts['distribution_version'] == '8'
+        - ansible_facts['architecture'] == 'aarch64' or ansible_facts['architecture'] == 'x86_64'
+
+    - name: Check whether the Python runtime version is managed by alternatives
+      stat:
+        path: /etc/alternatives/python3
+      register: python3
+
+    - name: Set default Python runtime to 3.8 on EL8
+      command: alternatives --set python3 /usr/bin/python3.8
+      when:
+        - ansible_facts['distribution_file_variety'] in ['RedHat', 'CentOS']
+        - ansible_facts['distribution_version'] == '8'
+        - python3.stat.islnk and python3.stat.lnk_target != '/usr/bin/python3.8'

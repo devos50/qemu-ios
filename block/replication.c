@@ -88,11 +88,9 @@ static int replication_open(BlockDriverState *bs, QDict *options,
     const char *mode;
     const char *top_id;
 
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
-                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
-                               false, errp);
-    if (!bs->file) {
-        return -EINVAL;
+    ret = bdrv_open_file_child(NULL, options, "file", bs, errp);
+    if (ret < 0) {
+        return ret;
     }
 
     ret = -EINVAL;
@@ -142,6 +140,7 @@ static void replication_close(BlockDriverState *bs)
 {
     BDRVReplicationState *s = bs->opaque;
     Job *commit_job;
+    GLOBAL_STATE_CODE();
 
     if (s->stage == BLOCK_REPLICATION_RUNNING) {
         replication_stop(s->rs, false, NULL);
@@ -180,9 +179,10 @@ static void replication_child_perm(BlockDriverState *bs, BdrvChild *c,
     return;
 }
 
-static int64_t replication_getlength(BlockDriverState *bs)
+static int64_t coroutine_fn GRAPH_RDLOCK
+replication_co_getlength(BlockDriverState *bs)
 {
-    return bdrv_getlength(bs->file->bs);
+    return bdrv_co_getlength(bs->file->bs);
 }
 
 static int replication_get_io_status(BDRVReplicationState *s)
@@ -221,10 +221,9 @@ static int replication_return_value(BDRVReplicationState *s, int ret)
     return ret;
 }
 
-static coroutine_fn int replication_co_readv(BlockDriverState *bs,
-                                             int64_t sector_num,
-                                             int remaining_sectors,
-                                             QEMUIOVector *qiov)
+static int coroutine_fn GRAPH_RDLOCK
+replication_co_readv(BlockDriverState *bs, int64_t sector_num,
+                     int remaining_sectors, QEMUIOVector *qiov)
 {
     BDRVReplicationState *s = bs->opaque;
     int ret;
@@ -245,11 +244,9 @@ static coroutine_fn int replication_co_readv(BlockDriverState *bs,
     return replication_return_value(s, ret);
 }
 
-static coroutine_fn int replication_co_writev(BlockDriverState *bs,
-                                              int64_t sector_num,
-                                              int remaining_sectors,
-                                              QEMUIOVector *qiov,
-                                              int flags)
+static int coroutine_fn GRAPH_RDLOCK
+replication_co_writev(BlockDriverState *bs, int64_t sector_num,
+                      int remaining_sectors, QEMUIOVector *qiov, int flags)
 {
     BDRVReplicationState *s = bs->opaque;
     QEMUIOVector hd_qiov;
@@ -260,7 +257,6 @@ static coroutine_fn int replication_co_writev(BlockDriverState *bs,
     int ret;
     int64_t n;
 
-    assert(!flags);
     ret = replication_get_io_status(s);
     if (ret < 0) {
         goto out;
@@ -376,9 +372,6 @@ static void reopen_backing_file(BlockDriverState *bs, bool writable,
         s->orig_secondary_read_only = bdrv_is_read_only(secondary_disk->bs);
     }
 
-    bdrv_subtree_drained_begin(hidden_disk->bs);
-    bdrv_subtree_drained_begin(secondary_disk->bs);
-
     if (s->orig_hidden_read_only) {
         QDict *opts = qdict_new();
         qdict_put_bool(opts, BDRV_OPT_READ_ONLY, !writable);
@@ -403,9 +396,6 @@ static void reopen_backing_file(BlockDriverState *bs, bool writable,
             aio_context_acquire(ctx);
         }
     }
-
-    bdrv_subtree_drained_end(hidden_disk->bs);
-    bdrv_subtree_drained_end(secondary_disk->bs);
 }
 
 static void backup_job_cleanup(BlockDriverState *bs)
@@ -726,7 +716,9 @@ static void replication_stop(ReplicationState *rs, bool failover, Error **errp)
          * disk, secondary disk in backup_job_completed().
          */
         if (s->backup_job) {
+            aio_context_release(aio_context);
             job_cancel_sync(&s->backup_job->job, true);
+            aio_context_acquire(aio_context);
         }
 
         if (!failover) {
@@ -764,7 +756,7 @@ static BlockDriver bdrv_replication = {
     .bdrv_close                 = replication_close,
     .bdrv_child_perm            = replication_child_perm,
 
-    .bdrv_getlength             = replication_getlength,
+    .bdrv_co_getlength          = replication_co_getlength,
     .bdrv_co_readv              = replication_co_readv,
     .bdrv_co_writev             = replication_co_writev,
 

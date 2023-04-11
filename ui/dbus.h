@@ -21,8 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#ifndef UI_DBUS_H_
-#define UI_DBUS_H_
+
+#ifndef UI_DBUS_H
+#define UI_DBUS_H
 
 #include "chardev/char-socket.h"
 #include "qemu/dbus.h"
@@ -30,7 +31,7 @@
 #include "ui/console.h"
 #include "ui/clipboard.h"
 
-#include "dbus-display1.h"
+#include "ui/dbus-display1.h"
 
 typedef struct DBusClipboardRequest {
     GDBusMethodInvocation *invocation;
@@ -78,6 +79,9 @@ dbus_display_console_new(DBusDisplay *display, QemuConsole *con);
 
 int
 dbus_display_console_get_index(DBusDisplayConsole *ddc);
+
+
+extern const DisplayChangeListenerOps dbus_console_dcl_ops;
 
 #define DBUS_DISPLAY_TYPE_LISTENER dbus_display_listener_get_type()
 G_DECLARE_FINAL_TYPE(DBusDisplayListener,
@@ -141,4 +145,4 @@ void dbus_chardev_init(DBusDisplay *dpy);
 
 void dbus_clipboard_init(DBusDisplay *dpy);
 
-#endif /* UI_DBUS_H_ */
+#endif /* UI_DBUS_H */

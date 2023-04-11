@@ -15,10 +15,6 @@ config ISA_DEBUG
     bool
     depends on ISA_BUS
 
-config SGA
-    bool
-    depends on ISA_BUS
-
 config ISA_TESTDEV
     bool
     default y if TEST_DEVICES
@@ -170,5 +166,18 @@ config SIFIVE_U_PRCI
 
 config VIRT_CTRL
     bool
+
+config LASI
+    bool
+
+config ALLWINNER_A10_CCM
+    bool
+
+config ALLWINNER_A10_DRAMC
+    bool
+
+config AXP209_PMU
+    bool
+    depends on I2C
 
 source macio/Kconfig

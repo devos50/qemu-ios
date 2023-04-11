@@ -22,7 +22,7 @@
 static bool spr_groupA_read_allowed(DisasContext *ctx)
 {
     if (!ctx->mmcr0_pmcc0 && ctx->mmcr0_pmcc1) {
-        gen_hvpriv_exception(ctx, POWERPC_EXCP_FU);
+        gen_exception_err(ctx, POWERPC_EXCP_FU, FSCR_IC_PMU);
         return false;
     }
 
@@ -46,10 +46,10 @@ static bool spr_groupA_write_allowed(DisasContext *ctx)
 
     if (ctx->mmcr0_pmcc1) {
         /* PMCC = 0b01 */
-        gen_hvpriv_exception(ctx, POWERPC_EXCP_FU);
+        gen_exception_err(ctx, POWERPC_EXCP_FU, FSCR_IC_PMU);
     } else {
         /* PMCC = 0b00 */
-        gen_hvpriv_exception(ctx, POWERPC_EXCP_INVAL_SPR);
+        gen_hvpriv_exception(ctx, POWERPC_EXCP_PRIV_REG);
     }
 
     return false;
@@ -58,8 +58,6 @@ static bool spr_groupA_write_allowed(DisasContext *ctx)
 /*
  * Helper function to avoid code repetition between MMCR0 and
  * MMCR2 problem state write functions.
- *
- * 'ret' must be tcg_temp_freed() by the caller.
  */
 static TCGv masked_gprn_for_spr_write(int gprn, int sprn,
                                       uint64_t spr_mask)
@@ -76,8 +74,6 @@ static TCGv masked_gprn_for_spr_write(int gprn, int sprn,
 
     /* Add the masked gprn bits into 'ret' */
     tcg_gen_or_tl(ret, ret, t0);
-
-    tcg_temp_free(t0);
 
     return ret;
 }
@@ -100,8 +96,6 @@ void spr_read_MMCR0_ureg(DisasContext *ctx, int gprn, int sprn)
     gen_load_spr(t0, SPR_POWER_MMCR0);
     tcg_gen_andi_tl(t0, t0, MMCR0_UREG_MASK);
     tcg_gen_mov_tl(cpu_gpr[gprn], t0);
-
-    tcg_temp_free(t0);
 }
 
 static void write_MMCR0_common(DisasContext *ctx, TCGv val)
@@ -137,8 +131,6 @@ void spr_write_MMCR0_ureg(DisasContext *ctx, int sprn, int gprn)
     masked_gprn = masked_gprn_for_spr_write(gprn, SPR_POWER_MMCR0,
                                             MMCR0_UREG_MASK);
     write_MMCR0_common(ctx, masked_gprn);
-
-    tcg_temp_free(masked_gprn);
 }
 
 void spr_read_MMCR2_ureg(DisasContext *ctx, int gprn, int sprn)
@@ -164,8 +156,6 @@ void spr_read_MMCR2_ureg(DisasContext *ctx, int gprn, int sprn)
     gen_load_spr(t0, SPR_POWER_MMCR2);
     tcg_gen_andi_tl(t0, t0, MMCR2_UREG_MASK);
     tcg_gen_mov_tl(cpu_gpr[gprn], t0);
-
-    tcg_temp_free(t0);
 }
 
 void spr_write_MMCR2_ureg(DisasContext *ctx, int sprn, int gprn)
@@ -183,18 +173,14 @@ void spr_write_MMCR2_ureg(DisasContext *ctx, int sprn, int gprn)
     masked_gprn = masked_gprn_for_spr_write(gprn, SPR_POWER_MMCR2,
                                             MMCR2_UREG_MASK);
     gen_store_spr(SPR_POWER_MMCR2, masked_gprn);
-
-    tcg_temp_free(masked_gprn);
 }
 
 void spr_read_PMC(DisasContext *ctx, int gprn, int sprn)
 {
-    TCGv_i32 t_sprn = tcg_const_i32(sprn);
+    TCGv_i32 t_sprn = tcg_constant_i32(sprn);
 
     gen_icount_io_start(ctx);
     gen_helper_read_pmc(cpu_gpr[gprn], cpu_env, t_sprn);
-
-    tcg_temp_free_i32(t_sprn);
 }
 
 void spr_read_PMC14_ureg(DisasContext *ctx, int gprn, int sprn)
@@ -214,7 +200,7 @@ void spr_read_PMC56_ureg(DisasContext *ctx, int gprn, int sprn)
      * Interrupt.
      */
     if (ctx->mmcr0_pmcc0 && ctx->mmcr0_pmcc1) {
-        gen_hvpriv_exception(ctx, POWERPC_EXCP_FU);
+        gen_exception_err(ctx, POWERPC_EXCP_FU, FSCR_IC_PMU);
         return;
     }
 
@@ -224,12 +210,10 @@ void spr_read_PMC56_ureg(DisasContext *ctx, int gprn, int sprn)
 
 void spr_write_PMC(DisasContext *ctx, int sprn, int gprn)
 {
-    TCGv_i32 t_sprn = tcg_const_i32(sprn);
+    TCGv_i32 t_sprn = tcg_constant_i32(sprn);
 
     gen_icount_io_start(ctx);
     gen_helper_store_pmc(cpu_env, t_sprn, cpu_gpr[gprn]);
-
-    tcg_temp_free_i32(t_sprn);
 }
 
 void spr_write_PMC14_ureg(DisasContext *ctx, int sprn, int gprn)
@@ -249,7 +233,7 @@ void spr_write_PMC56_ureg(DisasContext *ctx, int sprn, int gprn)
      * Interrupt.
      */
     if (ctx->mmcr0_pmcc0 && ctx->mmcr0_pmcc1) {
-        gen_hvpriv_exception(ctx, POWERPC_EXCP_FU);
+        gen_exception_err(ctx, POWERPC_EXCP_FU, FSCR_IC_PMU);
         return;
     }
 

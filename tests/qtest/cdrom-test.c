@@ -11,7 +11,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "libqos/libqtest.h"
+#include "libqtest.h"
 #include "boot-sector.h"
 #include "qapi/qmp/qdict.h"
 
@@ -52,7 +52,7 @@ static int prepare_image(const char *arch, char *isoimage)
         perror("Error creating temporary iso image file");
         return -1;
     }
-    if (!mkdtemp(srcdir)) {
+    if (!g_mkdtemp(srcdir)) {
         perror("Error creating temporary directory");
         goto cleanup;
     }
@@ -138,7 +138,7 @@ static void add_x86_tests(void)
      * Unstable CI test under load
      * See https://lists.gnu.org/archive/html/qemu-devel/2019-02/msg05509.html
      */
-    if (g_test_slow()) {
+    if (g_test_slow() && qtest_has_machine("isapc")) {
         qtest_add_data_func("cdrom/boot/isapc", "-M isapc "
                             "-drive if=ide,media=cdrom,file=", test_cdboot);
     }

@@ -19,7 +19,6 @@
 #include "qemu/osdep.h"
 
 #include "qemu.h"
-#include "qemu-common.h"
 
 static pthread_mutex_t mmap_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread int mmap_lock_count;
@@ -515,7 +514,7 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int prot,
      * up to the targets page boundary.
      */
 
-    if ((qemu_real_host_page_size < qemu_host_page_size) && fd != -1) {
+    if ((qemu_real_host_page_size() < qemu_host_page_size) && fd != -1) {
         struct stat sb;
 
         if (fstat(fd, &sb) == -1) {
@@ -664,7 +663,6 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int prot,
     page_dump(stdout);
     printf("\n");
 #endif
-    tb_invalidate_phys_range(start, start + len);
     mmap_unlock();
     return start;
 fail:
@@ -770,7 +768,6 @@ int target_munmap(abi_ulong start, abi_ulong len)
 
     if (ret == 0) {
         page_set_flags(start, start + len, 0);
-        tb_invalidate_phys_range(start, start + len);
     }
     mmap_unlock();
     return ret;

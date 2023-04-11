@@ -10,6 +10,8 @@
 #ifndef SYSCALL_TRACE_H
 #define SYSCALL_TRACE_H
 
+#include "exec/user/abitypes.h"
+#include "qemu/plugin.h"
 #include "trace/trace-root.h"
 
 /*
@@ -39,4 +41,4 @@ static inline void record_syscall_return(void *cpu, int num, abi_long ret)
 }
 
 
-#endif /* _SYSCALL_TRACE_H_ */
+#endif /* SYSCALL_TRACE_H */

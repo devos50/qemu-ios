@@ -190,7 +190,7 @@ static TCGTemp *find_better_copy(TCGContext *s, TCGTemp *ts)
         } else if (i->kind > ts->kind) {
             if (i->kind == TEMP_GLOBAL) {
                 g = i;
-            } else if (i->kind == TEMP_LOCAL) {
+            } else if (i->kind == TEMP_TB) {
                 l = i;
             }
         }
@@ -308,13 +308,13 @@ static uint64_t do_constant_folding_2(TCGOpcode op, uint64_t x, uint64_t y)
     CASE_OP_32_64(mul):
         return x * y;
 
-    CASE_OP_32_64(and):
+    CASE_OP_32_64_VEC(and):
         return x & y;
 
-    CASE_OP_32_64(or):
+    CASE_OP_32_64_VEC(or):
         return x | y;
 
-    CASE_OP_32_64(xor):
+    CASE_OP_32_64_VEC(xor):
         return x ^ y;
 
     case INDEX_op_shl_i32:
@@ -347,25 +347,25 @@ static uint64_t do_constant_folding_2(TCGOpcode op, uint64_t x, uint64_t y)
     case INDEX_op_rotl_i64:
         return rol64(x, y & 63);
 
-    CASE_OP_32_64(not):
+    CASE_OP_32_64_VEC(not):
         return ~x;
 
     CASE_OP_32_64(neg):
         return -x;
 
-    CASE_OP_32_64(andc):
+    CASE_OP_32_64_VEC(andc):
         return x & ~y;
 
-    CASE_OP_32_64(orc):
+    CASE_OP_32_64_VEC(orc):
         return x | ~y;
 
-    CASE_OP_32_64(eqv):
+    CASE_OP_32_64_VEC(eqv):
         return ~(x ^ y);
 
-    CASE_OP_32_64(nand):
+    CASE_OP_32_64_VEC(nand):
         return ~(x & y);
 
-    CASE_OP_32_64(nor):
+    CASE_OP_32_64_VEC(nor):
         return ~(x | y);
 
     case INDEX_op_clz_i32:
@@ -552,10 +552,10 @@ static bool do_constant_folding_cond_eq(TCGCond c)
 static int do_constant_folding_cond(TCGType type, TCGArg x,
                                     TCGArg y, TCGCond c)
 {
-    uint64_t xv = arg_info(x)->val;
-    uint64_t yv = arg_info(y)->val;
-
     if (arg_is_const(x) && arg_is_const(y)) {
+        uint64_t xv = arg_info(x)->val;
+        uint64_t yv = arg_info(y)->val;
+
         switch (type) {
         case TCG_TYPE_I32:
             return do_constant_folding_cond_32(xv, yv, c);
@@ -567,7 +567,7 @@ static int do_constant_folding_cond(TCGType type, TCGArg x,
         }
     } else if (args_are_copies(x, y)) {
         return do_constant_folding_cond_eq(c);
-    } else if (arg_is_const(y) && yv == 0) {
+    } else if (arg_is_const(y) && arg_info(y)->val == 0) {
         switch (c) {
         case TCG_COND_LTU:
             return 0;
@@ -667,9 +667,7 @@ static void init_arguments(OptContext *ctx, TCGOp *op, int nb_args)
 {
     for (int i = 0; i < nb_args; i++) {
         TCGTemp *ts = arg_temp(op->args[i]);
-        if (ts) {
-            init_ts_info(ctx, ts);
-        }
+        init_ts_info(ctx, ts);
     }
 }
 
@@ -680,7 +678,7 @@ static void copy_propagate(OptContext *ctx, TCGOp *op,
 
     for (int i = nb_oargs; i < nb_oargs + nb_iargs; i++) {
         TCGTemp *ts = arg_temp(op->args[i]);
-        if (ts && ts_is_copy(ts)) {
+        if (ts_is_copy(ts)) {
             op->args[i] = temp_arg(find_better_copy(s, ts));
         }
     }
@@ -748,6 +746,12 @@ static bool fold_const2(OptContext *ctx, TCGOp *op)
         t1 = do_constant_folding(op->opc, ctx->type, t1, t2);
         return tcg_opt_gen_movi(ctx, op, op->args[0], t1);
     }
+    return false;
+}
+
+static bool fold_commutative(OptContext *ctx, TCGOp *op)
+{
+    swap_commutative(op->args[0], &op->args[1], &op->args[2]);
     return false;
 }
 
@@ -905,6 +909,16 @@ static bool fold_add(OptContext *ctx, TCGOp *op)
     return false;
 }
 
+/* We cannot as yet do_constant_folding with vectors. */
+static bool fold_add_vec(OptContext *ctx, TCGOp *op)
+{
+    if (fold_commutative(ctx, op) ||
+        fold_xi_to_x(ctx, op, 0)) {
+        return true;
+    }
+    return false;
+}
+
 static bool fold_addsub2(OptContext *ctx, TCGOp *op, bool add)
 {
     if (arg_is_const(op->args[2]) && arg_is_const(op->args[3]) &&
@@ -946,7 +960,7 @@ static bool fold_addsub2(OptContext *ctx, TCGOp *op, bool add)
         rh = op->args[1];
 
         /* The proper opcode is supplied by tcg_opt_gen_mov. */
-        op2 = tcg_op_insert_before(ctx->tcg, op, 0);
+        op2 = tcg_op_insert_before(ctx->tcg, op, 0, 2);
 
         tcg_opt_gen_movi(ctx, op, rl, al);
         tcg_opt_gen_movi(ctx, op2, rh, ah);
@@ -1597,7 +1611,7 @@ static bool fold_multiply2(OptContext *ctx, TCGOp *op)
         rh = op->args[1];
 
         /* The proper opcode is supplied by tcg_opt_gen_mov. */
-        op2 = tcg_op_insert_before(ctx->tcg, op, 0);
+        op2 = tcg_op_insert_before(ctx->tcg, op, 0, 2);
 
         tcg_opt_gen_movi(ctx, op, rl, l);
         tcg_opt_gen_movi(ctx, op2, rh, h);
@@ -1938,15 +1952,20 @@ static bool fold_sub_to_neg(OptContext *ctx, TCGOp *op)
     return false;
 }
 
-static bool fold_sub(OptContext *ctx, TCGOp *op)
+/* We cannot as yet do_constant_folding with vectors. */
+static bool fold_sub_vec(OptContext *ctx, TCGOp *op)
 {
-    if (fold_const2(ctx, op) ||
-        fold_xx_to_i(ctx, op, 0) ||
+    if (fold_xx_to_i(ctx, op, 0) ||
         fold_xi_to_x(ctx, op, 0) ||
         fold_sub_to_neg(ctx, op)) {
         return true;
     }
     return false;
+}
+
+static bool fold_sub(OptContext *ctx, TCGOp *op)
+{
+    return fold_const2(ctx, op) || fold_sub_vec(ctx, op);
 }
 
 static bool fold_sub2(OptContext *ctx, TCGOp *op)
@@ -2052,8 +2071,11 @@ void tcg_optimize(TCGContext *s)
          * Sorted alphabetically by opcode as much as possible.
          */
         switch (opc) {
-        CASE_OP_32_64_VEC(add):
+        CASE_OP_32_64(add):
             done = fold_add(&ctx, op);
+            break;
+        case INDEX_op_add_vec:
+            done = fold_add_vec(&ctx, op);
             break;
         CASE_OP_32_64(add2):
             done = fold_add2(&ctx, op);
@@ -2095,7 +2117,7 @@ void tcg_optimize(TCGContext *s)
         case INDEX_op_dup2_vec:
             done = fold_dup2(&ctx, op);
             break;
-        CASE_OP_32_64(eqv):
+        CASE_OP_32_64_VEC(eqv):
             done = fold_eqv(&ctx, op);
             break;
         CASE_OP_32_64(extract):
@@ -2146,13 +2168,13 @@ void tcg_optimize(TCGContext *s)
         CASE_OP_32_64(mulu2):
             done = fold_multiply2(&ctx, op);
             break;
-        CASE_OP_32_64(nand):
+        CASE_OP_32_64_VEC(nand):
             done = fold_nand(&ctx, op);
             break;
         CASE_OP_32_64(neg):
             done = fold_neg(&ctx, op);
             break;
-        CASE_OP_32_64(nor):
+        CASE_OP_32_64_VEC(nor):
             done = fold_nor(&ctx, op);
             break;
         CASE_OP_32_64_VEC(not):
@@ -2193,8 +2215,11 @@ void tcg_optimize(TCGContext *s)
         CASE_OP_32_64(sextract):
             done = fold_sextract(&ctx, op);
             break;
-        CASE_OP_32_64_VEC(sub):
+        CASE_OP_32_64(sub):
             done = fold_sub(&ctx, op);
+            break;
+        case INDEX_op_sub_vec:
+            done = fold_sub_vec(&ctx, op);
             break;
         CASE_OP_32_64(sub2):
             done = fold_sub2(&ctx, op);

@@ -330,6 +330,112 @@ RISC-V firmware not booted by default (removed in 5.1)
 QEMU 5.1 changes the default behaviour from ``-bios none`` to ``-bios default``
 for the RISC-V ``virt`` machine and ``sifive_u`` machine.
 
+``-no-quit`` (removed in 7.0)
+'''''''''''''''''''''''''''''
+
+The ``-no-quit`` was a synonym for ``-display ...,window-close=off`` which
+should be used instead.
+
+``--enable-fips`` (removed in 7.1)
+''''''''''''''''''''''''''''''''''
+
+This option restricted usage of certain cryptographic algorithms when
+the host is operating in FIPS mode.
+
+If FIPS compliance is required, QEMU should be built with the ``libgcrypt``
+or ``gnutls`` library enabled as a cryptography provider.
+
+Neither the ``nettle`` library, or the built-in cryptography provider are
+supported on FIPS enabled hosts.
+
+``-writeconfig`` (removed in 7.1)
+'''''''''''''''''''''''''''''''''
+
+The ``-writeconfig`` option was not able to serialize the entire contents
+of the QEMU command line.  It is thus considered a failed experiment
+and removed without a replacement.
+
+``loaded`` property of ``secret`` and ``secret_keyring`` objects (removed in 7.1)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+The ``loaded=on`` option in the command line or QMP ``object-add`` either had
+no effect (if ``loaded`` was the last option) or caused options to be
+effectively ignored as if they were not given.  The property is therefore
+useless and should simply be removed.
+
+``opened`` property of ``rng-*`` objects (removed in 7.1)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+The ``opened=on`` option in the command line or QMP ``object-add`` either had
+no effect (if ``opened`` was the last option) or caused errors.  The property
+is therefore useless and should simply be removed.
+
+``-display sdl,window_close=...`` (removed in 7.1)
+''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Use ``-display sdl,window-close=...`` instead (i.e. with a minus instead of
+an underscore between "window" and "close").
+
+``-alt-grab`` and ``-display sdl,alt_grab=on`` (removed in 7.1)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Use ``-display sdl,grab-mod=lshift-lctrl-lalt`` instead.
+
+``-ctrl-grab`` and ``-display sdl,ctrl_grab=on`` (removed in 7.1)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Use ``-display sdl,grab-mod=rctrl`` instead.
+
+``-sdl`` (removed in 7.1)
+'''''''''''''''''''''''''
+
+Use ``-display sdl`` instead.
+
+``-curses`` (removed in 7.1)
+''''''''''''''''''''''''''''
+
+Use ``-display curses`` instead.
+
+Creating sound card devices using ``-soundhw`` (removed in 7.1)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Sound card devices should be created using ``-device`` or ``-audio``.
+The exception is ``pcspk`` which can be activated using ``-machine
+pcspk-audiodev=<name>``.
+
+``-watchdog`` (since 7.2)
+'''''''''''''''''''''''''
+
+Use ``-device`` instead.
+
+Hexadecimal sizes with scaling multipliers (since 8.0)
+''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Input parameters that take a size value should only use a size suffix
+(such as 'k' or 'M') when the base is written in decimal, and not when
+the value is hexadecimal.  That is, '0x20M' should be written either as
+'32M' or as '0x2000000'.
+
+``-chardev`` backend aliases ``tty`` and ``parport`` (removed in 8.0)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+``tty`` and ``parport`` used to be aliases for ``serial`` and ``parallel``
+respectively. The actual backend names should be used instead.
+
+``-drive if=none`` for the sifive_u OTP device (removed in 8.0)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Use ``-drive if=pflash`` to configure the OTP device of the sifive_u
+RISC-V machine instead.
+
+``-spice password=string`` (removed in 8.0)
+'''''''''''''''''''''''''''''''''''''''''''
+
+This option was insecure because the SPICE password remained visible in
+the process listing. This was replaced by the new ``password-secret``
+option which lets the password be securely provided on the command
+line using a ``secret`` object instance.
+
 QEMU Machine Protocol (QMP) commands
 ------------------------------------
 
@@ -348,7 +454,8 @@ documentation of ``query-hotpluggable-cpus`` for additional details.
 ``change`` (removed in 6.0)
 '''''''''''''''''''''''''''
 
-Use ``blockdev-change-medium`` or ``change-vnc-password`` instead.
+Use ``blockdev-change-medium`` or ``change-vnc-password`` or
+``display-update`` instead.
 
 ``query-events`` (removed in 6.0)
 '''''''''''''''''''''''''''''''''
@@ -413,6 +520,19 @@ type of array items in query-named-block-nodes.
 ''''''''''''''''''''''''''''''''''''''''''''''''
 
 Specify the properties for the object as top-level arguments instead.
+
+``query-sgx`` return value member ``section-size`` (removed in 8.0)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Member ``section-size`` in the return value of ``query-sgx``
+was superseded by ``sections``.
+
+
+``query-sgx-capabilities`` return value member ``section-size`` (removed in 8.0)
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Member ``section-size`` in the return value of ``query-sgx-capabilities``
+was superseded by ``sections``.
 
 Human Monitor Protocol (HMP) commands
 -------------------------------------
@@ -485,9 +605,8 @@ KVM guest support on 32-bit Arm hosts (removed in 5.2)
 ''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
 The Linux kernel has dropped support for allowing 32-bit Arm systems
-to host KVM guests as of the 5.7 kernel. Accordingly, QEMU is deprecating
-its support for this configuration and will remove it in a future version.
-Running 32-bit guests on a 64-bit Arm host remains supported.
+to host KVM guests as of the 5.7 kernel, and was thus removed from QEMU
+as well.  Running 32-bit guests on a 64-bit Arm host remains supported.
 
 RISC-V ISA Specific CPUs (removed in 5.1)
 '''''''''''''''''''''''''''''''''''''''''
@@ -530,6 +649,31 @@ port.  Removed without replacement.
 Support for this CPU was removed from the upstream Linux kernel, and
 there is no available upstream toolchain to build binaries for it.
 Removed without replacement.
+
+x86 ``Icelake-Client`` CPU (removed in 7.1)
+'''''''''''''''''''''''''''''''''''''''''''
+
+There isn't ever Icelake Client CPU, it is some wrong and imaginary one.
+Use ``Icelake-Server`` instead.
+
+System accelerators
+-------------------
+
+Userspace local APIC with KVM (x86, removed 8.0)
+''''''''''''''''''''''''''''''''''''''''''''''''
+
+``-M kernel-irqchip=off`` cannot be used on KVM if the CPU model includes
+a local APIC.  The ``split`` setting is supported, as is using ``-M
+kernel-irqchip=off`` when the CPU does not have a local APIC.
+
+System accelerators
+-------------------
+
+MIPS "Trap-and-Emulate" KVM support (removed in 8.0)
+''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+The MIPS "Trap-and-Emulate" KVM host and guest support was removed
+from Linux in 2021, and is not supported anymore by QEMU either.
 
 System emulator machines
 ------------------------
@@ -581,6 +725,17 @@ The Raspberry Pi machines come in various models (A, A+, B, B+). To be able
 to distinguish which model QEMU is implementing, the ``raspi2`` and ``raspi3``
 machines have been renamed ``raspi2b`` and ``raspi3b``.
 
+Aspeed ``swift-bmc`` machine (removed in 7.0)
+'''''''''''''''''''''''''''''''''''''''''''''
+
+This machine was removed because it was unused. Alternative AST2500 based
+OpenPOWER machines are ``witherspoon-bmc`` and ``romulus-bmc``.
+
+ppc ``taihu`` machine (removed in 7.2)
+'''''''''''''''''''''''''''''''''''''''''''''
+
+This machine was removed because it was partially emulated and 405
+machines are very similar. Use the ``ref405ep`` machine instead.
 
 linux-user mode CPUs
 --------------------
@@ -593,6 +748,27 @@ only implemented in linux-user mode, but support for this CPU was removed from
 the upstream Linux kernel in 2018, and it has also been dropped from glibc, so
 there is no new Linux development taking place with this architecture. For
 running the old binaries, you can use older versions of QEMU.
+
+``ppc64abi32`` CPUs (removed in 7.0)
+''''''''''''''''''''''''''''''''''''
+
+The ``ppc64abi32`` architecture has a number of issues which regularly
+tripped up the CI testing and was suspected to be quite broken. For that
+reason the maintainers strongly suspected no one actually used it.
+
+
+TCG introspection features
+--------------------------
+
+TCG trace-events (since 6.2)
+''''''''''''''''''''''''''''
+
+The ability to add new TCG trace points had bit rotted and as the
+feature can be replicated with TCG plugins it was removed. If
+any user is currently using this feature and needs help with
+converting to using TCG plugins they should contact the qemu-devel
+mailing list.
+
 
 System emulator devices
 -----------------------
@@ -619,6 +795,16 @@ The 'ide-drive' device has been removed. Users should use 'ide-hd' or
 
 The 'scsi-disk' device has been removed. Users should use 'scsi-hd' or
 'scsi-cd' as appropriate to get a SCSI hard disk or CD-ROM as needed.
+
+``sga`` (removed in 8.0)
+''''''''''''''''''''''''
+
+The ``sga`` device loaded an option ROM for x86 targets which enabled
+SeaBIOS to send messages to the serial console. SeaBIOS 1.11.0 onwards
+contains native support for this feature and thus use of the option
+ROM approach was obsolete. The native SeaBIOS support can be activated
+by using ``-machine graphics=off``.
+
 
 Related binaries
 ----------------
@@ -703,3 +889,16 @@ The VXHS code did not compile since v2.12.0. It was removed in 5.1.
 The corresponding upstream server project is no longer maintained.
 Users are recommended to switch to an alternative distributed block
 device driver such as RBD.
+
+Tools
+-----
+
+virtiofsd (removed in 8.0)
+''''''''''''''''''''''''''
+
+There is a newer Rust implementation of ``virtiofsd`` at
+``https://gitlab.com/virtio-fs/virtiofsd``; this has been
+stable for some time and is now widely used.
+The command line and feature set is very close to the removed
+C implementation.
+

@@ -1,9 +1,9 @@
 #ifndef LIBQOS_H
 #define LIBQOS_H
 
-#include "libqtest.h"
+#include "../libqtest.h"
 #include "pci.h"
-#include "malloc.h"
+#include "libqos-malloc.h"
 
 typedef struct QOSState QOSState;
 
@@ -21,8 +21,10 @@ struct QOSState {
     QOSOps *ops;
 };
 
-QOSState *qtest_vboot(QOSOps *ops, const char *cmdline_fmt, va_list ap);
-QOSState *qtest_boot(QOSOps *ops, const char *cmdline_fmt, ...);
+QOSState *qtest_vboot(QOSOps *ops, const char *cmdline_fmt, va_list ap)
+    G_GNUC_PRINTF(2, 0);
+QOSState *qtest_boot(QOSOps *ops, const char *cmdline_fmt, ...)
+    G_GNUC_PRINTF(2, 3);
 void qtest_common_shutdown(QOSState *qs);
 void qtest_shutdown(QOSState *qs);
 bool have_qemu_img(void);

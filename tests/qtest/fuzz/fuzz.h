@@ -11,13 +11,13 @@
  *
  */
 
-#ifndef FUZZER_H_
-#define FUZZER_H_
+#ifndef QTEST_FUZZ_H
+#define QTEST_FUZZ_H
 
 #include "qemu/units.h"
 #include "qapi/error.h"
 
-#include "tests/qtest/libqos/libqtest.h"
+#include "tests/qtest/libqtest.h"
 
 /**
  * A libfuzzer fuzzing target
@@ -103,7 +103,7 @@ typedef struct FuzzTarget {
 } FuzzTarget;
 
 void flush_events(QTestState *);
-void reboot(QTestState *);
+void fuzz_reset(QTestState *);
 
 /* Use the QTest ASCII protocol or call address_space API directly?*/
 void fuzz_qtest_set_serialize(bool option);
@@ -122,4 +122,3 @@ int LLVMFuzzerTestOneInput(const unsigned char *Data, size_t Size);
 int LLVMFuzzerInitialize(int *argc, char ***argv, char ***envp);
 
 #endif
-

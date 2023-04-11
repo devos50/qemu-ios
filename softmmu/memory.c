@@ -33,6 +33,7 @@
 #include "qemu/accel.h"
 #include "hw/boards.h"
 #include "migration/vmstate.h"
+#include "exec/address-spaces.h"
 
 //#define DEBUG_UNASSIGNED
 
@@ -350,7 +351,7 @@ static void flatview_simplify(FlatView *view)
 
 static bool memory_region_big_endian(MemoryRegion *mr)
 {
-#ifdef TARGET_WORDS_BIGENDIAN
+#if TARGET_BIG_ENDIAN
     return mr->ops->endianness != DEVICE_LITTLE_ENDIAN;
 #else
     return mr->ops->endianness == DEVICE_BIG_ENDIAN;
@@ -1280,7 +1281,7 @@ static uint64_t unassigned_mem_read(void *opaque, hwaddr addr,
                                     unsigned size)
 {
 #ifdef DEBUG_UNASSIGNED
-    printf("Unassigned mem read " TARGET_FMT_plx "\n", addr);
+    printf("Unassigned mem read " HWADDR_FMT_plx "\n", addr);
 #endif
     return 0;
 }
@@ -1289,7 +1290,7 @@ static void unassigned_mem_write(void *opaque, hwaddr addr,
                                  uint64_t val, unsigned size)
 {
 #ifdef DEBUG_UNASSIGNED
-    printf("Unassigned mem write " TARGET_FMT_plx " = 0x%"PRIx64"\n", addr, val);
+    printf("Unassigned mem write " HWADDR_FMT_plx " = 0x%"PRIx64"\n", addr, val);
 #endif
 }
 
@@ -1444,6 +1445,11 @@ MemTxResult memory_region_dispatch_read(MemoryRegion *mr,
     unsigned size = memop_size(op);
     MemTxResult r;
 
+    if (mr->alias) {
+        return memory_region_dispatch_read(mr->alias,
+                                           mr->alias_offset + addr,
+                                           pval, op, attrs);
+    }
     if (!memory_region_access_valid(mr, addr, size, false, attrs)) {
         *pval = unassigned_mem_read(mr, addr, size);
         return MEMTX_DECODE_ERROR;
@@ -1488,6 +1494,11 @@ MemTxResult memory_region_dispatch_write(MemoryRegion *mr,
 {
     unsigned size = memop_size(op);
 
+    if (mr->alias) {
+        return memory_region_dispatch_write(mr->alias,
+                                            mr->alias_offset + addr,
+                                            data, op, attrs);
+    }
     if (!memory_region_access_valid(mr, addr, size, true, attrs)) {
         unassigned_mem_write(mr, addr, data, size);
         return MEMTX_DECODE_ERROR;
@@ -1889,6 +1900,7 @@ int memory_region_register_iommu_notifier(MemoryRegion *mr,
     iommu_mr = IOMMU_MEMORY_REGION(mr);
     assert(n->notifier_flags != IOMMU_NOTIFIER_NONE);
     assert(n->start <= n->end);
+    assert(n->end <= memory_region_size(mr));
     assert(n->iommu_idx >= 0 &&
            n->iommu_idx < memory_region_iommu_num_indexes(iommu_mr));
 
@@ -1912,7 +1924,6 @@ uint64_t memory_region_iommu_get_min_page_size(IOMMUMemoryRegion *iommu_mr)
 
 void memory_region_iommu_replay(IOMMUMemoryRegion *iommu_mr, IOMMUNotifier *n)
 {
-    MemoryRegion *mr = MEMORY_REGION(iommu_mr);
     IOMMUMemoryRegionClass *imrc = IOMMU_MEMORY_REGION_GET_CLASS(iommu_mr);
     hwaddr addr, granularity;
     IOMMUTLBEntry iotlb;
@@ -1925,7 +1936,7 @@ void memory_region_iommu_replay(IOMMUMemoryRegion *iommu_mr, IOMMUNotifier *n)
 
     granularity = memory_region_iommu_get_min_page_size(iommu_mr);
 
-    for (addr = 0; addr < memory_region_size(mr); addr += granularity) {
+    for (addr = n->start; addr < n->end; addr += granularity) {
         iotlb = imrc->translate(iommu_mr, addr, IOMMU_NONE, n->iommu_idx);
         if (iotlb.perm != IOMMU_NONE) {
             n->notify(n, &iotlb);
@@ -1983,6 +1994,19 @@ void memory_region_notify_iommu_one(IOMMUNotifier *notifier,
     if (event->type & notifier->notifier_flags) {
         notifier->notify(notifier, &tmp);
     }
+}
+
+void memory_region_unmap_iommu_notifier_range(IOMMUNotifier *notifier)
+{
+    IOMMUTLBEvent event;
+
+    event.type = IOMMU_NOTIFIER_UNMAP;
+    event.entry.target_as = &address_space_memory;
+    event.entry.iova = notifier->start;
+    event.entry.perm = IOMMU_NONE;
+    event.entry.addr_mask = notifier->end - notifier->start;
+
+    memory_region_notify_iommu_one(notifier, &event);
 }
 
 void memory_region_notify_iommu(IOMMUMemoryRegion *iommu_mr,
@@ -2109,6 +2133,77 @@ void ram_discard_manager_unregister_listener(RamDiscardManager *rdm,
 
     g_assert(rdmc->unregister_listener);
     rdmc->unregister_listener(rdm, rdl);
+}
+
+/* Called with rcu_read_lock held.  */
+bool memory_get_xlat_addr(IOMMUTLBEntry *iotlb, void **vaddr,
+                          ram_addr_t *ram_addr, bool *read_only,
+                          bool *mr_has_discard_manager)
+{
+    MemoryRegion *mr;
+    hwaddr xlat;
+    hwaddr len = iotlb->addr_mask + 1;
+    bool writable = iotlb->perm & IOMMU_WO;
+
+    if (mr_has_discard_manager) {
+        *mr_has_discard_manager = false;
+    }
+    /*
+     * The IOMMU TLB entry we have just covers translation through
+     * this IOMMU to its immediate target.  We need to translate
+     * it the rest of the way through to memory.
+     */
+    mr = address_space_translate(&address_space_memory, iotlb->translated_addr,
+                                 &xlat, &len, writable, MEMTXATTRS_UNSPECIFIED);
+    if (!memory_region_is_ram(mr)) {
+        error_report("iommu map to non memory area %" HWADDR_PRIx "", xlat);
+        return false;
+    } else if (memory_region_has_ram_discard_manager(mr)) {
+        RamDiscardManager *rdm = memory_region_get_ram_discard_manager(mr);
+        MemoryRegionSection tmp = {
+            .mr = mr,
+            .offset_within_region = xlat,
+            .size = int128_make64(len),
+        };
+        if (mr_has_discard_manager) {
+            *mr_has_discard_manager = true;
+        }
+        /*
+         * Malicious VMs can map memory into the IOMMU, which is expected
+         * to remain discarded. vfio will pin all pages, populating memory.
+         * Disallow that. vmstate priorities make sure any RamDiscardManager
+         * were already restored before IOMMUs are restored.
+         */
+        if (!ram_discard_manager_is_populated(rdm, &tmp)) {
+            error_report("iommu map to discarded memory (e.g., unplugged via"
+                         " virtio-mem): %" HWADDR_PRIx "",
+                         iotlb->translated_addr);
+            return false;
+        }
+    }
+
+    /*
+     * Translation truncates length to the IOMMU page size,
+     * check that it did not truncate too much.
+     */
+    if (len & iotlb->addr_mask) {
+        error_report("iommu has granularity incompatible with target AS");
+        return false;
+    }
+
+    if (vaddr) {
+        *vaddr = memory_region_get_ram_ptr(mr) + xlat;
+    }
+
+    if (ram_addr) {
+        *ram_addr = memory_region_get_ram_addr(mr) + xlat;
+    }
+
+    if (read_only) {
+        *read_only = !writable || mr->readonly;
+    }
+
+    return true;
 }
 
 void memory_region_set_log(MemoryRegion *mr, bool log, unsigned client)
@@ -2290,20 +2385,15 @@ void memory_region_reset_dirty(MemoryRegion *mr, hwaddr addr,
 
 int memory_region_get_fd(MemoryRegion *mr)
 {
-    int fd;
-
     RCU_READ_LOCK_GUARD();
     while (mr->alias) {
         mr = mr->alias;
     }
-    fd = mr->ram_block->fd;
-
-    return fd;
+    return mr->ram_block->fd;
 }
 
 void *memory_region_get_ram_ptr(MemoryRegion *mr)
 {
-    void *ptr;
     uint64_t offset = 0;
 
     RCU_READ_LOCK_GUARD();
@@ -2312,9 +2402,7 @@ void *memory_region_get_ram_ptr(MemoryRegion *mr)
         mr = mr->alias;
     }
     assert(mr->ram_block);
-    ptr = qemu_map_ram_ptr(mr->ram_block, offset);
-
-    return ptr;
+    return qemu_map_ram_ptr(mr->ram_block, offset);
 }
 
 MemoryRegion *memory_region_from_host(void *ptr, ram_addr_t *offset)
@@ -2535,8 +2623,13 @@ static void memory_region_add_subregion_common(MemoryRegion *mr,
                                                hwaddr offset,
                                                MemoryRegion *subregion)
 {
+    MemoryRegion *alias;
+
     assert(!subregion->container);
     subregion->container = mr;
+    for (alias = subregion->alias; alias; alias = alias->alias) {
+        alias->mapped_via_alias++;
+    }
     subregion->addr = offset;
     memory_region_update_container_subregions(subregion);
 }
@@ -2561,9 +2654,15 @@ void memory_region_add_subregion_overlap(MemoryRegion *mr,
 void memory_region_del_subregion(MemoryRegion *mr,
                                  MemoryRegion *subregion)
 {
+    MemoryRegion *alias;
+
     memory_region_transaction_begin();
     assert(subregion->container == mr);
     subregion->container = NULL;
+    for (alias = subregion->alias; alias; alias = alias->alias) {
+        alias->mapped_via_alias--;
+        assert(alias->mapped_via_alias >= 0);
+    }
     QTAILQ_REMOVE(&mr->subregions, subregion, subregions_link);
     memory_region_unref(subregion);
     memory_region_update_pending |= mr->enabled && subregion->enabled;
@@ -2605,8 +2704,7 @@ static void memory_region_readd_subregion(MemoryRegion *mr)
         memory_region_transaction_begin();
         memory_region_ref(mr);
         memory_region_del_subregion(container, mr);
-        mr->container = container;
-        memory_region_update_container_subregions(mr);
+        memory_region_add_subregion_common(container, mr->addr, mr);
         memory_region_unref(mr);
         memory_region_transaction_commit();
     }
@@ -2660,7 +2758,7 @@ static FlatRange *flatview_lookup(FlatView *view, AddrRange addr)
 
 bool memory_region_is_mapped(MemoryRegion *mr)
 {
-    return mr->container ? true : false;
+    return !!mr->container || mr->mapped_via_alias;
 }
 
 /* Same as memory_region_find, but it does not add a reference to the
@@ -2769,27 +2867,41 @@ void memory_global_after_dirty_log_sync(void)
     MEMORY_LISTENER_CALL_GLOBAL(log_global_after_sync, Forward);
 }
 
+/*
+ * Dirty track stop flags that are postponed due to VM being stopped.  Should
+ * only be used within vmstate_change hook.
+ */
+static unsigned int postponed_stop_flags;
 static VMChangeStateEntry *vmstate_change;
+static void memory_global_dirty_log_stop_postponed_run(void);
 
 void memory_global_dirty_log_start(unsigned int flags)
 {
-    if (vmstate_change) {
-        qemu_del_vm_change_state_handler(vmstate_change);
-        vmstate_change = NULL;
-    }
+    unsigned int old_flags;
 
     assert(flags && !(flags & (~GLOBAL_DIRTY_MASK)));
-    assert(!(global_dirty_tracking & flags));
-    global_dirty_tracking |= flags;
 
+    if (vmstate_change) {
+        /* If there is postponed stop(), operate on it first */
+        postponed_stop_flags &= ~flags;
+        memory_global_dirty_log_stop_postponed_run();
+    }
+
+    flags &= ~global_dirty_tracking;
+    if (!flags) {
+        return;
+    }
+
+    old_flags = global_dirty_tracking;
+    global_dirty_tracking |= flags;
     trace_global_dirty_changed(global_dirty_tracking);
 
-    MEMORY_LISTENER_CALL_GLOBAL(log_global_start, Forward);
-
-    /* Refresh DIRTY_MEMORY_MIGRATION bit.  */
-    memory_region_transaction_begin();
-    memory_region_update_pending = true;
-    memory_region_transaction_commit();
+    if (!old_flags) {
+        MEMORY_LISTENER_CALL_GLOBAL(log_global_start, Forward);
+        memory_region_transaction_begin();
+        memory_region_update_pending = true;
+        memory_region_transaction_commit();
+    }
 }
 
 static void memory_global_dirty_log_do_stop(unsigned int flags)
@@ -2800,37 +2912,53 @@ static void memory_global_dirty_log_do_stop(unsigned int flags)
 
     trace_global_dirty_changed(global_dirty_tracking);
 
-    /* Refresh DIRTY_MEMORY_MIGRATION bit.  */
-    memory_region_transaction_begin();
-    memory_region_update_pending = true;
-    memory_region_transaction_commit();
+    if (!global_dirty_tracking) {
+        memory_region_transaction_begin();
+        memory_region_update_pending = true;
+        memory_region_transaction_commit();
+        MEMORY_LISTENER_CALL_GLOBAL(log_global_stop, Reverse);
+    }
+}
 
-    MEMORY_LISTENER_CALL_GLOBAL(log_global_stop, Reverse);
+/*
+ * Execute the postponed dirty log stop operations if there is, then reset
+ * everything (including the flags and the vmstate change hook).
+ */
+static void memory_global_dirty_log_stop_postponed_run(void)
+{
+    /* This must be called with the vmstate handler registered */
+    assert(vmstate_change);
+
+    /* Note: postponed_stop_flags can be cleared in log start routine */
+    if (postponed_stop_flags) {
+        memory_global_dirty_log_do_stop(postponed_stop_flags);
+        postponed_stop_flags = 0;
+    }
+
+    qemu_del_vm_change_state_handler(vmstate_change);
+    vmstate_change = NULL;
 }
 
 static void memory_vm_change_state_handler(void *opaque, bool running,
                                            RunState state)
 {
-    unsigned int flags = (unsigned int)(uintptr_t)opaque;
     if (running) {
-        memory_global_dirty_log_do_stop(flags);
-
-        if (vmstate_change) {
-            qemu_del_vm_change_state_handler(vmstate_change);
-            vmstate_change = NULL;
-        }
+        memory_global_dirty_log_stop_postponed_run();
     }
 }
 
 void memory_global_dirty_log_stop(unsigned int flags)
 {
     if (!runstate_is_running()) {
+        /* Postpone the dirty log stop, e.g., to when VM starts again */
         if (vmstate_change) {
-            return;
+            /* Batch with previous postponed flags */
+            postponed_stop_flags |= flags;
+        } else {
+            postponed_stop_flags = flags;
+            vmstate_change = qemu_add_vm_change_state_handler(
+                memory_vm_change_state_handler, NULL);
         }
-        vmstate_change = qemu_add_vm_change_state_handler(
-                                memory_vm_change_state_handler,
-                                (void *)(uintptr_t)flags);
         return;
     }
 
@@ -3105,9 +3233,9 @@ static void mtree_print_mr(const MemoryRegion *mr, unsigned int level,
             for (i = 0; i < level; i++) {
                 qemu_printf(MTREE_INDENT);
             }
-            qemu_printf(TARGET_FMT_plx "-" TARGET_FMT_plx
-                        " (prio %d, %s%s): alias %s @%s " TARGET_FMT_plx
-                        "-" TARGET_FMT_plx "%s",
+            qemu_printf(HWADDR_FMT_plx "-" HWADDR_FMT_plx
+                        " (prio %d, %s%s): alias %s @%s " HWADDR_FMT_plx
+                        "-" HWADDR_FMT_plx "%s",
                         cur_start, cur_end,
                         mr->priority,
                         mr->nonvolatile ? "nv-" : "",
@@ -3127,7 +3255,7 @@ static void mtree_print_mr(const MemoryRegion *mr, unsigned int level,
             for (i = 0; i < level; i++) {
                 qemu_printf(MTREE_INDENT);
             }
-            qemu_printf(TARGET_FMT_plx "-" TARGET_FMT_plx
+            qemu_printf(HWADDR_FMT_plx "-" HWADDR_FMT_plx
                         " (prio %d, %s%s): %s%s",
                         cur_start, cur_end,
                         mr->priority,
@@ -3214,8 +3342,8 @@ static void mtree_print_flatview(gpointer key, gpointer value,
     while (n--) {
         mr = range->mr;
         if (range->offset_in_region) {
-            qemu_printf(MTREE_INDENT TARGET_FMT_plx "-" TARGET_FMT_plx
-                        " (prio %d, %s%s): %s @" TARGET_FMT_plx,
+            qemu_printf(MTREE_INDENT HWADDR_FMT_plx "-" HWADDR_FMT_plx
+                        " (prio %d, %s%s): %s @" HWADDR_FMT_plx,
                         int128_get64(range->addr.start),
                         int128_get64(range->addr.start)
                         + MR_SIZE(range->addr.size),
@@ -3225,7 +3353,7 @@ static void mtree_print_flatview(gpointer key, gpointer value,
                         memory_region_name(mr),
                         range->offset_in_region);
         } else {
-            qemu_printf(MTREE_INDENT TARGET_FMT_plx "-" TARGET_FMT_plx
+            qemu_printf(MTREE_INDENT HWADDR_FMT_plx "-" HWADDR_FMT_plx
                         " (prio %d, %s%s): %s",
                         int128_get64(range->addr.start),
                         int128_get64(range->addr.start)
@@ -3274,57 +3402,114 @@ static gboolean mtree_info_flatview_free(gpointer key, gpointer value,
     return true;
 }
 
-void mtree_info(bool flatview, bool dispatch_tree, bool owner, bool disabled)
+static void mtree_info_flatview(bool dispatch_tree, bool owner)
+{
+    struct FlatViewInfo fvi = {
+        .counter = 0,
+        .dispatch_tree = dispatch_tree,
+        .owner = owner,
+    };
+    AddressSpace *as;
+    FlatView *view;
+    GArray *fv_address_spaces;
+    GHashTable *views = g_hash_table_new(g_direct_hash, g_direct_equal);
+    AccelClass *ac = ACCEL_GET_CLASS(current_accel());
+
+    if (ac->has_memory) {
+        fvi.ac = ac;
+    }
+
+    /* Gather all FVs in one table */
+    QTAILQ_FOREACH(as, &address_spaces, address_spaces_link) {
+        view = address_space_get_flatview(as);
+
+        fv_address_spaces = g_hash_table_lookup(views, view);
+        if (!fv_address_spaces) {
+            fv_address_spaces = g_array_new(false, false, sizeof(as));
+            g_hash_table_insert(views, view, fv_address_spaces);
+        }
+
+        g_array_append_val(fv_address_spaces, as);
+    }
+
+    /* Print */
+    g_hash_table_foreach(views, mtree_print_flatview, &fvi);
+
+    /* Free */
+    g_hash_table_foreach_remove(views, mtree_info_flatview_free, 0);
+    g_hash_table_unref(views);
+}
+
+struct AddressSpaceInfo {
+    MemoryRegionListHead *ml_head;
+    bool owner;
+    bool disabled;
+};
+
+/* Returns negative value if a < b; zero if a = b; positive value if a > b. */
+static gint address_space_compare_name(gconstpointer a, gconstpointer b)
+{
+    const AddressSpace *as_a = a;
+    const AddressSpace *as_b = b;
+
+    return g_strcmp0(as_a->name, as_b->name);
+}
+
+static void mtree_print_as_name(gpointer data, gpointer user_data)
+{
+    AddressSpace *as = data;
+
+    qemu_printf("address-space: %s\n", as->name);
+}
+
+static void mtree_print_as(gpointer key, gpointer value, gpointer user_data)
+{
+    MemoryRegion *mr = key;
+    GSList *as_same_root_mr_list = value;
+    struct AddressSpaceInfo *asi = user_data;
+
+    g_slist_foreach(as_same_root_mr_list, mtree_print_as_name, NULL);
+    mtree_print_mr(mr, 1, 0, asi->ml_head, asi->owner, asi->disabled);
+    qemu_printf("\n");
+}
+
+static gboolean mtree_info_as_free(gpointer key, gpointer value,
+                                   gpointer user_data)
+{
+    GSList *as_same_root_mr_list = value;
+
+    g_slist_free(as_same_root_mr_list);
+
+    return true;
+}
+
+static void mtree_info_as(bool dispatch_tree, bool owner, bool disabled)
 {
     MemoryRegionListHead ml_head;
     MemoryRegionList *ml, *ml2;
     AddressSpace *as;
-
-    if (flatview) {
-        FlatView *view;
-        struct FlatViewInfo fvi = {
-            .counter = 0,
-            .dispatch_tree = dispatch_tree,
-            .owner = owner,
-        };
-        GArray *fv_address_spaces;
-        GHashTable *views = g_hash_table_new(g_direct_hash, g_direct_equal);
-        AccelClass *ac = ACCEL_GET_CLASS(current_accel());
-
-        if (ac->has_memory) {
-            fvi.ac = ac;
-        }
-
-        /* Gather all FVs in one table */
-        QTAILQ_FOREACH(as, &address_spaces, address_spaces_link) {
-            view = address_space_get_flatview(as);
-
-            fv_address_spaces = g_hash_table_lookup(views, view);
-            if (!fv_address_spaces) {
-                fv_address_spaces = g_array_new(false, false, sizeof(as));
-                g_hash_table_insert(views, view, fv_address_spaces);
-            }
-
-            g_array_append_val(fv_address_spaces, as);
-        }
-
-        /* Print */
-        g_hash_table_foreach(views, mtree_print_flatview, &fvi);
-
-        /* Free */
-        g_hash_table_foreach_remove(views, mtree_info_flatview_free, 0);
-        g_hash_table_unref(views);
-
-        return;
-    }
+    GHashTable *views = g_hash_table_new(g_direct_hash, g_direct_equal);
+    GSList *as_same_root_mr_list;
+    struct AddressSpaceInfo asi = {
+        .ml_head = &ml_head,
+        .owner = owner,
+        .disabled = disabled,
+    };
 
     QTAILQ_INIT(&ml_head);
 
     QTAILQ_FOREACH(as, &address_spaces, address_spaces_link) {
-        qemu_printf("address-space: %s\n", as->name);
-        mtree_print_mr(as->root, 1, 0, &ml_head, owner, disabled);
-        qemu_printf("\n");
+        /* Create hashtable, key=AS root MR, value = list of AS */
+        as_same_root_mr_list = g_hash_table_lookup(views, as->root);
+        as_same_root_mr_list = g_slist_insert_sorted(as_same_root_mr_list, as,
+                                                     address_space_compare_name);
+        g_hash_table_insert(views, as->root, as_same_root_mr_list);
     }
+
+    /* print address spaces */
+    g_hash_table_foreach(views, mtree_print_as, &asi);
+    g_hash_table_foreach_remove(views, mtree_info_as_free, 0);
+    g_hash_table_unref(views);
 
     /* print aliased regions */
     QTAILQ_FOREACH(ml, &ml_head, mrqueue) {
@@ -3335,6 +3520,15 @@ void mtree_info(bool flatview, bool dispatch_tree, bool owner, bool disabled)
 
     QTAILQ_FOREACH_SAFE(ml, &ml_head, mrqueue, ml2) {
         g_free(ml);
+    }
+}
+
+void mtree_info(bool flatview, bool dispatch_tree, bool owner, bool disabled)
+{
+    if (flatview) {
+        mtree_info_flatview(dispatch_tree, owner);
+    } else {
+        mtree_info_as(dispatch_tree, owner, disabled);
     }
 }
 

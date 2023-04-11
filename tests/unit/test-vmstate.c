@@ -28,9 +28,7 @@
 #include "migration/vmstate.h"
 #include "migration/qemu-file-types.h"
 #include "../migration/qemu-file.h"
-#include "../migration/qemu-file-channel.h"
 #include "../migration/savevm.h"
-#include "qemu/coroutine.h"
 #include "qemu/module.h"
 #include "io/channel-file.h"
 
@@ -52,9 +50,9 @@ static QEMUFile *open_test_file(bool write)
     }
     ioc = QIO_CHANNEL(qio_channel_file_new_fd(fd));
     if (write) {
-        f = qemu_fopen_channel_output(ioc);
+        f = qemu_file_new_output(ioc);
     } else {
-        f = qemu_fopen_channel_input(ioc);
+        f = qemu_file_new_input(ioc);
     }
     object_unref(OBJECT(ioc));
     return f;
@@ -88,17 +86,16 @@ static void save_buffer(const uint8_t *buf, size_t buf_size)
 static void compare_vmstate(const uint8_t *wire, size_t size)
 {
     QEMUFile *f = open_test_file(false);
-    uint8_t result[size];
+    g_autofree uint8_t *result = g_malloc(size);
 
     /* read back as binary */
 
-    g_assert_cmpint(qemu_get_buffer(f, result, sizeof(result)), ==,
-                    sizeof(result));
+    g_assert_cmpint(qemu_get_buffer(f, result, size), ==, size);
     g_assert(!qemu_file_get_error(f));
 
     /* Compare that what is on the file is the same that what we
        expected to be there */
-    SUCCESS(memcmp(result, wire, sizeof(result)));
+    SUCCESS(memcmp(result, wire, size));
 
     /* Must reach EOF */
     qemu_get_byte(f);
@@ -1002,22 +999,22 @@ static TestGTreeDomain *create_first_domain(void)
     TestGTreeMapping *map_a, *map_b;
     TestGTreeInterval *a, *b;
 
-    domain = g_malloc0(sizeof(TestGTreeDomain));
+    domain = g_new0(TestGTreeDomain, 1);
     domain->id = 6;
 
-    a = g_malloc0(sizeof(TestGTreeInterval));
+    a = g_new0(TestGTreeInterval, 1);
     a->low = 0x1000;
     a->high = 0x1FFF;
 
-    b = g_malloc0(sizeof(TestGTreeInterval));
+    b = g_new0(TestGTreeInterval, 1);
     b->low = 0x4000;
     b->high = 0x4FFF;
 
-    map_a = g_malloc0(sizeof(TestGTreeMapping));
+    map_a = g_new0(TestGTreeMapping, 1);
     map_a->phys_addr = 0xa000;
     map_a->flags = 1;
 
-    map_b = g_malloc0(sizeof(TestGTreeMapping));
+    map_b = g_new0(TestGTreeMapping, 1);
     map_b->phys_addr = 0xe0000;
     map_b->flags = 2;
 
@@ -1076,7 +1073,6 @@ static gboolean diff_tree(gpointer key, gpointer value, gpointer data)
     struct match_node_data d = {tp->tree2, key, value};
 
     g_tree_foreach(tp->tree2, tp->match_node, &d);
-    g_tree_remove(tp->tree1, key);
     return false;
 }
 
@@ -1085,9 +1081,9 @@ static void compare_trees(GTree *tree1, GTree *tree2,
 {
     struct tree_cmp_data tp = {tree1, tree2, function};
 
+    assert(g_tree_nnodes(tree1) == g_tree_nnodes(tree2));
     g_tree_foreach(tree1, diff_tree, &tp);
-    assert(g_tree_nnodes(tree1) == 0);
-    assert(g_tree_nnodes(tree2) == 0);
+    g_tree_destroy(g_tree_ref(tree1));
 }
 
 static void diff_domain(TestGTreeDomain *d1, TestGTreeDomain *d2)
@@ -1120,7 +1116,7 @@ static void diff_iommu(TestGTreeIOMMU *iommu1, TestGTreeIOMMU *iommu2)
 
 static void test_gtree_load_domain(void)
 {
-    TestGTreeDomain *dest_domain = g_malloc0(sizeof(TestGTreeDomain));
+    TestGTreeDomain *dest_domain = g_new0(TestGTreeDomain, 1);
     TestGTreeDomain *orig_domain = create_first_domain();
     QEMUFile *fload, *fsave;
     char eof;
@@ -1185,7 +1181,7 @@ uint8_t iommu_dump[] = {
 
 static TestGTreeIOMMU *create_iommu(void)
 {
-    TestGTreeIOMMU *iommu = g_malloc0(sizeof(TestGTreeIOMMU));
+    TestGTreeIOMMU *iommu = g_new0(TestGTreeIOMMU, 1);
     TestGTreeDomain *first_domain = create_first_domain();
     TestGTreeDomain *second_domain;
     TestGTreeMapping *map_c;
@@ -1196,7 +1192,7 @@ static TestGTreeIOMMU *create_iommu(void)
                                      NULL,
                                      destroy_domain);
 
-    second_domain = g_malloc0(sizeof(TestGTreeDomain));
+    second_domain = g_new0(TestGTreeDomain, 1);
     second_domain->id = 5;
     second_domain->mappings = g_tree_new_full((GCompareDataFunc)interval_cmp,
                                               NULL,
@@ -1206,11 +1202,11 @@ static TestGTreeIOMMU *create_iommu(void)
     g_tree_insert(iommu->domains, GUINT_TO_POINTER(6), first_domain);
     g_tree_insert(iommu->domains, (gpointer)0x0000000000000005, second_domain);
 
-    c = g_malloc0(sizeof(TestGTreeInterval));
+    c = g_new0(TestGTreeInterval, 1);
     c->low = 0x1000000;
     c->high = 0x1FFFFFF;
 
-    map_c = g_malloc0(sizeof(TestGTreeMapping));
+    map_c = g_new0(TestGTreeMapping, 1);
     map_c->phys_addr = 0xF000000;
     map_c->flags = 0x3;
 
@@ -1235,7 +1231,7 @@ static void test_gtree_save_iommu(void)
 
 static void test_gtree_load_iommu(void)
 {
-    TestGTreeIOMMU *dest_iommu = g_malloc0(sizeof(TestGTreeIOMMU));
+    TestGTreeIOMMU *dest_iommu = g_new0(TestGTreeIOMMU, 1);
     TestGTreeIOMMU *orig_iommu = create_iommu();
     QEMUFile *fsave, *fload;
     char eof;
@@ -1274,11 +1270,11 @@ static uint8_t qlist_dump[] = {
 
 static TestQListContainer *alloc_container(void)
 {
-    TestQListElement *a = g_malloc(sizeof(TestQListElement));
-    TestQListElement *b = g_malloc(sizeof(TestQListElement));
-    TestQListElement *c = g_malloc(sizeof(TestQListElement));
-    TestQListElement *d = g_malloc(sizeof(TestQListElement));
-    TestQListContainer *container = g_malloc(sizeof(TestQListContainer));
+    TestQListElement *a = g_new(TestQListElement, 1);
+    TestQListElement *b = g_new(TestQListElement, 1);
+    TestQListElement *c = g_new(TestQListElement, 1);
+    TestQListElement *d = g_new(TestQListElement, 1);
+    TestQListContainer *container = g_new(TestQListContainer, 1);
 
     a->id = 0x0a;
     b->id = 0x0b00;
@@ -1332,11 +1328,11 @@ static void manipulate_container(TestQListContainer *c)
      TestQListElement *prev = NULL, *iter = QLIST_FIRST(&c->list);
      TestQListElement *elem;
 
-     elem = g_malloc(sizeof(TestQListElement));
+     elem = g_new(TestQListElement, 1);
      elem->id = 0x12;
      QLIST_INSERT_AFTER(iter, elem, next);
 
-     elem = g_malloc(sizeof(TestQListElement));
+     elem = g_new(TestQListElement, 1);
      elem->id = 0x13;
      QLIST_INSERT_HEAD(&c->list, elem, next);
 
@@ -1345,11 +1341,11 @@ static void manipulate_container(TestQListContainer *c)
         iter = QLIST_NEXT(iter, next);
      }
 
-     elem = g_malloc(sizeof(TestQListElement));
+     elem = g_new(TestQListElement, 1);
      elem->id = 0x14;
      QLIST_INSERT_BEFORE(prev, elem, next);
 
-     elem = g_malloc(sizeof(TestQListElement));
+     elem = g_new(TestQListElement, 1);
      elem->id = 0x15;
      QLIST_INSERT_AFTER(prev, elem, next);
 
@@ -1370,7 +1366,7 @@ static void test_load_qlist(void)
 {
     QEMUFile *fsave, *fload;
     TestQListContainer *orig_container = alloc_container();
-    TestQListContainer *dest_container = g_malloc0(sizeof(TestQListContainer));
+    TestQListContainer *dest_container = g_new0(TestQListContainer, 1);
     char eof;
 
     QLIST_INIT(&dest_container->list);

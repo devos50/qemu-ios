@@ -9,8 +9,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "libqos/libqtest.h"
+#include "libqtest.h"
 #include "qapi/qmp/qdict.h"
 #include "qemu/iov.h"
 #include "qemu/sockets.h"
@@ -58,13 +57,13 @@ static void test_mirror(void)
     g_assert_cmpint(ret, ==, sizeof(send_buf) + sizeof(size));
     close(send_sock[0]);
 
-    ret = qemu_recv(recv_sock[0], &len, sizeof(len), 0);
+    ret = recv(recv_sock[0], &len, sizeof(len), 0);
     g_assert_cmpint(ret, ==, sizeof(len));
     len = ntohl(len);
 
     g_assert_cmpint(len, ==, sizeof(send_buf));
     recv_buf = g_malloc(len);
-    ret = qemu_recv(recv_sock[0], recv_buf, len, 0);
+    ret = recv(recv_sock[0], recv_buf, len, 0);
     g_assert_cmpstr(recv_buf, ==, send_buf);
 
     g_free(recv_buf);
@@ -77,12 +76,8 @@ static void test_mirror(void)
 
 int main(int argc, char **argv)
 {
-    int ret;
-
     g_test_init(&argc, &argv, NULL);
 
     qtest_add_func("/netfilter/mirror", test_mirror);
-    ret = g_test_run();
-
-    return ret;
+    return g_test_run();
 }

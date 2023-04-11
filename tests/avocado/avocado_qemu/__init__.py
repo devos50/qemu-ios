@@ -18,8 +18,13 @@ import time
 import uuid
 
 import avocado
-from avocado.utils import cloudinit, datadrainer, network, process, ssh, vmimage
+from avocado.utils import cloudinit, datadrainer, process, ssh, vmimage
 from avocado.utils.path import find_command
+
+from qemu.machine import QEMUMachine
+from qemu.utils import (get_info_usernet_hostfwd_port, kvm_available,
+                        tcg_available)
+
 
 #: The QEMU build root directory.  It may also be the source directory
 #: if building from the source dir, but it's safer to use BUILD_DIR for
@@ -34,12 +39,6 @@ if os.path.islink(os.path.dirname(os.path.dirname(__file__))):
     SOURCE_DIR = os.path.dirname(os.path.dirname(os.readlink(lnk)))
 else:
     SOURCE_DIR = BUILD_DIR
-
-sys.path.append(os.path.join(SOURCE_DIR, 'python'))
-
-from qemu.machine import QEMUMachine
-from qemu.utils import (get_info_usernet_hostfwd_port, kvm_available,
-                        tcg_available)
 
 
 def has_cmd(name, args=None):
@@ -121,14 +120,15 @@ def pick_default_qemu_bin(bin_prefix='qemu-system-', arch=None):
     # qemu binary path does not match arch for powerpc, handle it
     if 'ppc64le' in arch:
         arch = 'ppc64'
-    qemu_bin_relative_path = os.path.join(".", bin_prefix + arch)
-    if is_readable_executable_file(qemu_bin_relative_path):
-        return qemu_bin_relative_path
-
-    qemu_bin_from_bld_dir_path = os.path.join(BUILD_DIR,
-                                              qemu_bin_relative_path)
-    if is_readable_executable_file(qemu_bin_from_bld_dir_path):
-        return qemu_bin_from_bld_dir_path
+    qemu_bin_name = bin_prefix + arch
+    qemu_bin_paths = [
+        os.path.join(".", qemu_bin_name),
+        os.path.join(BUILD_DIR, qemu_bin_name),
+        os.path.join(BUILD_DIR, "build", qemu_bin_name),
+    ]
+    for path in qemu_bin_paths:
+        if is_readable_executable_file(path):
+            return path
     return None
 
 
@@ -227,6 +227,10 @@ def exec_command_and_wait_for_pattern(test, command,
     _console_interaction(test, success_message, failure_message, command + '\r')
 
 class QemuBaseTest(avocado.Test):
+
+    # default timeout for all tests, can be overridden
+    timeout = 120
+
     def _get_unique_tag_val(self, tag_name):
         """
         Gets a tag value, if unique for a key
@@ -270,6 +274,10 @@ class QemuSystemTest(QemuBaseTest):
 
         super().setUp('qemu-system-')
 
+        accel_required = self._get_unique_tag_val('accel')
+        if accel_required:
+            self.require_accelerator(accel_required)
+
         self.machine = self.params.get('machine',
                                        default=self._get_unique_tag_val('machine'))
 
@@ -295,8 +303,24 @@ class QemuSystemTest(QemuBaseTest):
             self.cancel("%s accelerator does not seem to be "
                         "available" % accelerator)
 
+    def require_netdev(self, netdevname):
+        netdevhelp = run_cmd([self.qemu_bin,
+                             '-M', 'none', '-netdev', 'help'])[0];
+        if netdevhelp.find('\n' + netdevname + '\n') < 0:
+            self.cancel('no support for user networking')
+
+    def require_multiprocess(self):
+        """
+        Test for the presence of the x-pci-proxy-dev which is required
+        to support multiprocess.
+        """
+        devhelp = run_cmd([self.qemu_bin,
+                           '-M', 'none', '-device', 'help'])[0];
+        if devhelp.find('x-pci-proxy-dev') < 0:
+            self.cancel('no support for multiprocess device emulation')
+
     def _new_vm(self, name, *args):
-        self._sd = tempfile.TemporaryDirectory(prefix="avo_qemu_sock_")
+        self._sd = tempfile.TemporaryDirectory(prefix="qemu_")
         vm = QEMUMachine(self.qemu_bin, base_temp_dir=self.workdir,
                          sock_dir=self._sd.name, log_dir=self.logdir)
         self.log.debug('QEMUMachine "%s" created', name)
@@ -508,14 +532,15 @@ class LinuxDistro:
 class LinuxTest(LinuxSSHMixIn, QemuSystemTest):
     """Facilitates having a cloud-image Linux based available.
 
-    For tests that indent to interact with guests, this is a better choice
+    For tests that intend to interact with guests, this is a better choice
     to start with than the more vanilla `QemuSystemTest` class.
     """
 
-    timeout = 900
     distro = None
     username = 'root'
     password = 'password'
+    smp = '2'
+    memory = '1024'
 
     def _set_distro(self):
         distro_name = self.params.get(
@@ -545,9 +570,10 @@ class LinuxTest(LinuxSSHMixIn, QemuSystemTest):
 
     def setUp(self, ssh_pubkey=None, network_device_type='virtio-net'):
         super().setUp()
+        self.require_netdev('user')
         self._set_distro()
-        self.vm.add_args('-smp', '2')
-        self.vm.add_args('-m', '1024')
+        self.vm.add_args('-smp', self.smp)
+        self.vm.add_args('-m', self.memory)
         # The following network device allows for SSH connections
         self.vm.add_args('-netdev', 'user,id=vnet,hostfwd=:127.0.0.1:0-:22',
                          '-device', '%s,netdev=vnet' % network_device_type)
@@ -602,7 +628,6 @@ class LinuxTest(LinuxSSHMixIn, QemuSystemTest):
         self.log.info('Preparing cloudinit image')
         try:
             cloudinit_iso = os.path.join(self.workdir, 'cloudinit.iso')
-            self.phone_home_port = network.find_free_port()
             pubkey_content = None
             if ssh_pubkey:
                 with open(ssh_pubkey) as pubkey:
@@ -612,7 +637,7 @@ class LinuxTest(LinuxSSHMixIn, QemuSystemTest):
                           password=self.password,
                           # QEMU's hard coded usermode router address
                           phone_home_host='10.0.2.2',
-                          phone_home_port=self.phone_home_port,
+                          phone_home_port=self.phone_server.server_port,
                           authorized_key=pubkey_content)
         except Exception:
             self.cancel('Failed to prepare the cloudinit image')
@@ -623,6 +648,8 @@ class LinuxTest(LinuxSSHMixIn, QemuSystemTest):
         self.vm.add_args('-drive', 'file=%s' % path)
 
     def set_up_cloudinit(self, ssh_pubkey=None):
+        self.phone_server = cloudinit.PhoneHomeServer(('0.0.0.0', 0),
+                                                      self.name)
         cloudinit_iso = self.prepare_cloudinit(ssh_pubkey)
         self.vm.add_args('-drive', 'file=%s,format=raw' % cloudinit_iso)
 
@@ -633,7 +660,9 @@ class LinuxTest(LinuxSSHMixIn, QemuSystemTest):
                                                  logger=self.log.getChild('console'))
         console_drainer.start()
         self.log.info('VM launched, waiting for boot confirmation from guest')
-        cloudinit.wait_for_phone_home(('0.0.0.0', self.phone_home_port), self.name)
+        while not self.phone_server.instance_phoned_back:
+            self.phone_server.handle_request()
+
         if set_up_ssh_connection:
             self.log.info('Setting up the SSH connection')
             self.ssh_connect(self.username, self.ssh_key)

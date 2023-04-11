@@ -1,5 +1,5 @@
 /*
- *  Copyright(c) 2019-2021 Qualcomm Innovation Center, Inc. All Rights Reserved.
+ *  Copyright(c) 2019-2022 Qualcomm Innovation Center, Inc. All Rights Reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,7 +18,6 @@
 #ifndef HEXAGON_MMVEC_MACROS_H
 #define HEXAGON_MMVEC_MACROS_H
 
-#include "qemu/osdep.h"
 #include "qemu/host-utils.h"
 #include "arch.h"
 #include "mmvec/system_ext_mmvec.h"
@@ -164,11 +163,9 @@
         target_ulong va = EA; \
         target_ulong va_high = EA + LEN; \
         uintptr_t ra = GETPC(); \
-        int log_bank = 0; \
         int log_byte = 0; \
         for (i0 = 0; i0 < ELEMENT_SIZE; i0++) { \
             log_byte = ((va + i0) <= va_high) && QVAL; \
-            log_bank |= (log_byte << i0); \
             uint8_t B; \
             B = cpu_ldub_data_ra(env, EA + i0, ra); \
             env->tmp_VRegs[0].ub[ELEMENT_SIZE * IDX + i0] = B; \
@@ -243,11 +240,9 @@
         int i0; \
         target_ulong va = EA; \
         target_ulong va_high = EA + LEN; \
-        int log_bank = 0; \
         int log_byte = 0; \
         for (i0 = 0; i0 < ELEM_SIZE; i0++) { \
             log_byte = ((va + i0) <= va_high) && QVAL; \
-            log_bank |= (log_byte << i0); \
             LOG_VTCM_BYTE(va + i0, log_byte, IN.ub[ELEM_SIZE * IDX + i0], \
                           ELEM_SIZE * IDX + i0); \
         } \
@@ -292,7 +287,7 @@
 #endif
 #ifdef QEMU_GENERATE
 #define fSTOREMMV(EA, SRC) \
-    gen_vreg_store(ctx, insn, pkt, EA, SRC##_off, insn->slot, true)
+    gen_vreg_store(ctx, EA, SRC##_off, insn->slot, true)
 #endif
 #ifdef QEMU_GENERATE
 #define fSTOREMMVQ(EA, SRC, MASK) \
@@ -304,7 +299,7 @@
 #endif
 #ifdef QEMU_GENERATE
 #define fSTOREMMVU(EA, SRC) \
-    gen_vreg_store(ctx, insn, pkt, EA, SRC##_off, insn->slot, false)
+    gen_vreg_store(ctx, EA, SRC##_off, insn->slot, false)
 #endif
 #define fVFOREACH(WIDTH, VAR) for (VAR = 0; VAR < fVELEM(WIDTH); VAR++)
 #define fVARRAY_ELEMENT_ACCESS(ARRAY, TYPE, INDEX) \

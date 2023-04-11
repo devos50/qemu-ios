@@ -19,13 +19,15 @@
 #define FUSE_USE_VERSION 31
 
 #include "qemu/osdep.h"
+#include "qemu/memalign.h"
 #include "block/aio.h"
-#include "block/block.h"
+#include "block/block_int-common.h"
 #include "block/export.h"
 #include "block/fuse.h"
 #include "block/qapi.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-block.h"
+#include "qemu/main-loop.h"
 #include "sysemu/block-backend.h"
 
 #include <fuse.h>
@@ -86,8 +88,8 @@ static int fuse_export_create(BlockExport *blk_exp,
 
     assert(blk_exp_args->type == BLOCK_EXPORT_TYPE_FUSE);
 
-    /* For growable exports, take the RESIZE permission */
-    if (args->growable) {
+    /* For growable and writable exports, take the RESIZE permission */
+    if (args->growable || blk_exp_args->writable) {
         uint64_t blk_perm, blk_shared_perm;
 
         blk_get_perm(exp->common.blk, &blk_perm, &blk_shared_perm);
@@ -223,7 +225,7 @@ static int setup_fuse_export(FuseExport *exp, const char *mountpoint,
 
     aio_set_fd_handler(exp->common.ctx,
                        fuse_session_fd(exp->fuse_session), true,
-                       read_from_fuse_export, NULL, NULL, exp);
+                       read_from_fuse_export, NULL, NULL, NULL, exp);
     exp->fd_handler_set_up = true;
 
     return 0;
@@ -267,7 +269,7 @@ static void fuse_export_shutdown(BlockExport *blk_exp)
         if (exp->fd_handler_set_up) {
             aio_set_fd_handler(exp->common.ctx,
                                fuse_session_fd(exp->fuse_session), true,
-                               NULL, NULL, NULL, NULL);
+                               NULL, NULL, NULL, NULL, NULL);
             exp->fd_handler_set_up = false;
         }
     }
@@ -392,14 +394,23 @@ static int fuse_do_truncate(const FuseExport *exp, int64_t size,
 {
     uint64_t blk_perm, blk_shared_perm;
     BdrvRequestFlags truncate_flags = 0;
-    int ret;
+    bool add_resize_perm;
+    int ret, ret_check;
+
+    /* Growable and writable exports have a permanent RESIZE permission */
+    add_resize_perm = !exp->growable && !exp->writable;
 
     if (req_zero_write) {
         truncate_flags |= BDRV_REQ_ZERO_WRITE;
     }
 
-    /* Growable exports have a permanent RESIZE permission */
-    if (!exp->growable) {
+    if (add_resize_perm) {
+
+        if (!qemu_in_main_thread()) {
+            /* Changing permissions like below only works in the main thread */
+            return -EPERM;
+        }
+
         blk_get_perm(exp->common.blk, &blk_perm, &blk_shared_perm);
 
         ret = blk_set_perm(exp->common.blk, blk_perm | BLK_PERM_RESIZE,
@@ -412,9 +423,11 @@ static int fuse_do_truncate(const FuseExport *exp, int64_t size,
     ret = blk_truncate(exp->common.blk, size, true, prealloc,
                        truncate_flags, NULL);
 
-    if (!exp->growable) {
+    if (add_resize_perm) {
         /* Must succeed, because we are only giving up the RESIZE permission */
-        blk_set_perm(exp->common.blk, blk_perm, blk_shared_perm, &error_abort);
+        ret_check = blk_set_perm(exp->common.blk, blk_perm,
+                                 blk_shared_perm, &error_abort);
+        assert(ret_check == 0);
     }
 
     return ret;
@@ -542,7 +555,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t inode,
         return;
     }
 
-    ret = blk_pread(exp->common.blk, offset, buf, size);
+    ret = blk_pread(exp->common.blk, offset, size, buf, 0);
     if (ret >= 0) {
         fuse_reply_buf(req, buf, size);
     } else {
@@ -595,7 +608,7 @@ static void fuse_write(fuse_req_t req, fuse_ino_t inode, const char *buf,
         }
     }
 
-    ret = blk_pwrite(exp->common.blk, offset, buf, size, 0);
+    ret = blk_pwrite(exp->common.blk, offset, size, buf, 0);
     if (ret >= 0) {
         fuse_reply_write(req, size);
     } else {
@@ -625,11 +638,33 @@ static void fuse_fallocate(fuse_req_t req, fuse_ino_t inode, int mode,
         return;
     }
 
+#ifdef CONFIG_FALLOCATE_PUNCH_HOLE
     if (mode & FALLOC_FL_KEEP_SIZE) {
         length = MIN(length, blk_len - offset);
     }
+#endif /* CONFIG_FALLOCATE_PUNCH_HOLE */
 
-    if (mode & FALLOC_FL_PUNCH_HOLE) {
+    if (!mode) {
+        /* We can only fallocate at the EOF with a truncate */
+        if (offset < blk_len) {
+            fuse_reply_err(req, EOPNOTSUPP);
+            return;
+        }
+
+        if (offset > blk_len) {
+            /* No preallocation needed here */
+            ret = fuse_do_truncate(exp, offset, true, PREALLOC_MODE_OFF);
+            if (ret < 0) {
+                fuse_reply_err(req, -ret);
+                return;
+            }
+        }
+
+        ret = fuse_do_truncate(exp, offset + length, true,
+                               PREALLOC_MODE_FALLOC);
+    }
+#ifdef CONFIG_FALLOCATE_PUNCH_HOLE
+    else if (mode & FALLOC_FL_PUNCH_HOLE) {
         if (!(mode & FALLOC_FL_KEEP_SIZE)) {
             fuse_reply_err(req, EINVAL);
             return;
@@ -638,11 +673,21 @@ static void fuse_fallocate(fuse_req_t req, fuse_ino_t inode, int mode,
         do {
             int size = MIN(length, BDRV_REQUEST_MAX_BYTES);
 
-            ret = blk_pdiscard(exp->common.blk, offset, size);
+            ret = blk_pwrite_zeroes(exp->common.blk, offset, size,
+                                    BDRV_REQ_MAY_UNMAP | BDRV_REQ_NO_FALLBACK);
+            if (ret == -ENOTSUP) {
+                /*
+                 * fallocate() specifies to return EOPNOTSUPP for unsupported
+                 * operations
+                 */
+                ret = -EOPNOTSUPP;
+            }
+
             offset += size;
             length -= size;
         } while (ret == 0 && length > 0);
     }
+#endif /* CONFIG_FALLOCATE_PUNCH_HOLE */
 #ifdef CONFIG_FALLOCATE_ZERO_RANGE
     else if (mode & FALLOC_FL_ZERO_RANGE) {
         if (!(mode & FALLOC_FL_KEEP_SIZE) && offset + length > blk_len) {
@@ -665,25 +710,7 @@ static void fuse_fallocate(fuse_req_t req, fuse_ino_t inode, int mode,
         } while (ret == 0 && length > 0);
     }
 #endif /* CONFIG_FALLOCATE_ZERO_RANGE */
-    else if (!mode) {
-        /* We can only fallocate at the EOF with a truncate */
-        if (offset < blk_len) {
-            fuse_reply_err(req, EOPNOTSUPP);
-            return;
-        }
-
-        if (offset > blk_len) {
-            /* No preallocation needed here */
-            ret = fuse_do_truncate(exp, offset, true, PREALLOC_MODE_OFF);
-            if (ret < 0) {
-                fuse_reply_err(req, -ret);
-                return;
-            }
-        }
-
-        ret = fuse_do_truncate(exp, offset + length, true,
-                               PREALLOC_MODE_FALLOC);
-    } else {
+    else {
         ret = -EOPNOTSUPP;
     }
 

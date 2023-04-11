@@ -22,6 +22,7 @@
 #include "qemu.h"
 #include "user-internals.h"
 #include "user-mmap.h"
+#include "target_mman.h"
 
 static pthread_mutex_t mmap_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread int mmap_lock_count;
@@ -105,6 +106,8 @@ static int validate_prot_to_pageflags(int *host_prot, int prot)
             page_flags |= PAGE_MTE;
         }
     }
+#elif defined(TARGET_HPPA)
+    valid |= PROT_GROWSDOWN | PROT_GROWSUP;
 #endif
 
     return prot & ~valid ? 0 : page_flags;
@@ -177,9 +180,10 @@ int target_mprotect(abi_ulong start, abi_ulong len, int target_prot)
             goto error;
         }
     }
+
     page_set_flags(start, start + len, page_flags);
-    mmap_unlock();
-    return 0;
+    ret = 0;
+
 error:
     mmap_unlock();
     return ret;
@@ -251,7 +255,11 @@ static int mmap_frag(abi_ulong real_start,
 # define TASK_UNMAPPED_BASE  (1ul << 38)
 #endif
 #else
+#ifdef TARGET_HPPA
+# define TASK_UNMAPPED_BASE  0xfa000000
+#else
 # define TASK_UNMAPPED_BASE  0x40000000
+#endif
 #endif
 abi_ulong mmap_next_start = TASK_UNMAPPED_BASE;
 
@@ -424,7 +432,8 @@ abi_ulong mmap_find_vma(abi_ulong start, abi_ulong size, abi_ulong align)
 abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
                      int flags, int fd, abi_ulong offset)
 {
-    abi_ulong ret, end, real_start, real_end, retaddr, host_offset, host_len;
+    abi_ulong ret, end, real_start, real_end, retaddr, host_offset, host_len,
+              passthrough_start = -1, passthrough_end = -1;
     int page_flags, host_prot;
 
     mmap_lock();
@@ -494,7 +503,7 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
        may need to truncate file maps at EOF and add extra anonymous pages
        up to the targets page boundary.  */
 
-    if ((qemu_real_host_page_size < qemu_host_page_size) &&
+    if ((qemu_real_host_page_size() < qemu_host_page_size) &&
         !(flags & MAP_ANONYMOUS)) {
         struct stat sb;
 
@@ -537,6 +546,8 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
             host_start += offset - host_offset;
         }
         start = h2g(host_start);
+        passthrough_start = start;
+        passthrough_end = start + len;
     } else {
         if (start & ~TARGET_PAGE_MASK) {
             errno = EINVAL;
@@ -619,6 +630,8 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
                      host_prot, flags, fd, offset1);
             if (p == MAP_FAILED)
                 goto fail;
+            passthrough_start = real_start;
+            passthrough_end = real_end;
         }
     }
  the_end1:
@@ -626,13 +639,28 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
         page_flags |= PAGE_ANON;
     }
     page_flags |= PAGE_RESET;
-    page_set_flags(start, start + len, page_flags);
+    if (passthrough_start == passthrough_end) {
+        page_set_flags(start, start + len, page_flags);
+    } else {
+        if (start < passthrough_start) {
+            page_set_flags(start, passthrough_start, page_flags);
+        }
+        page_set_flags(passthrough_start, passthrough_end,
+                       page_flags | PAGE_PASSTHROUGH);
+        if (passthrough_end < start + len) {
+            page_set_flags(passthrough_end, start + len, page_flags);
+        }
+    }
  the_end:
     trace_target_mmap_complete(start);
     if (qemu_loglevel_mask(CPU_LOG_PAGE)) {
-        log_page_dump(__func__);
+        FILE *f = qemu_log_trylock();
+        if (f) {
+            fprintf(f, "page layout changed following mmap\n");
+            page_dump(f);
+            qemu_log_unlock(f);
+        }
     }
-    tb_invalidate_phys_range(start, start + len);
     mmap_unlock();
     return start;
 fail:
@@ -736,7 +764,6 @@ int target_munmap(abi_ulong start, abi_ulong len)
 
     if (ret == 0) {
         page_set_flags(start, start + len, 0);
-        tb_invalidate_phys_range(start, start + len);
     }
     mmap_unlock();
     return ret;
@@ -826,7 +853,104 @@ abi_long target_mremap(abi_ulong old_addr, abi_ulong old_size,
         page_set_flags(new_addr, new_addr + new_size,
                        prot | PAGE_VALID | PAGE_RESET);
     }
-    tb_invalidate_phys_range(new_addr, new_addr + new_size);
     mmap_unlock();
     return new_addr;
+}
+
+static bool can_passthrough_madvise(abi_ulong start, abi_ulong end)
+{
+    ulong addr;
+
+    if ((start | end) & ~qemu_host_page_mask) {
+        return false;
+    }
+
+    for (addr = start; addr < end; addr += TARGET_PAGE_SIZE) {
+        if (!(page_get_flags(addr) & PAGE_PASSTHROUGH)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+abi_long target_madvise(abi_ulong start, abi_ulong len_in, int advice)
+{
+    abi_ulong len, end;
+    int ret = 0;
+
+    if (start & ~TARGET_PAGE_MASK) {
+        return -TARGET_EINVAL;
+    }
+    len = TARGET_PAGE_ALIGN(len_in);
+
+    if (len_in && !len) {
+        return -TARGET_EINVAL;
+    }
+
+    end = start + len;
+    if (end < start) {
+        return -TARGET_EINVAL;
+    }
+
+    if (end == start) {
+        return 0;
+    }
+
+    if (!guest_range_valid_untagged(start, len)) {
+        return -TARGET_EINVAL;
+    }
+
+    /* Translate for some architectures which have different MADV_xxx values */
+    switch (advice) {
+    case TARGET_MADV_DONTNEED:      /* alpha */
+        advice = MADV_DONTNEED;
+        break;
+    case TARGET_MADV_WIPEONFORK:    /* parisc */
+        advice = MADV_WIPEONFORK;
+        break;
+    case TARGET_MADV_KEEPONFORK:    /* parisc */
+        advice = MADV_KEEPONFORK;
+        break;
+    /* we do not care about the other MADV_xxx values yet */
+    }
+
+    /*
+     * Most advice values are hints, so ignoring and returning success is ok.
+     *
+     * However, some advice values such as MADV_DONTNEED, MADV_WIPEONFORK and
+     * MADV_KEEPONFORK are not hints and need to be emulated.
+     *
+     * A straight passthrough for those may not be safe because qemu sometimes
+     * turns private file-backed mappings into anonymous mappings.
+     * can_passthrough_madvise() helps to check if a passthrough is possible by
+     * comparing mappings that are known to have the same semantics in the host
+     * and the guest. In this case passthrough is safe.
+     *
+     * We pass through MADV_WIPEONFORK and MADV_KEEPONFORK if possible and
+     * return failure if not.
+     *
+     * MADV_DONTNEED is passed through as well, if possible.
+     * If passthrough isn't possible, we nevertheless (wrongly!) return
+     * success, which is broken but some userspace programs fail to work
+     * otherwise. Completely implementing such emulation is quite complicated
+     * though.
+     */
+    mmap_lock();
+    switch (advice) {
+    case MADV_WIPEONFORK:
+    case MADV_KEEPONFORK:
+        ret = -EINVAL;
+        /* fall through */
+    case MADV_DONTNEED:
+        if (can_passthrough_madvise(start, end)) {
+            ret = get_errno(madvise(g2h_untagged(start), len, advice));
+            if ((advice == MADV_DONTNEED) && (ret == 0)) {
+                page_reset_target_data(start, start + len);
+            }
+        }
+    }
+    mmap_unlock();
+
+    return ret;
 }

@@ -9,7 +9,6 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "hw/pci-host/pnv_phb3_regs.h"
 #include "hw/pci-host/pnv_phb3.h"
 #include "hw/ppc/pnv.h"
@@ -53,7 +52,8 @@ static bool phb3_msi_read_ive(PnvPHB3 *phb, int srcno, uint64_t *out_ive)
         return false;
     }
 
-    if (dma_memory_read(&address_space_memory, ive_addr, &ive, sizeof(ive))) {
+    if (dma_memory_read(&address_space_memory, ive_addr,
+                        &ive, sizeof(ive), MEMTXATTRS_UNSPECIFIED)) {
         qemu_log_mask(LOG_GUEST_ERROR, "Failed to read IVE at 0x%" PRIx64,
                       ive_addr);
         return false;
@@ -73,7 +73,8 @@ static void phb3_msi_set_p(Phb3MsiState *msi, int srcno, uint8_t gen)
         return;
     }
 
-    if (dma_memory_write(&address_space_memory, ive_addr + 4, &p, 1)) {
+    if (dma_memory_write(&address_space_memory, ive_addr + 4,
+                         &p, 1, MEMTXATTRS_UNSPECIFIED)) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "Failed to write IVE (set P) at 0x%" PRIx64, ive_addr);
     }
@@ -89,7 +90,8 @@ static void phb3_msi_set_q(Phb3MsiState *msi, int srcno)
         return;
     }
 
-    if (dma_memory_write(&address_space_memory, ive_addr + 5, &q, 1)) {
+    if (dma_memory_write(&address_space_memory, ive_addr + 5,
+                         &q, 1, MEMTXATTRS_UNSPECIFIED)) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "Failed to write IVE (set Q) at 0x%" PRIx64, ive_addr);
     }
@@ -226,20 +228,17 @@ static void phb3_msi_resend(ICSState *ics)
     }
 }
 
-static void phb3_msi_reset(DeviceState *dev)
+static void phb3_msi_reset_hold(Object *obj)
 {
-    Phb3MsiState *msi = PHB3_MSI(dev);
-    ICSStateClass *icsc = ICS_GET_CLASS(dev);
+    Phb3MsiState *msi = PHB3_MSI(obj);
+    ICSStateClass *icsc = ICS_GET_CLASS(obj);
 
-    icsc->parent_reset(dev);
+    if (icsc->parent_phases.hold) {
+        icsc->parent_phases.hold(obj);
+    }
 
     memset(msi->rba, 0, sizeof(msi->rba));
     msi->rba_sum = 0;
-}
-
-static void phb3_msi_reset_handler(void *dev)
-{
-    phb3_msi_reset(dev);
 }
 
 void pnv_phb3_msi_update_config(Phb3MsiState *msi, uint32_t base,
@@ -270,8 +269,6 @@ static void phb3_msi_realize(DeviceState *dev, Error **errp)
     }
 
     msi->qirqs = qemu_allocate_irqs(phb3_msi_set_irq, msi, ics->nr_irqs);
-
-    qemu_register_reset(phb3_msi_reset_handler, dev);
 }
 
 static void phb3_msi_instance_init(Object *obj)
@@ -292,11 +289,12 @@ static void phb3_msi_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ICSStateClass *isc = ICS_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     device_class_set_parent_realize(dc, phb3_msi_realize,
                                     &isc->parent_realize);
-    device_class_set_parent_reset(dc, phb3_msi_reset,
-                                  &isc->parent_reset);
+    resettable_class_set_parent_phases(rc, NULL, phb3_msi_reset_hold, NULL,
+                                       &isc->parent_phases);
 
     isc->reject = phb3_msi_reject;
     isc->resend = phb3_msi_resend;

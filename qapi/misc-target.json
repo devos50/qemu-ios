@@ -3,39 +3,6 @@
 #
 
 ##
-# @RTC_CHANGE:
-#
-# Emitted when the guest changes the RTC time.
-#
-# @offset: offset between base RTC clock (as specified by -rtc base), and
-#          new RTC clock value
-#
-# Note: This event is rate-limited.
-#
-# Since: 0.13
-#
-# Example:
-#
-# <-   { "event": "RTC_CHANGE",
-#        "data": { "offset": 78 },
-#        "timestamp": { "seconds": 1267020223, "microseconds": 435656 } }
-#
-##
-{ 'event': 'RTC_CHANGE',
-  'data': { 'offset': 'int' },
-  'if': { 'any': [ 'TARGET_ALPHA',
-                   'TARGET_ARM',
-                   'TARGET_HPPA',
-                   'TARGET_I386',
-                   'TARGET_MIPS',
-                   'TARGET_MIPS64',
-                   'TARGET_PPC',
-                   'TARGET_PPC64',
-                   'TARGET_S390X',
-                   'TARGET_SH4',
-                   'TARGET_SPARC' ] } }
-
-##
 # @rtc-reset-reinjection:
 #
 # This command will reset the RTC interrupt reinjection backlog.
@@ -53,7 +20,6 @@
 ##
 { 'command': 'rtc-reset-reinjection',
   'if': 'TARGET_I386' }
-
 
 ##
 # @SevState:
@@ -134,7 +100,6 @@
 { 'command': 'query-sev', 'returns': 'SevInfo',
   'if': 'TARGET_I386' }
 
-
 ##
 # @SevLaunchMeasureInfo:
 #
@@ -143,7 +108,6 @@
 # @data: the measurement value encoded in base64
 #
 # Since: 2.12
-#
 ##
 { 'struct': 'SevLaunchMeasureInfo', 'data': {'data': 'str'},
   'if': 'TARGET_I386' }
@@ -166,16 +130,17 @@
 { 'command': 'query-sev-launch-measure', 'returns': 'SevLaunchMeasureInfo',
   'if': 'TARGET_I386' }
 
-
 ##
 # @SevCapability:
 #
 # The struct describes capability for a Secure Encrypted Virtualization
 # feature.
 #
-# @pdh:  Platform Diffie-Hellman key (base64 encoded)
+# @pdh: Platform Diffie-Hellman key (base64 encoded)
 #
-# @cert-chain:  PDH certificate chain (base64 encoded)
+# @cert-chain: PDH certificate chain (base64 encoded)
+#
+# @cpu0-id: Unique ID of CPU0 (base64 encoded) (since 7.1)
 #
 # @cbitpos: C-bit location in page table entry
 #
@@ -187,6 +152,7 @@
 { 'struct': 'SevCapability',
   'data': { 'pdh': 'str',
             'cert-chain': 'str',
+            'cpu0-id': 'str',
             'cbitpos': 'int',
             'reduced-phys-bits': 'int'},
   'if': 'TARGET_I386' }
@@ -205,6 +171,7 @@
 #
 # -> { "execute": "query-sev-capabilities" }
 # <- { "return": { "pdh": "8CCDD8DDD", "cert-chain": "888CCCDDDEE",
+#                  "cpu0-id": "2lvmGwo+...61iEinw==",
 #                  "cbitpos": 47, "reduced-phys-bits": 5}}
 #
 ##
@@ -223,7 +190,6 @@
 # @gpa: the guest physical address where secret will be injected.
 #
 # Since: 6.0
-#
 ##
 { 'command': 'sev-inject-launch-secret',
   'data': { 'packet-header': 'str', 'secret': 'str', '*gpa': 'uint64' },
@@ -235,8 +201,7 @@
 # The struct describes attestation report for a Secure Encrypted
 # Virtualization feature.
 #
-# @data:  guest attestation report (base64 encoded)
-#
+# @data: guest attestation report (base64 encoded)
 #
 # Since: 6.1
 ##
@@ -336,7 +301,6 @@
 { 'command': 'query-gic-capabilities', 'returns': ['GICCapability'],
   'if': 'TARGET_ARM' }
 
-
 ##
 # @SGXEPCSection:
 #
@@ -344,9 +308,9 @@
 #
 # @node: the numa node
 #
-# @size: the size of epc section
+# @size: the size of EPC section
 #
-# Since: 6.2
+# Since: 7.0
 ##
 { 'struct': 'SGXEPCSection',
   'data': { 'node': 'int',
@@ -365,7 +329,7 @@
 #
 # @flc: true if FLC is supported
 #
-# @sections: The EPC sections info for guest
+# @sections: The EPC sections info for guest (Since: 7.0)
 #
 # Since: 6.2
 ##
@@ -390,7 +354,9 @@
 #
 # -> { "execute": "query-sgx" }
 # <- { "return": { "sgx": true, "sgx1" : true, "sgx2" : true,
-#                  "flc": true, "section-size" : 0 } }
+#                  "flc": true,
+#                  "sections": [{"node": 0, "size": 67108864},
+#                  {"node": 1, "size": 29360128}]} }
 #
 ##
 { 'command': 'query-sgx', 'returns': 'SGXInfo', 'if': 'TARGET_I386' }
@@ -408,7 +374,125 @@
 #
 # -> { "execute": "query-sgx-capabilities" }
 # <- { "return": { "sgx": true, "sgx1" : true, "sgx2" : true,
-#                  "flc": true, "section-size" : 0 } }
+#                  "flc": true,
+#                  "section" : [{"node": 0, "size": 67108864},
+#                  {"node": 1, "size": 29360128}]} }
 #
 ##
 { 'command': 'query-sgx-capabilities', 'returns': 'SGXInfo', 'if': 'TARGET_I386' }
+
+
+##
+# @EvtchnPortType:
+#
+# An enumeration of Xen event channel port types.
+#
+# @closed: The port is unused.
+#
+# @unbound: The port is allocated and ready to be bound.
+#
+# @interdomain: The port is connected as an interdomain interrupt.
+#
+# @pirq: The port is bound to a physical IRQ (PIRQ).
+#
+# @virq: The port is bound to a virtual IRQ (VIRQ).
+#
+# @ipi: The post is an inter-processor interrupt (IPI).
+#
+# Since: 8.0
+##
+{ 'enum': 'EvtchnPortType',
+  'data': ['closed', 'unbound', 'interdomain', 'pirq', 'virq', 'ipi'],
+  'if': 'TARGET_I386' }
+
+##
+# @EvtchnInfo:
+#
+# Information about a Xen event channel port
+#
+# @port: the port number
+#
+# @vcpu: target vCPU for this port
+#
+# @type: the port type
+#
+# @remote-domain: remote domain for interdomain ports
+#
+# @target: remote port ID, or virq/pirq number
+#
+# @pending: port is currently active pending delivery
+#
+# @masked: port is masked
+#
+# Since: 8.0
+##
+{ 'struct': 'EvtchnInfo',
+  'data': {'port': 'uint16',
+           'vcpu': 'uint32',
+           'type': 'EvtchnPortType',
+           'remote-domain': 'str',
+           'target': 'uint16',
+           'pending': 'bool',
+           'masked': 'bool'},
+  'if': 'TARGET_I386' }
+
+
+##
+# @xen-event-list:
+#
+# Query the Xen event channels opened by the guest.
+#
+# Returns: list of open event channel ports.
+#
+# Since: 8.0
+#
+# Example:
+#
+# -> { "execute": "xen-event-list" }
+# <- { "return": [
+#         {
+#             "pending": false,
+#             "port": 1,
+#             "vcpu": 1,
+#             "remote-domain": "qemu",
+#             "masked": false,
+#             "type": "interdomain",
+#             "target": 1
+#         },
+#         {
+#             "pending": false,
+#             "port": 2,
+#             "vcpu": 0,
+#             "remote-domain": "",
+#             "masked": false,
+#             "type": "virq",
+#             "target": 0
+#         }
+#      ]
+#    }
+#
+##
+{ 'command': 'xen-event-list',
+  'returns': ['EvtchnInfo'],
+  'if': 'TARGET_I386' }
+
+##
+# @xen-event-inject:
+#
+# Inject a Xen event channel port (interrupt) to the guest.
+#
+# @port: The port number
+#
+# Returns: - Nothing on success.
+#
+# Since: 8.0
+#
+# Example:
+#
+# -> { "execute": "xen-event-inject", "arguments": { "port": 1 } }
+# <- { "return": { } }
+#
+##
+{ 'command': 'xen-event-inject',
+  'data': { 'port': 'uint32' },
+  'if': 'TARGET_I386' }

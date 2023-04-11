@@ -23,7 +23,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/module.h"
 #include "qemu/sockets.h"
 #include "qapi/error.h"
@@ -199,7 +198,7 @@ int qmp_chardev_open_file_source(char *src, int flags, Error **errp)
 {
     int fd = -1;
 
-    TFR(fd = qemu_open_old(src, flags, 0666));
+    fd = RETRY_ON_EINTR(qemu_open_old(src, flags, 0666));
     if (fd == -1) {
         error_setg_file_open(errp, errno, src);
     }
@@ -213,8 +212,8 @@ void qemu_chr_open_fd(Chardev *chr,
     FDChardev *s = FD_CHARDEV(chr);
     g_autofree char *name = NULL;
 
-    if (fd_out >= 0) {
-        qemu_set_nonblock(fd_out);
+    if (fd_out >= 0 && !g_unix_set_fd_nonblocking(fd_out, true, NULL)) {
+        assert(!"Failed to set FD nonblocking");
     }
 
     if (fd_out == fd_in && fd_in >= 0) {

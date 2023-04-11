@@ -24,9 +24,9 @@
 #include "qemu/module.h"
 #include "migration/vmstate.h"
 #include "monitor/monitor.h"
-#include "hw/i386/ioapic.h"
-#include "hw/i386/ioapic_internal.h"
 #include "hw/intc/intc.h"
+#include "hw/intc/ioapic.h"
+#include "hw/intc/ioapic_internal.h"
 #include "hw/sysbus.h"
 
 /* ioapic_no count start from 0 to MAX_IOAPICS,
@@ -76,7 +76,7 @@ static void ioapic_irr_dump(Monitor *mon, const char *name, uint32_t bitmap)
     monitor_printf(mon, "\n");
 }
 
-void ioapic_print_redtbl(Monitor *mon, IOAPICCommonState *s)
+static void ioapic_print_redtbl(Monitor *mon, IOAPICCommonState *s)
 {
     static const char *delm_str[] = {
         "fixed", "lowest", "SMI", "...", "NMI", "INIT", "...", "extINT"};

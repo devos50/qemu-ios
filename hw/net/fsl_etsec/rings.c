@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "net/checksum.h"
 #include "qemu/log.h"
 #include "etsec.h"
@@ -110,7 +109,7 @@ static void read_buffer_descriptor(eTSEC         *etsec,
 {
     assert(bd != NULL);
 
-    RING_DEBUG("READ Buffer Descriptor @ 0x" TARGET_FMT_plx"\n", addr);
+    RING_DEBUG("READ Buffer Descriptor @ 0x" HWADDR_FMT_plx"\n", addr);
     cpu_physical_memory_read(addr,
                              bd,
                              sizeof(eTSEC_rxtx_bd));
@@ -142,7 +141,7 @@ static void write_buffer_descriptor(eTSEC         *etsec,
         stl_be_p(&bd->bufptr, bd->bufptr);
     }
 
-    RING_DEBUG("Write Buffer Descriptor @ 0x" TARGET_FMT_plx"\n", addr);
+    RING_DEBUG("Write Buffer Descriptor @ 0x" HWADDR_FMT_plx"\n", addr);
     cpu_physical_memory_write(addr,
                               bd,
                               sizeof(eTSEC_rxtx_bd));

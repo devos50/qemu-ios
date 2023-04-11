@@ -1,3 +1,6 @@
+if 'CONFIG_TCG' not in config_all
+  subdir_done()
+endif
 # There are namespace pollution issues on Windows, due to osdep.h
 # bringing in Windows headers that define a FLOAT128 type.
 if targetos == 'windows'
@@ -34,8 +37,14 @@ tfcflags = [
   '-Wno-missing-prototypes',
   '-Wno-return-type',
   '-Wno-unused-function',
+  '-Wno-missing-format-attribute',
   '-Wno-error',
 ]
+
+if cc.get_id() == 'clang'
+  # Clang does not support '#pragma STDC FENV_ACCESS'
+  tfcflags += [ '-Wno-ignored-pragmas' ]
+endif
 
 tfgencases = [
   tfdir / 'genCases_ui32.c',
@@ -600,7 +609,7 @@ softfloat_tests = {
 # The full test suite can take a bit of time, default to a quick run
 # "-l 2 -r all" can take more than a day for some operations and is best
 # run manually
-fptest_args = ['-s', '-l', '1']
+fptest_args = ['-q', '-s', '-l', '1']
 fptest_rounding_args = ['-r', 'all']
 
 # Conversion Routines:
@@ -624,7 +633,7 @@ test('fp-test-mulAdd', fptest,
            ['f16_mulAdd', 'f32_mulAdd', 'f64_mulAdd', 'f128_mulAdd'],
      suite: ['softfloat-slow', 'softfloat-ops-slow', 'slow'], timeout: 90)
 
-fpbench = executable(
+executable(
   'fp-bench',
   ['fp-bench.c', '../../fpu/softfloat.c'],
   link_with: [libtestfloat, libsoftfloat],

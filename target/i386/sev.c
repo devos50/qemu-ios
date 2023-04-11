@@ -23,6 +23,7 @@
 #include "qemu/base64.h"
 #include "qemu/module.h"
 #include "qemu/uuid.h"
+#include "qemu/error-report.h"
 #include "crypto/hash.h"
 #include "sysemu/kvm.h"
 #include "sev.h"
@@ -34,7 +35,6 @@
 #include "monitor/monitor.h"
 #include "monitor/hmp-target.h"
 #include "qapi/qapi-commands-misc-target.h"
-#include "qapi/qmp/qerror.h"
 #include "exec/confidential-guest-support.h"
 #include "hw/i386/pc.h"
 #include "exec/address-spaces.h"
@@ -531,12 +531,46 @@ e_free:
     return 1;
 }
 
+static int sev_get_cpu0_id(int fd, guchar **id, size_t *id_len, Error **errp)
+{
+    guchar *id_data;
+    struct sev_user_data_get_id2 get_id2 = {};
+    int err, r;
+
+    /* query the ID length */
+    r = sev_platform_ioctl(fd, SEV_GET_ID2, &get_id2, &err);
+    if (r < 0 && err != SEV_RET_INVALID_LEN) {
+        error_setg(errp, "SEV: Failed to get ID ret=%d fw_err=%d (%s)",
+                   r, err, fw_error_to_str(err));
+        return 1;
+    }
+
+    id_data = g_new(guchar, get_id2.length);
+    get_id2.address = (unsigned long)id_data;
+
+    r = sev_platform_ioctl(fd, SEV_GET_ID2, &get_id2, &err);
+    if (r < 0) {
+        error_setg(errp, "SEV: Failed to get ID ret=%d fw_err=%d (%s)",
+                   r, err, fw_error_to_str(err));
+        goto err;
+    }
+
+    *id = id_data;
+    *id_len = get_id2.length;
+    return 0;
+
+err:
+    g_free(id_data);
+    return 1;
+}
+
 static SevCapability *sev_get_capabilities(Error **errp)
 {
     SevCapability *cap = NULL;
     guchar *pdh_data = NULL;
     guchar *cert_chain_data = NULL;
-    size_t pdh_len = 0, cert_chain_len = 0;
+    guchar *cpu0_id_data = NULL;
+    size_t pdh_len = 0, cert_chain_len = 0, cpu0_id_len = 0;
     uint32_t ebx;
     int fd;
 
@@ -561,9 +595,14 @@ static SevCapability *sev_get_capabilities(Error **errp)
         goto out;
     }
 
+    if (sev_get_cpu0_id(fd, &cpu0_id_data, &cpu0_id_len, errp)) {
+        goto out;
+    }
+
     cap = g_new0(SevCapability, 1);
     cap->pdh = g_base64_encode(pdh_data, pdh_len);
     cap->cert_chain = g_base64_encode(cert_chain_data, cert_chain_len);
+    cap->cpu0_id = g_base64_encode(cpu0_id_data, cpu0_id_len);
 
     host_cpuid(0x8000001F, 0, NULL, &ebx, NULL, NULL);
     cap->cbitpos = ebx & 0x3f;
@@ -575,6 +614,7 @@ static SevCapability *sev_get_capabilities(Error **errp)
     cap->reduced_phys_bits = 1;
 
 out:
+    g_free(cpu0_id_data);
     g_free(pdh_data);
     g_free(cert_chain_data);
     close(fd);

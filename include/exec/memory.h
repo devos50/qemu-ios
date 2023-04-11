@@ -69,7 +69,10 @@ static inline void fuzz_dma_read_cb(size_t addr,
 /* Dirty tracking enabled because measuring dirty rate */
 #define GLOBAL_DIRTY_DIRTY_RATE (1U << 1)
 
-#define GLOBAL_DIRTY_MASK  (0x3)
+/* Dirty tracking enabled because dirty limit */
+#define GLOBAL_DIRTY_LIMIT      (1U << 2)
+
+#define GLOBAL_DIRTY_MASK  (0x7)
 
 extern unsigned int global_dirty_tracking;
 
@@ -126,6 +129,32 @@ struct IOMMUTLBEntry {
 /*
  * Bitmap for different IOMMUNotifier capabilities. Each notifier can
  * register with one or multiple IOMMU Notifier capability bit(s).
+ *
+ * Normally there're two use cases for the notifiers:
+ *
+ *   (1) When the device needs accurate synchronizations of the vIOMMU page
+ *       tables, it needs to register with both MAP|UNMAP notifies (which
+ *       is defined as IOMMU_NOTIFIER_IOTLB_EVENTS below).
+ *
+ *       Regarding to accurate synchronization, it's when the notified
+ *       device maintains a shadow page table and must be notified on each
+ *       guest MAP (page table entry creation) and UNMAP (invalidation)
+ *       events (e.g. VFIO). Both notifications must be accurate so that
+ *       the shadow page table is fully in sync with the guest view.
+ *
+ *   (2) When the device doesn't need accurate synchronizations of the
+ *       vIOMMU page tables, it needs to register only with UNMAP or
+ *       DEVIOTLB_UNMAP notifies.
+ *
+ *       It's when the device maintains a cache of IOMMU translations
+ *       (IOTLB) and is able to fill that cache by requesting translations
+ *       from the vIOMMU through a protocol similar to ATS (Address
+ *       Translation Service).
+ *
+ *       Note that in this mode the vIOMMU will not maintain a shadowed
+ *       page table for the address space, and the UNMAP messages can cover
+ *       more than the pages that used to get mapped.  The IOMMU notifiee
+ *       should be able to take care of over-sized invalidations.
  */
 typedef enum {
     IOMMU_NOTIFIER_NONE = 0,
@@ -558,7 +587,7 @@ typedef void (*ReplayRamDiscard)(MemoryRegionSection *section, void *opaque);
  * A #RamDiscardManager coordinates which parts of specific RAM #MemoryRegion
  * regions are currently populated to be used/accessed by the VM, notifying
  * after parts were discarded (freeing up memory) and before parts will be
- * populated (consuming memory), to be used/acessed by the VM.
+ * populated (consuming memory), to be used/accessed by the VM.
  *
  * A #RamDiscardManager can only be set for a RAM #MemoryRegion while the
  * #MemoryRegion isn't mapped yet; it cannot change while the #MemoryRegion is
@@ -582,7 +611,7 @@ typedef void (*ReplayRamDiscard)(MemoryRegionSection *section, void *opaque);
  * Listeners are called in multiples of the minimum granularity (unless it
  * would exceed the registered range) and changes are aligned to the minimum
  * granularity within the #MemoryRegion. Listeners have to prepare for memory
- * becomming discarded in a different granularity than it was populated and the
+ * becoming discarded in a different granularity than it was populated and the
  * other way around.
  */
 struct RamDiscardManagerClass {
@@ -710,6 +739,10 @@ void ram_discard_manager_register_listener(RamDiscardManager *rdm,
 void ram_discard_manager_unregister_listener(RamDiscardManager *rdm,
                                              RamDiscardListener *rdl);
 
+bool memory_get_xlat_addr(IOMMUTLBEntry *iotlb, void **vaddr,
+                          ram_addr_t *ram_addr, bool *read_only,
+                          bool *mr_has_discard_manager);
+
 typedef struct CoalescedMemoryRange CoalescedMemoryRange;
 typedef struct MemoryRegionIoeventfd MemoryRegionIoeventfd;
 
@@ -738,6 +771,7 @@ struct MemoryRegion {
     const MemoryRegionOps *ops;
     void *opaque;
     MemoryRegion *container;
+    int mapped_via_alias; /* Mapped via an alias, container might be NULL */
     Int128 size;
     hwaddr addr;
     void (*destructor)(MemoryRegion *mr);
@@ -1239,7 +1273,7 @@ void memory_region_init_ram_flags_nomigrate(MemoryRegion *mr,
                                             Error **errp);
 
 /**
- * memory_region_init_resizeable_ram:  Initialize memory region with resizeable
+ * memory_region_init_resizeable_ram:  Initialize memory region with resizable
  *                                     RAM.  Accesses into the region will
  *                                     modify memory directly.  Only an initial
  *                                     portion of this RAM is actually used.
@@ -1698,6 +1732,16 @@ void memory_region_notify_iommu_one(IOMMUNotifier *notifier,
                                     IOMMUTLBEvent *event);
 
 /**
+ * memory_region_unmap_iommu_notifier_range: notify a unmap for an IOMMU
+ *                                           translation that covers the
+ *                                           range of a notifier
+ *
+ * @notifier: the notifier to be notified
+ */
+void memory_region_unmap_iommu_notifier_range(IOMMUNotifier *notifier);
+
+
+/**
  * memory_region_register_iommu_notifier: register a notifier for changes to
  * IOMMU translation entries.
  *
@@ -1966,7 +2010,7 @@ void memory_region_clear_dirty_bitmap(MemoryRegion *mr, hwaddr start,
  * querying the same page multiple times, which is especially useful for
  * display updates where the scanlines often are not page aligned.
  *
- * The dirty bitmap region which gets copyed into the snapshot (and
+ * The dirty bitmap region which gets copied into the snapshot (and
  * cleared afterwards) can be larger than requested.  The boundaries
  * are rounded up/down so complete bitmap longs (covering 64 pages on
  * 64bit hosts) can be copied over into the bitmap snapshot.  Which
@@ -2296,7 +2340,8 @@ bool memory_region_present(MemoryRegion *container, hwaddr addr);
 
 /**
  * memory_region_is_mapped: returns true if #MemoryRegion is mapped
- * into any address space.
+ * into another memory region, which does not necessarily imply that it is
+ * mapped into an address space.
  *
  * @mr: a #MemoryRegion which should be checked if it's mapped
  */
@@ -2432,6 +2477,10 @@ void memory_global_dirty_log_start(unsigned int flags);
 void memory_global_dirty_log_stop(unsigned int flags);
 
 void mtree_info(bool flatview, bool dispatch_tree, bool owner, bool disabled);
+
+bool memory_region_access_valid(MemoryRegion *mr, hwaddr addr,
+                                unsigned size, bool is_write,
+                                MemTxAttrs attrs);
 
 /**
  * memory_region_dispatch_read: perform a read directly to the specified
@@ -2808,6 +2857,9 @@ MemTxResult address_space_write_cached_slow(MemoryRegionCache *cache,
                                             hwaddr addr, const void *buf,
                                             hwaddr len);
 
+int memory_access_size(MemoryRegion *mr, unsigned l, hwaddr addr);
+bool prepare_mmio_access(MemoryRegion *mr);
+
 static inline bool memory_access_is_direct(MemoryRegion *mr, bool is_write)
 {
     if (is_write) {
@@ -2906,6 +2958,22 @@ address_space_write_cached(MemoryRegionCache *cache, hwaddr addr,
     }
 }
 
+/**
+ * address_space_set: Fill address space with a constant byte.
+ *
+ * Return a MemTxResult indicating whether the operation succeeded
+ * or failed (eg unassigned memory, device rejected the transaction,
+ * IOMMU fault).
+ *
+ * @as: #AddressSpace to be accessed
+ * @addr: address within that address space
+ * @c: constant byte to fill the memory
+ * @len: the number of bytes to fill with the constant byte
+ * @attrs: memory transaction attributes
+ */
+MemTxResult address_space_set(AddressSpace *as, hwaddr addr,
+                              uint8_t c, hwaddr len, MemTxAttrs attrs);
+
 #ifdef NEED_CPU_H
 /* enum device_endian to MemOp.  */
 static inline MemOp devend_memop(enum device_endian end)
@@ -2913,7 +2981,7 @@ static inline MemOp devend_memop(enum device_endian end)
     QEMU_BUILD_BUG_ON(DEVICE_HOST_ENDIAN != DEVICE_LITTLE_ENDIAN &&
                       DEVICE_HOST_ENDIAN != DEVICE_BIG_ENDIAN);
 
-#if defined(HOST_WORDS_BIGENDIAN) != defined(TARGET_WORDS_BIGENDIAN)
+#if HOST_BIG_ENDIAN != TARGET_BIG_ENDIAN
     /* Swap if non-host endianness or native (target) endianness */
     return (end == DEVICE_HOST_ENDIAN) ? 0 : MO_BSWAP;
 #else

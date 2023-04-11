@@ -81,7 +81,7 @@ static void fsl_imx6ul_init(Object *obj)
      */
     for (i = 0; i < FSL_IMX6UL_NUM_GPTS; i++) {
         snprintf(name, NAME_SIZE, "gpt%d", i);
-        object_initialize_child(obj, name, &s->gpt[i], TYPE_IMX7_GPT);
+        object_initialize_child(obj, name, &s->gpt[i], TYPE_IMX6UL_GPT);
     }
 
     /*
@@ -166,8 +166,6 @@ static void fsl_imx6ul_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    object_property_set_int(OBJECT(&s->cpu), "psci-conduit",
-                            QEMU_PSCI_CONDUIT_SMC, &error_abort);
     qdev_realize(DEVICE(&s->cpu), NULL, &error_abort);
 
     /*

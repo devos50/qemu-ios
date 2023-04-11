@@ -1,5 +1,5 @@
 /*
- *  Copyright(c) 2019-2021 Qualcomm Innovation Center, Inc. All Rights Reserved.
+ *  Copyright(c) 2019-2023 Qualcomm Innovation Center, Inc. All Rights Reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -133,17 +133,11 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
     do { \
         TCGv lsb = tcg_temp_new(); \
         TCGLabel *false_label = gen_new_label(); \
-        TCGLabel *end_label = gen_new_label(); \
         tcg_gen_andi_tl(lsb, PsV, 1); \
         tcg_gen_brcondi_tl(TCG_COND_NE, lsb, PRED, false_label); \
-        tcg_temp_free(lsb); \
         tcg_gen_gvec_mov(MO_64, VdV_off, VuV_off, \
                          sizeof(MMVector), sizeof(MMVector)); \
-        tcg_gen_br(end_label); \
         gen_set_label(false_label); \
-        tcg_gen_ori_tl(hex_slot_cancelled, hex_slot_cancelled, \
-                       1 << insn->slot); \
-        gen_set_label(end_label); \
     } while (0)
 
 
@@ -212,7 +206,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 15); \
         tcg_gen_gvec_sars(MO_16, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vasrh_acc(SHORTCODE) \
@@ -224,7 +217,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
                           sizeof(MMVector), sizeof(MMVector)); \
         tcg_gen_gvec_add(MO_16, VxV_off, VxV_off, tmpoff, \
                          sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vasrw(SHORTCODE) \
@@ -233,7 +225,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 31); \
         tcg_gen_gvec_sars(MO_32, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vasrw_acc(SHORTCODE) \
@@ -245,7 +236,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
                           sizeof(MMVector), sizeof(MMVector)); \
         tcg_gen_gvec_add(MO_32, VxV_off, VxV_off, tmpoff, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vlsrb(SHORTCODE) \
@@ -254,7 +244,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 7); \
         tcg_gen_gvec_shrs(MO_8, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vlsrh(SHORTCODE) \
@@ -263,7 +252,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 15); \
         tcg_gen_gvec_shrs(MO_16, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vlsrw(SHORTCODE) \
@@ -272,7 +260,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 31); \
         tcg_gen_gvec_shrs(MO_32, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 /* Vector shift left - various forms */
@@ -282,7 +269,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 7); \
         tcg_gen_gvec_shls(MO_8, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vaslh(SHORTCODE) \
@@ -291,7 +277,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 15); \
         tcg_gen_gvec_shls(MO_16, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vaslh_acc(SHORTCODE) \
@@ -303,7 +288,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
                           sizeof(MMVector), sizeof(MMVector)); \
         tcg_gen_gvec_add(MO_16, VxV_off, VxV_off, tmpoff, \
                          sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vaslw(SHORTCODE) \
@@ -312,7 +296,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
         tcg_gen_andi_tl(shift, RtV, 31); \
         tcg_gen_gvec_shls(MO_32, VdV_off, VuV_off, shift, \
                           sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 #define fGEN_TCG_V6_vaslw_acc(SHORTCODE) \
@@ -324,7 +307,6 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
                           sizeof(MMVector), sizeof(MMVector)); \
         tcg_gen_gvec_add(MO_32, VxV_off, VxV_off, tmpoff, \
                          sizeof(MMVector), sizeof(MMVector)); \
-        tcg_temp_free(shift); \
     } while (0)
 
 /* Vector max - various forms */
@@ -560,18 +542,12 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
     do { \
         TCGv LSB = tcg_temp_new(); \
         TCGLabel *false_label = gen_new_label(); \
-        TCGLabel *end_label = gen_new_label(); \
         GET_EA; \
         PRED; \
         tcg_gen_brcondi_tl(TCG_COND_EQ, LSB, 0, false_label); \
-        tcg_temp_free(LSB); \
         gen_vreg_load(ctx, DSTOFF, EA, true); \
         INC; \
-        tcg_gen_br(end_label); \
         gen_set_label(false_label); \
-        tcg_gen_ori_tl(hex_slot_cancelled, hex_slot_cancelled, \
-                       1 << insn->slot); \
-        gen_set_label(end_label); \
     } while (0)
 
 #define fGEN_TCG_PRED_VEC_LOAD_pred_pi \
@@ -697,7 +673,7 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
 #define fGEN_TCG_NEWVAL_VEC_STORE(GET_EA, INC) \
     do { \
         GET_EA; \
-        gen_vreg_store(ctx, insn, pkt, EA, OsN_off, insn->slot, true); \
+        gen_vreg_store(ctx, EA, OsN_off, insn->slot, true); \
         INC; \
     } while (0)
 
@@ -731,18 +707,12 @@ static inline void assert_vhist_tmp(DisasContext *ctx)
     do { \
         TCGv LSB = tcg_temp_new(); \
         TCGLabel *false_label = gen_new_label(); \
-        TCGLabel *end_label = gen_new_label(); \
         GET_EA; \
         PRED; \
         tcg_gen_brcondi_tl(TCG_COND_EQ, LSB, 0, false_label); \
-        tcg_temp_free(LSB); \
-        gen_vreg_store(ctx, insn, pkt, EA, SRCOFF, insn->slot, ALIGN); \
+        gen_vreg_store(ctx, EA, SRCOFF, insn->slot, ALIGN); \
         INC; \
-        tcg_gen_br(end_label); \
         gen_set_label(false_label); \
-        tcg_gen_ori_tl(hex_slot_cancelled, hex_slot_cancelled, \
-                       1 << insn->slot); \
-        gen_set_label(end_label); \
     } while (0)
 
 #define fGEN_TCG_PRED_VEC_STORE_pred_pi(ALIGN) \

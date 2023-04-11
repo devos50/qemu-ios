@@ -166,6 +166,7 @@ static void gicv3_redist_update_noirqset(GICv3CPUState *cs)
     }
 
     if ((cs->gicr_ctlr & GICR_CTLR_ENABLE_LPIS) && cs->gic->lpi_enable &&
+        (cs->gic->gicd_ctlr & GICD_CTLR_EN_GRP1NS) &&
         (cs->hpplpi.prio != 0xff)) {
         if (irqbetter(cs, cs->hpplpi.irq, cs->hpplpi.prio)) {
             cs->hppi.irq = cs->hpplpi.irq;
@@ -368,11 +369,19 @@ static const MemoryRegionOps gic_ops[] = {
         .read_with_attrs = gicv3_dist_read,
         .write_with_attrs = gicv3_dist_write,
         .endianness = DEVICE_NATIVE_ENDIAN,
+        .valid.min_access_size = 1,
+        .valid.max_access_size = 8,
+        .impl.min_access_size = 1,
+        .impl.max_access_size = 8,
     },
     {
         .read_with_attrs = gicv3_redist_read,
         .write_with_attrs = gicv3_redist_write,
         .endianness = DEVICE_NATIVE_ENDIAN,
+        .valid.min_access_size = 1,
+        .valid.max_access_size = 8,
+        .impl.min_access_size = 1,
+        .impl.max_access_size = 8,
     }
 };
 

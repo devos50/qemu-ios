@@ -17,12 +17,14 @@
 #include "exec/cpu-common.h"
 #include "hw/qdev-core.h"
 #include "qapi/qapi-types-migration.h"
+#include "qapi/qmp/json-writer.h"
 #include "qemu/thread.h"
 #include "qemu/coroutine_int.h"
 #include "io/channel.h"
 #include "io/channel-buffer.h"
 #include "net/announce.h"
 #include "qom/object.h"
+#include "postcopy-ram.h"
 
 struct PostcopyBlocktimeContext;
 
@@ -45,14 +47,37 @@ struct PostcopyBlocktimeContext;
  */
 #define CLEAR_BITMAP_SHIFT_MAX            31
 
+/* This is an abstraction of a "temp huge page" for postcopy's purpose */
+typedef struct {
+    /*
+     * This points to a temporary huge page as a buffer for UFFDIO_COPY.  It's
+     * mmap()ed and needs to be freed when cleanup.
+     */
+    void *tmp_huge_page;
+    /*
+     * This points to the host page we're going to install for this temp page.
+     * It tells us after we've received the whole page, where we should put it.
+     */
+    void *host_addr;
+    /* Number of small pages copied (in size of TARGET_PAGE_SIZE) */
+    unsigned int target_pages;
+    /* Whether this page contains all zeros */
+    bool all_zero;
+} PostcopyTmpPage;
+
 /* State for the incoming migration */
 struct MigrationIncomingState {
     QEMUFile *from_src_file;
-
+    /* Previously received RAM's RAMBlock pointer */
+    RAMBlock *last_recv_block[RAM_CHANNEL_MAX];
     /* A hook to allow cleanup at the end of incoming migration */
     void *transport_data;
     void (*transport_cleanup)(void *data);
-
+    /*
+     * Used to sync thread creations.  Note that we can't create threads in
+     * parallel with this sem.
+     */
+    QemuSemaphore  thread_sync_sem;
     /*
      * Free at the start of the main state load, set as the main thread finishes
      * loading state.
@@ -65,13 +90,11 @@ struct MigrationIncomingState {
     size_t         largest_page_size;
     bool           have_fault_thread;
     QemuThread     fault_thread;
-    QemuSemaphore  fault_thread_sem;
     /* Set this when we want the fault thread to quit */
     bool           fault_thread_quit;
 
     bool           have_listen_thread;
     QemuThread     listen_thread;
-    QemuSemaphore  listen_thread_sem;
 
     /* For the kernel to send us notifications */
     int       userfault_fd;
@@ -81,7 +104,45 @@ struct MigrationIncomingState {
     QemuMutex rp_mutex;    /* We send replies from multiple threads */
     /* RAMBlock of last request sent to source */
     RAMBlock *last_rb;
-    void     *postcopy_tmp_page;
+    /*
+     * Number of postcopy channels including the default precopy channel, so
+     * vanilla postcopy will only contain one channel which contain both
+     * precopy and postcopy streams.
+     *
+     * This is calculated when the src requests to enable postcopy but before
+     * it starts.  Its value can depend on e.g. whether postcopy preemption is
+     * enabled.
+     */
+    unsigned int postcopy_channels;
+    /* QEMUFile for postcopy only; it'll be handled by a separate thread */
+    QEMUFile *postcopy_qemufile_dst;
+    /*
+     * When postcopy_qemufile_dst is properly setup, this sem is posted.
+     * One can wait on this semaphore to wait until the preempt channel is
+     * properly setup.
+     */
+    QemuSemaphore postcopy_qemufile_dst_done;
+    /* Postcopy priority thread is used to receive postcopy requested pages */
+    QemuThread postcopy_prio_thread;
+    bool postcopy_prio_thread_created;
+    /*
+     * Used to sync between the ram load main thread and the fast ram load
+     * thread.  It protects postcopy_qemufile_dst, which is the postcopy
+     * fast channel.
+     *
+     * The ram fast load thread will take it mostly for the whole lifecycle
+     * because it needs to continuously read data from the channel, and
+     * it'll only release this mutex if postcopy is interrupted, so that
+     * the ram load main thread will take this mutex over and properly
+     * release the broken channel.
+     */
+    QemuMutex postcopy_prio_thread_mutex;
+    /*
+     * An array of temp host huge pages to be used, one for each postcopy
+     * channel.
+     */
+    PostcopyTmpPage *postcopy_tmp_pages;
+    /* This is shared for all postcopy channels */
     void     *postcopy_tmp_zero_page;
     /* PostCopyFD's for external userfaultfds & handlers of shared memory */
     GArray   *postcopy_remote_fds;
@@ -103,9 +164,15 @@ struct MigrationIncomingState {
     struct PostcopyBlocktimeContext *blocktime_ctx;
 
     /* notify PAUSED postcopy incoming migrations to try to continue */
-    bool postcopy_recover_triggered;
     QemuSemaphore postcopy_pause_sem_dst;
     QemuSemaphore postcopy_pause_sem_fault;
+    /*
+     * This semaphore is used to allow the ram fast load thread (only when
+     * postcopy preempt is enabled) fall into sleep when there's network
+     * interruption detected.  When the recovery is done, the main load
+     * thread will kick the fast ram load thread using this semaphore.
+     */
+    QemuSemaphore postcopy_pause_sem_fast_load;
 
     /* List of listening socket addresses  */
     SocketAddressList *socket_address_list;
@@ -130,6 +197,7 @@ struct MigrationIncomingState {
 
 MigrationIncomingState *migration_incoming_get_current(void);
 void migration_incoming_state_destroy(void);
+void migration_incoming_transport_cleanup(MigrationIncomingState *mis);
 /*
  * Functions to work with blocktime context
  */
@@ -156,6 +224,15 @@ struct MigrationState {
     QEMUBH *cleanup_bh;
     /* Protected by qemu_file_lock */
     QEMUFile *to_dst_file;
+    /* Postcopy specific transfer channel */
+    QEMUFile *postcopy_qemufile_src;
+    /*
+     * It is posted when the preempt channel is established.  Note: this is
+     * used for both the start or recover of a postcopy migration.  We'll
+     * post to this sem every time a new preempt channel is created in the
+     * main thread, and we keep post() and wait() in pair.
+     */
+    QemuSemaphore postcopy_qemufile_src_sem;
     QIOChannelBuffer *bioc;
     /*
      * Protects to_dst_file/from_dst_file pointers.  We need to make sure we
@@ -205,6 +282,12 @@ struct MigrationState {
          */
         bool          rp_thread_created;
         QemuSemaphore rp_sem;
+        /*
+         * We post to this when we got one PONG from dest. So far it's an
+         * easy way to know the main channel has successfully established
+         * on dest QEMU.
+         */
+        QemuSemaphore rp_pong_acks;
     } rp_state;
 
     double mbps;
@@ -296,6 +379,9 @@ struct MigrationState {
      * This save hostname when out-going migration starts
      */
     char *hostname;
+
+    /* QEMU_VM_VMDESCRIPTION content filled for all non-iterable devices. */
+    JSONWriter *vmdesc;
 };
 
 void migrate_set_state(int *state, int old_state, int new_state);
@@ -339,6 +425,12 @@ MultiFDCompression migrate_multifd_compression(void);
 int migrate_multifd_zlib_level(void);
 int migrate_multifd_zstd_level(void);
 
+#ifdef CONFIG_LINUX
+bool migrate_use_zero_copy_send(void);
+#else
+#define migrate_use_zero_copy_send() (false)
+#endif
+int migrate_use_tls(void);
 int migrate_use_xbzrle(void);
 uint64_t migrate_xbzrle_cache_size(void);
 bool migrate_colo_enabled(void);
@@ -358,6 +450,7 @@ int migrate_decompress_threads(void);
 bool migrate_use_events(void);
 bool migrate_postcopy_blocktime(void);
 bool migrate_background_snapshot(void);
+bool migrate_postcopy_preempt(void);
 
 /* Sending on the return path - generic and then for each message type */
 void migrate_send_rp_shut(MigrationIncomingState *mis,
@@ -391,5 +484,6 @@ bool migration_rate_limit(void);
 void migration_cancel(const Error *error);
 
 void populate_vfio_info(MigrationInfo *info);
+void postcopy_temp_page_reset(PostcopyTmpPage *tmp_page);
 
 #endif

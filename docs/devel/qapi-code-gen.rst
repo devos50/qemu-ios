@@ -41,8 +41,8 @@ used internally.
 
 There are several kinds of types: simple types (a number of built-in
 types, such as ``int`` and ``str``; as well as enumerations), arrays,
-complex types (structs and two flavors of unions), and alternate types
-(a choice between other types).
+complex types (structs and unions), and alternate types (a choice
+between other types).
 
 
 Schema syntax
@@ -685,9 +685,10 @@ change in the QMP syntax (usually by allowing values or operations
 that previously resulted in an error).  QMP clients may still need to
 know whether the extension is available.
 
-For this purpose, a list of features can be specified for a command or
-struct type.  Each list member can either be ``{ 'name': STRING, '*if':
-COND }``, or STRING, which is shorthand for ``{ 'name': STRING }``.
+For this purpose, a list of features can be specified for definitions,
+enumeration values, and struct members.  Each feature list member can
+either be ``{ 'name': STRING, '*if': COND }``, or STRING, which is
+shorthand for ``{ 'name': STRING }``.
 
 The optional 'if' member specifies a conditional.  See `Configuring
 the schema`_ below for more on this.
@@ -739,10 +740,11 @@ Type names ending with ``Kind`` or ``List`` are reserved for the
 generator, which uses them for implicit union enums and array types,
 respectively.
 
-Command names, and member names within a type, should be all lower
-case with words separated by a hyphen.  However, some existing older
-commands and complex types use underscore; when extending them,
-consistency is preferred over blindly avoiding underscore.
+Command names, member names within a type, and feature names should be
+all lower case with words separated by a hyphen.  However, some
+existing older commands and complex types use underscore; when
+extending them, consistency is preferred over blindly avoiding
+underscore.
 
 Event names should be ALL_CAPS with words separated by underscore.
 
@@ -816,8 +818,8 @@ member 'bar' ::
 
 A union's discriminator may not be conditional.
 
-Likewise, individual enumeration values be conditional.  This requires
-the longhand form of ENUM-VALUE_.
+Likewise, individual enumeration values may be conditional.  This
+requires the longhand form of ENUM-VALUE_.
 
 Example: an enum type with unconditional value 'foo' and conditional
 value 'bar' ::
@@ -1156,9 +1158,8 @@ Example: the SchemaInfo for EVENT_C from section Events_ ::
     Type "q_obj-EVENT_C-arg" is an implicitly defined object type with
     the two members from the event's definition.
 
-The SchemaInfo for struct and union types has meta-type "object".
-
-The SchemaInfo for a struct type has variant member "members".
+The SchemaInfo for struct and union types has meta-type "object" and
+variant member "members".
 
 The SchemaInfo for a union type additionally has variant members "tag"
 and "variants".
@@ -1356,7 +1357,7 @@ qmp_my_command(); everything else is produced by the generator. ::
 
     $ cat example-schema.json
     { 'struct': 'UserDefOne',
-      'data': { 'integer': 'int', '*string': 'str' } }
+      'data': { 'integer': 'int', '*string': 'str', '*flag': 'bool' } }
 
     { 'command': 'my-command',
       'data': { 'arg1': ['UserDefOne'] },
@@ -1409,8 +1410,9 @@ Example::
 
     struct UserDefOne {
         int64_t integer;
-        bool has_string;
         char *string;
+        bool has_flag;
+        bool flag;
     };
 
     void qapi_free_UserDefOne(UserDefOne *obj);
@@ -1522,11 +1524,18 @@ Example::
 
     bool visit_type_UserDefOne_members(Visitor *v, UserDefOne *obj, Error **errp)
     {
+        bool has_string = !!obj->string;
+
         if (!visit_type_int(v, "integer", &obj->integer, errp)) {
             return false;
         }
-        if (visit_optional(v, "string", &obj->has_string)) {
+        if (visit_optional(v, "string", &has_string)) {
             if (!visit_type_str(v, "string", &obj->string, errp)) {
+                return false;
+            }
+        }
+        if (visit_optional(v, "flag", &obj->has_flag)) {
+            if (!visit_type_bool(v, "flag", &obj->flag, errp)) {
                 return false;
             }
         }
@@ -1630,6 +1639,9 @@ The following files are generated:
  ``$(prefix)qapi-commands.h``
      Function prototypes for the QMP commands specified in the schema
 
+ ``$(prefix)qapi-commands.trace-events``
+     Trace event declarations, see :ref:`tracing`.
+
  ``$(prefix)qapi-init-commands.h``
      Command initialization prototype
 
@@ -1650,9 +1662,15 @@ Example::
     void qmp_marshal_my_command(QDict *args, QObject **ret, Error **errp);
 
     #endif /* EXAMPLE_QAPI_COMMANDS_H */
+
+    $ cat qapi-generated/example-qapi-commands.trace-events
+    # AUTOMATICALLY GENERATED, DO NOT MODIFY
+
+    qmp_enter_my_command(const char *json) "%s"
+    qmp_exit_my_command(const char *result, bool succeeded) "%s %d"
+
     $ cat qapi-generated/example-qapi-commands.c
     [Uninteresting stuff omitted...]
-
 
     static void qmp_marshal_output_UserDefOne(UserDefOne *ret_in,
                                     QObject **ret_out, Error **errp)
@@ -1689,13 +1707,26 @@ Example::
             goto out;
         }
 
+        if (trace_event_get_state_backends(TRACE_QMP_ENTER_MY_COMMAND)) {
+            g_autoptr(GString) req_json = qobject_to_json(QOBJECT(args));
+
+            trace_qmp_enter_my_command(req_json->str);
+        }
+
         retval = qmp_my_command(arg.arg1, &err);
-        error_propagate(errp, err);
         if (err) {
+            trace_qmp_exit_my_command(error_get_pretty(err), false);
+            error_propagate(errp, err);
             goto out;
         }
 
         qmp_marshal_output_UserDefOne(retval, ret, errp);
+
+        if (trace_event_get_state_backends(TRACE_QMP_EXIT_MY_COMMAND)) {
+            g_autoptr(GString) ret_json = qobject_to_json(*ret);
+
+            trace_qmp_exit_my_command(ret_json->str, true);
+        }
 
     out:
         visit_free(v);
@@ -1724,7 +1755,7 @@ Example::
         QTAILQ_INIT(cmds);
 
         qmp_register_command(cmds, "my-command",
-                             qmp_marshal_my_command, QCO_NO_OPTIONS);
+                             qmp_marshal_my_command, 0, 0);
     }
     [Uninteresting stuff omitted...]
 
@@ -1893,6 +1924,12 @@ Example::
                     { "type", QLIT_QSTR("str"), },
                     {}
                 })),
+                QLIT_QDICT(((QLitDictEntry[]) {
+                    { "default", QLIT_QNULL, },
+                    { "name", QLIT_QSTR("flag"), },
+                    { "type", QLIT_QSTR("bool"), },
+                    {}
+                })),
                 {}
             })), },
             { "meta-type", QLIT_QSTR("object"), },
@@ -1924,6 +1961,12 @@ Example::
             { "json-type", QLIT_QSTR("string"), },
             { "meta-type", QLIT_QSTR("builtin"), },
             { "name", QLIT_QSTR("str"), },
+            {}
+        })),
+        QLIT_QDICT(((QLitDictEntry[]) {
+            { "json-type", QLIT_QSTR("boolean"), },
+            { "meta-type", QLIT_QSTR("builtin"), },
+            { "name", QLIT_QSTR("bool"), },
             {}
         })),
         {}

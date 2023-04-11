@@ -84,6 +84,11 @@ struct target_ucontext {
 
 typedef struct {
     uint8_t callee_used_stack[__SIGNAL_FRAMESIZE];
+    /*
+     * This field is no longer initialized by the kernel, but it's still a part
+     * of the ABI.
+     */
+    uint16_t svc_insn;
     struct target_siginfo info;
     struct target_ucontext uc;
 } rt_sigframe;
@@ -141,6 +146,7 @@ static void save_sigregs(CPUS390XState *env, target_sigregs *sregs)
      * We have to store the fp registers to current->thread.fp_regs
      * to merge them with the emulated registers.
      */
+    __put_user(env->fpc, &sregs->fpregs.fpc);
     for (i = 0; i < 16; i++) {
         __put_user(*get_freg(env, i), &sregs->fpregs.fprs[i]);
     }
@@ -326,6 +332,7 @@ static void restore_sigregs(CPUS390XState *env, target_sigregs *sc)
     for (i = 0; i < 16; i++) {
         __get_user(env->aregs[i], &sc->regs.acrs[i]);
     }
+    __get_user(env->fpc, &sc->fpregs.fpc);
     for (i = 0; i < 16; i++) {
         __get_user(*get_freg(env, i), &sc->fpregs.fprs[i]);
     }

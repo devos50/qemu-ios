@@ -17,11 +17,12 @@
 #ifdef CONFIG_LINUX_IO_URING
 #include <liburing.h>
 #endif
-#include "qemu/coroutine.h"
+#include "qemu/coroutine-core.h"
 #include "qemu/queue.h"
 #include "qemu/event_notifier.h"
 #include "qemu/thread.h"
 #include "qemu/timer.h"
+#include "block/graph-lock.h"
 
 typedef struct BlockAIOCB BlockAIOCB;
 typedef void BlockCompletionFunc(void *opaque, int ret);
@@ -51,7 +52,6 @@ typedef void QEMUBHFunc(void *opaque);
 typedef bool AioPollFn(void *opaque);
 typedef void IOHandler(void *opaque);
 
-struct Coroutine;
 struct ThreadPool;
 struct LinuxAioState;
 struct LuringState;
@@ -127,6 +127,14 @@ struct AioContext {
     /* Used by AioContext users to protect from multi-threaded access.  */
     QemuRecMutex lock;
 
+    /*
+     * Keep track of readers and writers of the block layer graph.
+     * This is essential to avoid performing additions and removal
+     * of nodes and edges from block graph while some
+     * other thread is traversing it.
+     */
+    BdrvGraphRWlock *bdrv_graph;
+
     /* The list of registered AIO handlers.  Protected by ctx->list_lock. */
     AioHandlerList aio_handlers;
 
@@ -192,6 +200,8 @@ struct AioContext {
     QSLIST_HEAD(, Coroutine) scheduled_coroutines;
     QEMUBH *co_schedule_bh;
 
+    int thread_pool_min;
+    int thread_pool_max;
     /* Thread pool for performing work and receiving completion callbacks.
      * Has its own locking.
      */
@@ -469,15 +479,8 @@ void aio_set_fd_handler(AioContext *ctx,
                         IOHandler *io_read,
                         IOHandler *io_write,
                         AioPollFn *io_poll,
+                        IOHandler *io_poll_ready,
                         void *opaque);
-
-/* Set polling begin/end callbacks for a file descriptor that has already been
- * registered with aio_set_fd_handler.  Do nothing if the file descriptor is
- * not registered.
- */
-void aio_set_fd_poll(AioContext *ctx, int fd,
-                     IOHandler *io_poll_begin,
-                     IOHandler *io_poll_end);
 
 /* Register an event notifier and associated callbacks.  Behaves very similarly
  * to event_notifier_set_handler.  Unlike event_notifier_set_handler, these callbacks
@@ -490,7 +493,8 @@ void aio_set_event_notifier(AioContext *ctx,
                             EventNotifier *notifier,
                             bool is_external,
                             EventNotifierHandler *io_read,
-                            AioPollFn *io_poll);
+                            AioPollFn *io_poll,
+                            EventNotifierHandler *io_poll_ready);
 
 /* Set polling begin/end callbacks for an event notifier that has already been
  * registered with aio_set_event_notifier.  Do nothing if the event notifier is
@@ -681,7 +685,7 @@ static inline bool aio_node_check(AioContext *ctx, bool is_external)
  * is the context in which the coroutine is running (i.e. the value of
  * qemu_get_current_aio_context() from the coroutine itself).
  */
-void aio_co_schedule(AioContext *ctx, struct Coroutine *co);
+void aio_co_schedule(AioContext *ctx, Coroutine *co);
 
 /**
  * aio_co_reschedule_self:
@@ -704,7 +708,7 @@ void coroutine_fn aio_co_reschedule_self(AioContext *new_ctx);
  * context.  The coroutine must not be entered by anyone else while
  * aio_co_wake() is active.
  */
-void aio_co_wake(struct Coroutine *co);
+void aio_co_wake(Coroutine *co);
 
 /**
  * aio_co_enter:
@@ -713,7 +717,7 @@ void aio_co_wake(struct Coroutine *co);
  *
  * Enter a coroutine in the specified AioContext.
  */
-void aio_co_enter(AioContext *ctx, struct Coroutine *co);
+void aio_co_enter(AioContext *ctx, Coroutine *co);
 
 /**
  * Return the AioContext whose event loop runs in the current thread.
@@ -767,4 +771,12 @@ void aio_context_set_poll_params(AioContext *ctx, int64_t max_ns,
 void aio_context_set_aio_params(AioContext *ctx, int64_t max_batch,
                                 Error **errp);
 
+/**
+ * aio_context_set_thread_pool_params:
+ * @ctx: the aio context
+ * @min: min number of threads to have readily available in the thread pool
+ * @min: max number of threads the thread pool can contain
+ */
+void aio_context_set_thread_pool_params(AioContext *ctx, int64_t min,
+                                        int64_t max, Error **errp);
 #endif

@@ -19,7 +19,7 @@
 #include "hw/ppc/e500-ccsr.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
 #include "hw/pci/pci_host.h"
 #include "qemu/bswap.h"
 #include "qemu/module.h"
@@ -189,7 +189,7 @@ static uint64_t pci_reg_read4(void *opaque, hwaddr addr,
         break;
     }
 
-    pci_debug("%s: win:%lx(addr:" TARGET_FMT_plx ") -> value:%x\n", __func__,
+    pci_debug("%s: win:%lx(addr:" HWADDR_FMT_plx ") -> value:%x\n", __func__,
               win, addr, value);
     return value;
 }
@@ -268,7 +268,7 @@ static void pci_reg_write4(void *opaque, hwaddr addr,
 
     win = addr & 0xfe0;
 
-    pci_debug("%s: value:%x -> win:%lx(addr:" TARGET_FMT_plx ")\n",
+    pci_debug("%s: value:%x -> win:%lx(addr:" HWADDR_FMT_plx ")\n",
               __func__, (unsigned)value, win, addr);
 
     switch (win) {

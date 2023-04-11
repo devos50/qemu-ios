@@ -25,6 +25,7 @@
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "qemu/qemu-print.h"
+#include "qemu/units.h"
 #include "hw/s390x/s390-pci-bus.h"
 #include "sysemu/reset.h"
 #include "hw/s390x/storage-keys.h"
@@ -40,8 +41,10 @@
 #include "hw/qdev-properties.h"
 #include "hw/s390x/tod.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/cpus.h"
 #include "hw/s390x/pv.h"
 #include "migration/blocker.h"
+#include "qapi/visitor.h"
 
 static Error *pv_mig_blocker;
 
@@ -83,7 +86,14 @@ out:
 static void s390_init_cpus(MachineState *machine)
 {
     MachineClass *mc = MACHINE_GET_CLASS(machine);
+    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_CLASS(mc);
     int i;
+
+    if (machine->smp.threads > s390mc->max_threads) {
+        error_report("S390 does not support more than %d threads.",
+                     s390mc->max_threads);
+        exit(1);
+    }
 
     /* initialize possible_cpus */
     mc->possible_cpu_arch_ids(machine);
@@ -109,7 +119,7 @@ static void subsystem_reset(void)
     for (i = 0; i < ARRAY_SIZE(reset_dev_types); i++) {
         dev = DEVICE(object_resolve_path_type("", reset_dev_types[i], NULL));
         if (dev) {
-            qdev_reset_all(dev);
+            device_cold_reset(dev);
         }
     }
 }
@@ -320,7 +330,9 @@ static inline void s390_do_cpu_ipl(CPUState *cs, run_on_cpu_data arg)
 
 static void s390_machine_unprotect(S390CcwMachineState *ms)
 {
-    s390_pv_vm_disable();
+    if (!s390_pv_vm_try_disable_async()) {
+        s390_pv_vm_disable();
+    }
     ms->pv = false;
     migrate_del_blocker(pv_mig_blocker);
     error_free_or_abort(&pv_mig_blocker);
@@ -345,7 +357,7 @@ static int s390_machine_protect(S390CcwMachineState *ms)
     }
 
     error_setg(&pv_mig_blocker,
-               "protected VMs are currently not migrateable.");
+               "protected VMs are currently not migratable.");
     rc = migrate_add_blocker(pv_mig_blocker, &local_err);
     if (rc) {
         ram_block_discard_disable(false);
@@ -364,6 +376,12 @@ static int s390_machine_protect(S390CcwMachineState *ms)
     }
 
     ms->pv = true;
+
+    /* Will return 0 if API is not available since it's not vital */
+    rc = s390_pv_query_info();
+    if (rc) {
+        goto out_err;
+    }
 
     /* Set SE header and unpack */
     rc = s390_ipl_prepare_pv_header();
@@ -404,7 +422,7 @@ static void s390_pv_prepare_reset(S390CcwMachineState *ms)
     s390_pv_prep_reset();
 }
 
-static void s390_machine_reset(MachineState *machine)
+static void s390_machine_reset(MachineState *machine, ShutdownCause reason)
 {
     S390CcwMachineState *ms = S390_CCW_MACHINE(machine);
     enum s390_reset reset_type;
@@ -426,7 +444,7 @@ static void s390_machine_reset(MachineState *machine)
             s390_machine_unprotect(ms);
         }
 
-        qemu_devices_reset();
+        qemu_devices_reset(reason);
         s390_crypto_reset();
 
         /* configure and start the ipl CPU only */
@@ -434,7 +452,7 @@ static void s390_machine_reset(MachineState *machine)
         break;
     case S390_RESET_MODIFIED_CLEAR:
         /*
-         * Susbsystem reset needs to be done before we unshare memory
+         * Subsystem reset needs to be done before we unshare memory
          * and lose access to VIRTIO structures in guest memory.
          */
         subsystem_reset();
@@ -447,7 +465,7 @@ static void s390_machine_reset(MachineState *machine)
         break;
     case S390_RESET_LOAD_NORMAL:
         /*
-         * Susbsystem reset needs to be done before we unshare memory
+         * Subsystem reset needs to be done before we unshare memory
          * and lose access to VIRTIO structures in guest memory.
          */
         subsystem_reset();
@@ -582,38 +600,6 @@ static ram_addr_t s390_fixup_ram_size(ram_addr_t sz)
     return newsz;
 }
 
-static void ccw_machine_class_init(ObjectClass *oc, void *data)
-{
-    MachineClass *mc = MACHINE_CLASS(oc);
-    NMIClass *nc = NMI_CLASS(oc);
-    HotplugHandlerClass *hc = HOTPLUG_HANDLER_CLASS(oc);
-    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_CLASS(mc);
-
-    s390mc->ri_allowed = true;
-    s390mc->cpu_model_allowed = true;
-    s390mc->css_migration_enabled = true;
-    s390mc->hpage_1m_allowed = true;
-    mc->init = ccw_init;
-    mc->reset = s390_machine_reset;
-    mc->block_default_type = IF_VIRTIO;
-    mc->no_cdrom = 1;
-    mc->no_floppy = 1;
-    mc->no_parallel = 1;
-    mc->no_sdcard = 1;
-    mc->max_cpus = S390_MAX_CPUS;
-    mc->has_hotpluggable_cpus = true;
-    assert(!mc->get_hotplug_handler);
-    mc->get_hotplug_handler = s390_get_hotplug_handler;
-    mc->cpu_index_to_instance_props = s390_cpu_index_to_props;
-    mc->possible_cpu_arch_ids = s390_possible_cpu_arch_ids;
-    /* it is overridden with 'host' cpu *in kvm_arch_init* */
-    mc->default_cpu_type = S390_CPU_TYPE_NAME("qemu");
-    hc->plug = s390_machine_device_plug;
-    hc->unplug_request = s390_machine_device_unplug_request;
-    nc->nmi_monitor_handler = s390_nmi;
-    mc->default_ram_id = "s390.ram";
-}
-
 static inline bool machine_get_aes_key_wrap(Object *obj, Error **errp)
 {
     S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
@@ -688,18 +674,28 @@ bool hpage_1m_allowed(void)
     return get_machine_class()->hpage_1m_allowed;
 }
 
-static char *machine_get_loadparm(Object *obj, Error **errp)
+static void machine_get_loadparm(Object *obj, Visitor *v,
+                                 const char *name, void *opaque,
+                                 Error **errp)
 {
     S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+    char *str = g_strndup((char *) ms->loadparm, sizeof(ms->loadparm));
 
-    /* make a NUL-terminated string */
-    return g_strndup((char *) ms->loadparm, sizeof(ms->loadparm));
+    visit_type_str(v, name, &str, errp);
+    g_free(str);
 }
 
-static void machine_set_loadparm(Object *obj, const char *val, Error **errp)
+static void machine_set_loadparm(Object *obj, Visitor *v,
+                                 const char *name, void *opaque,
+                                 Error **errp)
 {
     S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+    char *val;
     int i;
+
+    if (!visit_type_str(v, name, &val, errp)) {
+        return;
+    }
 
     for (i = 0; i < sizeof(ms->loadparm) && val[i]; i++) {
         uint8_t c = qemu_toupper(val[i]); /* mimic HMC */
@@ -718,27 +714,66 @@ static void machine_set_loadparm(Object *obj, const char *val, Error **errp)
         ms->loadparm[i] = ' '; /* pad right with spaces */
     }
 }
-static inline void s390_machine_initfn(Object *obj)
-{
-    object_property_add_bool(obj, "aes-key-wrap",
-                             machine_get_aes_key_wrap,
-                             machine_set_aes_key_wrap);
-    object_property_set_description(obj, "aes-key-wrap",
-            "enable/disable AES key wrapping using the CPACF wrapping key");
-    object_property_set_bool(obj, "aes-key-wrap", true, NULL);
 
-    object_property_add_bool(obj, "dea-key-wrap",
-                             machine_get_dea_key_wrap,
-                             machine_set_dea_key_wrap);
-    object_property_set_description(obj, "dea-key-wrap",
+static void ccw_machine_class_init(ObjectClass *oc, void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+    NMIClass *nc = NMI_CLASS(oc);
+    HotplugHandlerClass *hc = HOTPLUG_HANDLER_CLASS(oc);
+    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_CLASS(mc);
+
+    s390mc->ri_allowed = true;
+    s390mc->cpu_model_allowed = true;
+    s390mc->css_migration_enabled = true;
+    s390mc->hpage_1m_allowed = true;
+    s390mc->max_threads = 1;
+    mc->init = ccw_init;
+    mc->reset = s390_machine_reset;
+    mc->block_default_type = IF_VIRTIO;
+    mc->no_cdrom = 1;
+    mc->no_floppy = 1;
+    mc->no_parallel = 1;
+    mc->no_sdcard = 1;
+    mc->max_cpus = S390_MAX_CPUS;
+    mc->has_hotpluggable_cpus = true;
+    assert(!mc->get_hotplug_handler);
+    mc->get_hotplug_handler = s390_get_hotplug_handler;
+    mc->cpu_index_to_instance_props = s390_cpu_index_to_props;
+    mc->possible_cpu_arch_ids = s390_possible_cpu_arch_ids;
+    /* it is overridden with 'host' cpu *in kvm_arch_init* */
+    mc->default_cpu_type = S390_CPU_TYPE_NAME("qemu");
+    hc->plug = s390_machine_device_plug;
+    hc->unplug_request = s390_machine_device_unplug_request;
+    nc->nmi_monitor_handler = s390_nmi;
+    mc->default_ram_id = "s390.ram";
+
+    object_class_property_add_bool(oc, "aes-key-wrap",
+                                   machine_get_aes_key_wrap,
+                                   machine_set_aes_key_wrap);
+    object_class_property_set_description(oc, "aes-key-wrap",
+            "enable/disable AES key wrapping using the CPACF wrapping key");
+
+    object_class_property_add_bool(oc, "dea-key-wrap",
+                                   machine_get_dea_key_wrap,
+                                   machine_set_dea_key_wrap);
+    object_class_property_set_description(oc, "dea-key-wrap",
             "enable/disable DEA key wrapping using the CPACF wrapping key");
-    object_property_set_bool(obj, "dea-key-wrap", true, NULL);
-    object_property_add_str(obj, "loadparm",
-            machine_get_loadparm, machine_set_loadparm);
-    object_property_set_description(obj, "loadparm",
+
+    object_class_property_add(oc, "loadparm", "loadparm",
+                              machine_get_loadparm, machine_set_loadparm,
+                              NULL, NULL);
+    object_class_property_set_description(oc, "loadparm",
             "Up to 8 chars in set of [A-Za-z0-9. ] (lower case chars converted"
             " to upper case) to pass to machine loader, boot manager,"
             " and guest kernel");
+}
+
+static inline void s390_machine_initfn(Object *obj)
+{
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+
+    ms->aes_key_wrap = true;
+    ms->dea_key_wrap = true;
 }
 
 static const TypeInfo ccw_machine_info = {
@@ -767,7 +802,7 @@ bool css_migration_enabled(void)
     {                                                                         \
         MachineClass *mc = MACHINE_CLASS(oc);                                 \
         ccw_machine_##suffix##_class_options(mc);                             \
-        mc->desc = "VirtIO-ccw based S390 machine v" verstr;                  \
+        mc->desc = "Virtual s390x machine (version " verstr ")";              \
         if (latest) {                                                         \
             mc->alias = "s390-ccw-virtio";                                    \
             mc->is_default = true;                                            \
@@ -791,14 +826,80 @@ bool css_migration_enabled(void)
     }                                                                         \
     type_init(ccw_machine_register_##suffix)
 
+static void ccw_machine_8_0_instance_options(MachineState *machine)
+{
+}
+
+static void ccw_machine_8_0_class_options(MachineClass *mc)
+{
+}
+DEFINE_CCW_MACHINE(8_0, "8.0", true);
+
+static void ccw_machine_7_2_instance_options(MachineState *machine)
+{
+    ccw_machine_8_0_instance_options(machine);
+}
+
+static void ccw_machine_7_2_class_options(MachineClass *mc)
+{
+    ccw_machine_8_0_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_7_2, hw_compat_7_2_len);
+}
+DEFINE_CCW_MACHINE(7_2, "7.2", false);
+
+static void ccw_machine_7_1_instance_options(MachineState *machine)
+{
+    static const S390FeatInit qemu_cpu_feat = { S390_FEAT_LIST_QEMU_V7_1 };
+
+    ccw_machine_7_2_instance_options(machine);
+    s390_cpudef_featoff_greater(16, 1, S390_FEAT_PAIE);
+    s390_set_qemu_cpu_model(0x8561, 15, 1, qemu_cpu_feat);
+}
+
+static void ccw_machine_7_1_class_options(MachineClass *mc)
+{
+    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_CLASS(mc);
+    static GlobalProperty compat[] = {
+        { TYPE_S390_PCI_DEVICE, "interpret", "off", },
+        { TYPE_S390_PCI_DEVICE, "forwarding-assist", "off", },
+    };
+
+    ccw_machine_7_2_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_7_1, hw_compat_7_1_len);
+    compat_props_add(mc->compat_props, compat, G_N_ELEMENTS(compat));
+    s390mc->max_threads = S390_MAX_CPUS;
+}
+DEFINE_CCW_MACHINE(7_1, "7.1", false);
+
+static void ccw_machine_7_0_instance_options(MachineState *machine)
+{
+    static const S390FeatInit qemu_cpu_feat = { S390_FEAT_LIST_QEMU_V7_0 };
+
+    ccw_machine_7_1_instance_options(machine);
+    s390_set_qemu_cpu_model(0x8561, 15, 1, qemu_cpu_feat);
+}
+
+static void ccw_machine_7_0_class_options(MachineClass *mc)
+{
+    ccw_machine_7_1_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_7_0, hw_compat_7_0_len);
+}
+DEFINE_CCW_MACHINE(7_0, "7.0", false);
+
 static void ccw_machine_6_2_instance_options(MachineState *machine)
 {
+    static const S390FeatInit qemu_cpu_feat = { S390_FEAT_LIST_QEMU_V6_2 };
+
+    ccw_machine_7_0_instance_options(machine);
+    s390_set_qemu_cpu_model(0x3906, 14, 2, qemu_cpu_feat);
 }
 
 static void ccw_machine_6_2_class_options(MachineClass *mc)
 {
+    ccw_machine_7_0_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_6_2, hw_compat_6_2_len);
 }
-DEFINE_CCW_MACHINE(6_2, "6.2", true);
+DEFINE_CCW_MACHINE(6_2, "6.2", false);
 
 static void ccw_machine_6_1_instance_options(MachineState *machine)
 {

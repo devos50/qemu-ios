@@ -10,17 +10,18 @@
  * See the COPYING file in the top-level directory.
  */
 
-#ifndef POWER8_PMU
-#define POWER8_PMU
+#ifndef POWER8_PMU_H
+#define POWER8_PMU_H
 
-#include "qemu/osdep.h"
-#include "cpu.h"
-#include "exec/exec-all.h"
-#include "exec/helper-proto.h"
-#include "qemu/error-report.h"
-#include "qemu/main-loop.h"
+#if defined(TARGET_PPC64) && !defined(CONFIG_USER_ONLY)
+
+#define PMC_COUNTER_NEGATIVE_VAL 0x80000000UL
 
 void cpu_ppc_pmu_init(CPUPPCState *env);
-bool pmu_insn_cnt_enabled(CPUPPCState *env);
+void pmu_update_summaries(CPUPPCState *env);
+#else
+static inline void cpu_ppc_pmu_init(CPUPPCState *env) { }
+static inline void pmu_update_summaries(CPUPPCState *env) { }
+#endif
 
 #endif

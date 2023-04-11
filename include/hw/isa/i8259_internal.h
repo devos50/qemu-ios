@@ -35,7 +35,7 @@
 OBJECT_DECLARE_TYPE(PICCommonState, PICCommonClass, PIC_COMMON)
 
 struct PICCommonClass {
-    ISADeviceClass parent_class;
+    DeviceClass parent_class;
 
     void (*pre_save)(PICCommonState *s);
     void (*post_load)(PICCommonState *s);
@@ -61,6 +61,7 @@ struct PICCommonState {
     uint8_t single_mode; /* true if slave pic is not initialized */
     uint8_t elcr; /* PIIX edge/trigger selection*/
     uint8_t elcr_mask;
+    uint8_t ltim; /* Edge/Level Bank Select (pre-PIIX, chip-wide) */
     qemu_irq int_out[1];
     uint32_t master; /* reflects /SP input pin */
     uint32_t iobase;
@@ -72,8 +73,5 @@ struct PICCommonState {
 void pic_reset_common(PICCommonState *s);
 ISADevice *i8259_init_chip(const char *name, ISABus *bus, bool master);
 void pic_stat_update_irq(int irq, int level);
-bool pic_get_statistics(InterruptStatsProvider *obj,
-                        uint64_t **irq_counts, unsigned int *nb_irqs);
-void pic_print_info(InterruptStatsProvider *obj, Monitor *mon);
 
 #endif /* QEMU_I8259_INTERNAL_H */

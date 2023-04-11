@@ -101,7 +101,7 @@ void dump_slb(PowerPCCPU *cpu)
 }
 
 #ifdef CONFIG_TCG
-void helper_slbia(CPUPPCState *env, uint32_t ih)
+void helper_SLBIA(CPUPPCState *env, uint32_t ih)
 {
     PowerPCCPU *cpu = env_archcpu(env);
     int starting_entry;
@@ -173,6 +173,33 @@ void helper_slbia(CPUPPCState *env, uint32_t ih)
     }
 }
 
+#if defined(TARGET_PPC64)
+void helper_SLBIAG(CPUPPCState *env, target_ulong rs, uint32_t l)
+{
+    PowerPCCPU *cpu = env_archcpu(env);
+    int n;
+
+    /*
+     * slbiag must always flush all TLB (which is equivalent to ERAT in ppc
+     * architecture). Matching on SLB_ESID_V is not good enough, because slbmte
+     * can overwrite a valid SLB without flushing its lookaside information.
+     *
+     * It would be possible to keep the TLB in synch with the SLB by flushing
+     * when a valid entry is overwritten by slbmte, and therefore slbiag would
+     * not have to flush unless it evicts a valid SLB entry. However it is
+     * expected that slbmte is more common than slbiag, and slbiag is usually
+     * going to evict valid SLB entries, so that tradeoff is unlikely to be a
+     * good one.
+     */
+    env->tlb_need_flush |= TLB_NEED_LOCAL_FLUSH;
+
+    for (n = 0; n < cpu->hash64_opts->slb_size; n++) {
+        ppc_slb_t *slb = &env->slb[n];
+        slb->esid &= ~SLB_ESID_V;
+    }
+}
+#endif
+
 static void __helper_slbie(CPUPPCState *env, target_ulong addr,
                            target_ulong global)
 {
@@ -197,12 +224,12 @@ static void __helper_slbie(CPUPPCState *env, target_ulong addr,
     }
 }
 
-void helper_slbie(CPUPPCState *env, target_ulong addr)
+void helper_SLBIE(CPUPPCState *env, target_ulong addr)
 {
     __helper_slbie(env, addr, false);
 }
 
-void helper_slbieg(CPUPPCState *env, target_ulong addr)
+void helper_SLBIEG(CPUPPCState *env, target_ulong addr)
 {
     __helper_slbie(env, addr, true);
 }
@@ -309,7 +336,7 @@ static int ppc_find_slb_vsid(PowerPCCPU *cpu, target_ulong rb,
     return 0;
 }
 
-void helper_store_slb(CPUPPCState *env, target_ulong rb, target_ulong rs)
+void helper_SLBMTE(CPUPPCState *env, target_ulong rb, target_ulong rs)
 {
     PowerPCCPU *cpu = env_archcpu(env);
 
@@ -319,7 +346,7 @@ void helper_store_slb(CPUPPCState *env, target_ulong rb, target_ulong rs)
     }
 }
 
-target_ulong helper_load_slb_esid(CPUPPCState *env, target_ulong rb)
+target_ulong helper_SLBMFEE(CPUPPCState *env, target_ulong rb)
 {
     PowerPCCPU *cpu = env_archcpu(env);
     target_ulong rt = 0;
@@ -331,7 +358,7 @@ target_ulong helper_load_slb_esid(CPUPPCState *env, target_ulong rb)
     return rt;
 }
 
-target_ulong helper_find_slb_vsid(CPUPPCState *env, target_ulong rb)
+target_ulong helper_SLBFEE(CPUPPCState *env, target_ulong rb)
 {
     PowerPCCPU *cpu = env_archcpu(env);
     target_ulong rt = 0;
@@ -343,7 +370,7 @@ target_ulong helper_find_slb_vsid(CPUPPCState *env, target_ulong rb)
     return rt;
 }
 
-target_ulong helper_load_slb_vsid(CPUPPCState *env, target_ulong rb)
+target_ulong helper_SLBMFEV(CPUPPCState *env, target_ulong rb)
 {
     PowerPCCPU *cpu = env_archcpu(env);
     target_ulong rt = 0;
@@ -670,15 +697,15 @@ static hwaddr ppc_hash64_htab_lookup(PowerPCCPU *cpu,
 
     /* Page address translation */
     qemu_log_mask(CPU_LOG_MMU,
-            "htab_base " TARGET_FMT_plx " htab_mask " TARGET_FMT_plx
-            " hash " TARGET_FMT_plx "\n",
+            "htab_base " HWADDR_FMT_plx " htab_mask " HWADDR_FMT_plx
+            " hash " HWADDR_FMT_plx "\n",
             ppc_hash64_hpt_base(cpu), ppc_hash64_hpt_mask(cpu), hash);
 
     /* Primary PTEG lookup */
     qemu_log_mask(CPU_LOG_MMU,
-            "0 htab=" TARGET_FMT_plx "/" TARGET_FMT_plx
+            "0 htab=" HWADDR_FMT_plx "/" HWADDR_FMT_plx
             " vsid=" TARGET_FMT_lx " ptem=" TARGET_FMT_lx
-            " hash=" TARGET_FMT_plx "\n",
+            " hash=" HWADDR_FMT_plx "\n",
             ppc_hash64_hpt_base(cpu), ppc_hash64_hpt_mask(cpu),
             vsid, ptem,  hash);
     ptex = ppc_hash64_pteg_search(cpu, hash, sps, ptem, pte, pshift);
@@ -687,9 +714,9 @@ static hwaddr ppc_hash64_htab_lookup(PowerPCCPU *cpu,
         /* Secondary PTEG lookup */
         ptem |= HPTE64_V_SECONDARY;
         qemu_log_mask(CPU_LOG_MMU,
-                "1 htab=" TARGET_FMT_plx "/" TARGET_FMT_plx
+                "1 htab=" HWADDR_FMT_plx "/" HWADDR_FMT_plx
                 " vsid=" TARGET_FMT_lx " api=" TARGET_FMT_lx
-                " hash=" TARGET_FMT_plx "\n", ppc_hash64_hpt_base(cpu),
+                " hash=" HWADDR_FMT_plx "\n", ppc_hash64_hpt_base(cpu),
                 ppc_hash64_hpt_mask(cpu), vsid, ptem, ~hash);
 
         ptex = ppc_hash64_pteg_search(cpu, ~hash, sps, ptem, pte, pshift);

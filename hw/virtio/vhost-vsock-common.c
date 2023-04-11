@@ -14,12 +14,14 @@
 #include "hw/virtio/virtio-access.h"
 #include "qemu/error-report.h"
 #include "hw/qdev-properties.h"
+#include "hw/virtio/vhost.h"
 #include "hw/virtio/vhost-vsock.h"
 #include "qemu/iov.h"
 #include "monitor/monitor.h"
 
 const int feature_bits[] = {
     VIRTIO_VSOCK_F_SEQPACKET,
+    VIRTIO_F_RING_RESET,
     VHOST_INVALID_FEATURE_BIT
 };
 
@@ -68,7 +70,7 @@ int vhost_vsock_common_start(VirtIODevice *vdev)
     }
 
     vvc->vhost_dev.acked_features = vdev->guest_features;
-    ret = vhost_dev_start(&vvc->vhost_dev, vdev);
+    ret = vhost_dev_start(&vvc->vhost_dev, vdev, true);
     if (ret < 0) {
         error_report("Error starting vhost: %d", -ret);
         goto err_guest_notifiers;
@@ -103,7 +105,7 @@ void vhost_vsock_common_stop(VirtIODevice *vdev)
         return;
     }
 
-    vhost_dev_stop(&vvc->vhost_dev, vdev);
+    vhost_dev_stop(&vvc->vhost_dev, vdev, true);
 
     ret = k->set_guest_notifiers(qbus->parent, vvc->vhost_dev.nvqs, false);
     if (ret < 0) {
@@ -125,6 +127,15 @@ static void vhost_vsock_common_guest_notifier_mask(VirtIODevice *vdev, int idx,
 {
     VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(vdev);
 
+    /*
+     * Add the check for configure interrupt, Use VIRTIO_CONFIG_IRQ_IDX -1
+     * as the Marco of configure interrupt's IDX, If this driver does not
+     * support, the function will return
+     */
+
+    if (idx == VIRTIO_CONFIG_IRQ_IDX) {
+        return;
+    }
     vhost_virtqueue_mask(&vvc->vhost_dev, vdev, idx, mask);
 }
 
@@ -133,6 +144,15 @@ static bool vhost_vsock_common_guest_notifier_pending(VirtIODevice *vdev,
 {
     VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(vdev);
 
+    /*
+     * Add the check for configure interrupt, Use VIRTIO_CONFIG_IRQ_IDX -1
+     * as the Marco of configure interrupt's IDX, If this driver does not
+     * support, the function will return
+     */
+
+    if (idx == VIRTIO_CONFIG_IRQ_IDX) {
+        return false;
+    }
     return vhost_virtqueue_pending(&vvc->vhost_dev, idx);
 }
 
@@ -153,19 +173,23 @@ static void vhost_vsock_common_send_transport_reset(VHostVSockCommon *vvc)
     if (elem->out_num) {
         error_report("invalid vhost-vsock event virtqueue element with "
                      "out buffers");
-        goto out;
+        goto err;
     }
 
     if (iov_from_buf(elem->in_sg, elem->in_num, 0,
                      &event, sizeof(event)) != sizeof(event)) {
         error_report("vhost-vsock event virtqueue element is too short");
-        goto out;
+        goto err;
     }
 
     virtqueue_push(vq, elem, sizeof(event));
     virtio_notify(VIRTIO_DEVICE(vvc), vq);
 
-out:
+    g_free(elem);
+    return;
+
+err:
+    virtqueue_detach_element(vq, elem, 0);
     g_free(elem);
 }
 
@@ -195,7 +219,7 @@ int vhost_vsock_common_pre_save(void *opaque)
      * At this point, backend must be stopped, otherwise
      * it might keep writing to memory.
      */
-    assert(!vvc->vhost_dev.started);
+    assert(!vhost_dev_is_started(&vvc->vhost_dev));
 
     return 0;
 }
@@ -220,12 +244,11 @@ int vhost_vsock_common_post_load(void *opaque, int version_id)
     return 0;
 }
 
-void vhost_vsock_common_realize(VirtIODevice *vdev, const char *name)
+void vhost_vsock_common_realize(VirtIODevice *vdev)
 {
     VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(vdev);
 
-    virtio_init(vdev, name, VIRTIO_ID_VSOCK,
-                sizeof(struct virtio_vsock_config));
+    virtio_init(vdev, VIRTIO_ID_VSOCK, sizeof(struct virtio_vsock_config));
 
     /* Receive and transmit queues belong to vhost */
     vvc->recv_vq = virtio_add_queue(vdev, VHOST_VSOCK_QUEUE_SIZE,
@@ -255,6 +278,12 @@ void vhost_vsock_common_unrealize(VirtIODevice *vdev)
     virtio_cleanup(vdev);
 }
 
+static struct vhost_dev *vhost_vsock_common_get_vhost(VirtIODevice *vdev)
+{
+    VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(vdev);
+    return &vvc->vhost_dev;
+}
+
 static Property vhost_vsock_common_properties[] = {
     DEFINE_PROP_ON_OFF_AUTO("seqpacket", VHostVSockCommon, seqpacket,
                             ON_OFF_AUTO_AUTO),
@@ -270,6 +299,7 @@ static void vhost_vsock_common_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     vdc->guest_notifier_mask = vhost_vsock_common_guest_notifier_mask;
     vdc->guest_notifier_pending = vhost_vsock_common_guest_notifier_pending;
+    vdc->get_vhost = vhost_vsock_common_get_vhost;
 }
 
 static const TypeInfo vhost_vsock_common_info = {

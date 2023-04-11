@@ -29,6 +29,7 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "sysemu/dma.h"
+#include "hw/irq.h"
 
 #include "hw/ide/internal.h"
 #include "qom/object.h"
@@ -175,7 +176,7 @@ static void md_attr_write(PCMCIACardState *card, uint32_t at, uint8_t value)
     case 0x00:	/* Configuration Option Register */
         s->opt = value & 0xcf;
         if (value & OPT_SRESET) {
-            device_legacy_reset(DEVICE(s));
+            device_cold_reset(DEVICE(s));
         }
         md_interrupt_update(s);
         break;
@@ -249,14 +250,14 @@ static uint16_t md_common_read(PCMCIACardState *card, uint32_t at)
     case 0xd:	/* Error */
         return ide_ioport_read(&s->bus, 0x1);
     case 0xe:	/* Alternate Status */
-        ifs = idebus_active_if(&s->bus);
+        ifs = ide_bus_active_if(&s->bus);
         if (ifs->blk) {
             return ifs->status;
         } else {
             return 0;
         }
     case 0xf:	/* Device Address */
-        ifs = idebus_active_if(&s->bus);
+        ifs = ide_bus_active_if(&s->bus);
         return 0xc2 | ((~ifs->select << 2) & 0x3c);
     default:
         return ide_ioport_read(&s->bus, at);
@@ -318,7 +319,7 @@ static void md_common_write(PCMCIACardState *card, uint32_t at, uint16_t value)
     case 0xe:	/* Device Control */
         s->ctrl = value;
         if (value & CTRL_SRST) {
-            device_legacy_reset(DEVICE(s));
+            device_cold_reset(DEVICE(s));
         }
         md_interrupt_update(s);
         break;
@@ -543,7 +544,7 @@ static int dscm1xxxx_attach(PCMCIACardState *card)
     md->attr_base = pcc->cis[0x74] | (pcc->cis[0x76] << 8);
     md->io_base = 0x0;
 
-    device_legacy_reset(DEVICE(md));
+    device_cold_reset(DEVICE(md));
     md_interrupt_update(md);
 
     return 0;
@@ -553,7 +554,7 @@ static int dscm1xxxx_detach(PCMCIACardState *card)
 {
     MicroDriveState *md = MICRODRIVE(card);
 
-    device_legacy_reset(DEVICE(md));
+    device_cold_reset(DEVICE(md));
     return 0;
 }
 
@@ -565,7 +566,7 @@ PCMCIACardState *dscm1xxxx_init(DriveInfo *dinfo)
     qdev_realize(DEVICE(md), NULL, &error_fatal);
 
     if (dinfo != NULL) {
-        ide_create_drive(&md->bus, 0, dinfo);
+        ide_bus_create_drive(&md->bus, 0, dinfo);
     }
     md->bus.ifs[0].drive_kind = IDE_CFATA;
     md->bus.ifs[0].mdata_size = METADATA_SIZE;
@@ -598,7 +599,7 @@ static void microdrive_realize(DeviceState *dev, Error **errp)
 {
     MicroDriveState *md = MICRODRIVE(dev);
 
-    ide_init2(&md->bus, qemu_allocate_irq(md_set_irq, md, 0));
+    ide_bus_init_output_irq(&md->bus, qemu_allocate_irq(md_set_irq, md, 0));
 }
 
 static void microdrive_init(Object *obj)

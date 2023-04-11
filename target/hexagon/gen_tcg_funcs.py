@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 ##
-##  Copyright(c) 2019-2021 Qualcomm Innovation Center, Inc. All Rights Reserved.
+##  Copyright(c) 2019-2023 Qualcomm Innovation Center, Inc. All Rights Reserved.
 ##
 ##  This program is free software; you can redistribute it and/or modify
 ##  it under the terms of the GNU General Public License as published by
@@ -26,54 +26,43 @@ import hex_common
 ## Helpers for gen_tcg_func
 ##
 def gen_decl_ea_tcg(f, tag):
-    if ('A_CONDEXEC' in hex_common.attribdict[tag] or
-        'A_LOAD' in hex_common.attribdict[tag]):
-        f.write("    TCGv EA = tcg_temp_local_new();\n")
-    else:
-        f.write("    TCGv EA = tcg_temp_new();\n")
-
-def gen_free_ea_tcg(f):
-    f.write("    tcg_temp_free(EA);\n")
+    f.write("    TCGv EA G_GNUC_UNUSED = tcg_temp_new();\n")
 
 def genptr_decl_pair_writable(f, tag, regtype, regid, regno):
     regN="%s%sN" % (regtype,regid)
-    f.write("    TCGv_i64 %s%sV = tcg_temp_local_new_i64();\n" % \
-        (regtype, regid))
-    if (regtype == "C"):
+    if (regtype == "R"):
+        f.write("    const int %s = insn->regno[%d];\n" % (regN, regno))
+    elif (regtype == "C"):
         f.write("    const int %s = insn->regno[%d] + HEX_REG_SA0;\n" % \
             (regN, regno))
     else:
-        f.write("    const int %s = insn->regno[%d];\n" % (regN, regno))
-    if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-        f.write("    if (!is_preloaded(ctx, %s)) {\n" % regN)
-        f.write("        tcg_gen_mov_tl(hex_new_value[%s], hex_gpr[%s]);\n" % \
-                             (regN, regN))
-        f.write("    }\n")
-        f.write("    if (!is_preloaded(ctx, %s + 1)) {\n" % regN)
-        f.write("        tcg_gen_mov_tl(hex_new_value[%s + 1], hex_gpr[%s + 1]);\n" % \
-                             (regN, regN))
-        f.write("    }\n")
+        print("Bad register parse: ", regtype, regid)
+    f.write("    TCGv_i64 %s%sV = get_result_gpr_pair(ctx, %s);\n" % \
+        (regtype, regid, regN))
 
 def genptr_decl_writable(f, tag, regtype, regid, regno):
     regN="%s%sN" % (regtype,regid)
-    f.write("    TCGv %s%sV = tcg_temp_local_new();\n" % \
-        (regtype, regid))
-    if (regtype == "C"):
+    if (regtype == "R"):
+        f.write("    const int %s = insn->regno[%d];\n" % (regN, regno))
+        f.write("    TCGv %s%sV = get_result_gpr(ctx, %s);\n" % \
+            (regtype, regid, regN))
+    elif (regtype == "C"):
         f.write("    const int %s = insn->regno[%d] + HEX_REG_SA0;\n" % \
             (regN, regno))
-    else:
+        f.write("    TCGv %s%sV = get_result_gpr(ctx, %s);\n" % \
+            (regtype, regid, regN))
+    elif (regtype == "P"):
         f.write("    const int %s = insn->regno[%d];\n" % (regN, regno))
-    if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-        f.write("    if (!is_preloaded(ctx, %s)) {\n" % regN)
-        f.write("        tcg_gen_mov_tl(hex_new_value[%s], hex_gpr[%s]);\n" % \
-                             (regN, regN))
-        f.write("    }\n")
+        f.write("    TCGv %s%sV = tcg_temp_new();\n" % \
+            (regtype, regid))
+    else:
+        print("Bad register parse: ", regtype, regid)
 
 def genptr_decl(f, tag, regtype, regid, regno):
     regN="%s%sN" % (regtype,regid)
     if (regtype == "R"):
         if (regid in {"ss", "tt"}):
-            f.write("    TCGv_i64 %s%sV = tcg_temp_local_new_i64();\n" % \
+            f.write("    TCGv_i64 %s%sV = tcg_temp_new_i64();\n" % \
                 (regtype, regid))
             f.write("    const int %s = insn->regno[%d];\n" % \
                 (regN, regno))
@@ -96,14 +85,14 @@ def genptr_decl(f, tag, regtype, regid, regno):
             print("Bad register parse: ", regtype, regid)
     elif (regtype == "C"):
         if (regid == "ss"):
-            f.write("    TCGv_i64 %s%sV = tcg_temp_local_new_i64();\n" % \
+            f.write("    TCGv_i64 %s%sV = tcg_temp_new_i64();\n" % \
                 (regtype, regid))
             f.write("    const int %s = insn->regno[%d] + HEX_REG_SA0;\n" % \
                 (regN, regno))
         elif (regid == "dd"):
             genptr_decl_pair_writable(f, tag, regtype, regid, regno)
         elif (regid == "s"):
-            f.write("    TCGv %s%sV = tcg_temp_local_new();\n" % \
+            f.write("    TCGv %s%sV = tcg_temp_new();\n" % \
                 (regtype, regid))
             f.write("    const int %s%sN = insn->regno[%d] + HEX_REG_SA0;\n" % \
                 (regtype, regid, regno))
@@ -164,13 +153,16 @@ def genptr_decl(f, tag, regtype, regid, regno):
                 (regtype, regid, regno))
             f.write("    const intptr_t %s%sV_off =\n" % \
                 (regtype, regid))
-            if (hex_common.is_tmp_result(tag)):
+            if (regid == "y"):
+                f.write("        offsetof(CPUHexagonState, vtmp);\n")
+            elif (hex_common.is_tmp_result(tag)):
                 f.write("        ctx_tmp_vreg_off(ctx, %s%sN, 1, true);\n" % \
                     (regtype, regid))
             else:
                 f.write("        ctx_future_vreg_off(ctx, %s%sN," % \
                     (regtype, regid))
                 f.write(" 1, true);\n");
+
             if (not hex_common.skip_qemu_helper(tag)):
                 f.write("    TCGv_ptr %s%sV = tcg_temp_new_ptr();\n" % \
                     (regtype, regid))
@@ -184,8 +176,7 @@ def genptr_decl(f, tag, regtype, regid, regno):
                 (regtype, regid, regno))
             f.write("    const intptr_t %s%sV_off =\n" % \
                 (regtype, regid))
-            f.write("        offsetof(CPUHexagonState,\n")
-            f.write("                 future_QRegs[%s%sN]);\n" % \
+            f.write("        get_result_qreg(ctx, %s%sN);\n" % \
                 (regtype, regid))
             if (not hex_common.skip_qemu_helper(tag)):
                 f.write("    TCGv_ptr %s%sV = tcg_temp_new_ptr();\n" % \
@@ -259,73 +250,6 @@ def genptr_decl_imm(f,immlett):
     f.write("    int %s = insn->immed[%d];\n" % \
         (hex_common.imm_name(immlett), i))
 
-def genptr_free(f, tag, regtype, regid, regno):
-    if (regtype == "R"):
-        if (regid in {"dd", "ss", "tt", "xx", "yy"}):
-            f.write("    tcg_temp_free_i64(%s%sV);\n" % (regtype, regid))
-        elif (regid in {"d", "e", "x", "y"}):
-            f.write("    tcg_temp_free(%s%sV);\n" % (regtype, regid))
-        elif (regid not in {"s", "t", "u", "v"}):
-            print("Bad register parse: ",regtype,regid)
-    elif (regtype == "P"):
-        if (regid in {"d", "e", "x"}):
-            f.write("    tcg_temp_free(%s%sV);\n" % (regtype, regid))
-        elif (regid not in {"s", "t", "u", "v"}):
-            print("Bad register parse: ",regtype,regid)
-    elif (regtype == "C"):
-        if (regid in {"dd", "ss"}):
-            f.write("    tcg_temp_free_i64(%s%sV);\n" % (regtype, regid))
-        elif (regid in {"d", "s"}):
-            f.write("    tcg_temp_free(%s%sV);\n" % (regtype, regid))
-        else:
-            print("Bad register parse: ",regtype,regid)
-    elif (regtype == "M"):
-        if (regid != "u"):
-            print("Bad register parse: ", regtype, regid)
-    elif (regtype == "V"):
-        if (regid in {"dd", "uu", "vv", "xx", \
-                      "d", "s", "u", "v", "w", "x", "y"}):
-            if (not hex_common.skip_qemu_helper(tag)):
-                f.write("    tcg_temp_free_ptr(%s%sV);\n" % \
-                    (regtype, regid))
-        else:
-            print("Bad register parse: ", regtype, regid)
-    elif (regtype == "Q"):
-        if (regid in {"d", "e", "s", "t", "u", "v", "x"}):
-            if (not hex_common.skip_qemu_helper(tag)):
-                f.write("    tcg_temp_free_ptr(%s%sV);\n" % \
-                    (regtype, regid))
-        else:
-            print("Bad register parse: ", regtype, regid)
-    else:
-        print("Bad register parse: ", regtype, regid)
-
-def genptr_free_new(f, tag, regtype, regid, regno):
-    if (regtype == "N"):
-        if (regid not in {"s", "t"}):
-            print("Bad register parse: ", regtype, regid)
-    elif (regtype == "P"):
-        if (regid not in {"t", "u", "v"}):
-            print("Bad register parse: ", regtype, regid)
-    elif (regtype == "O"):
-        if (regid != "s"):
-            print("Bad register parse: ", regtype, regid)
-    else:
-        print("Bad register parse: ", regtype, regid)
-
-def genptr_free_opn(f,regtype,regid,i,tag):
-    if (hex_common.is_pair(regid)):
-        genptr_free(f, tag, regtype, regid, i)
-    elif (hex_common.is_single(regid)):
-        if hex_common.is_old_val(regtype, regid, tag):
-            genptr_free(f, tag, regtype, regid, i)
-        elif hex_common.is_new_val(regtype, regid, tag):
-            genptr_free_new(f, tag, regtype, regid, i)
-        else:
-            print("Bad register parse: ",regtype,regid,toss,numregs)
-    else:
-        print("Bad register parse: ",regtype,regid,toss,numregs)
-
 def genptr_src_read(f, tag, regtype, regid):
     if (regtype == "R"):
         if (regid in {"ss", "tt", "xx", "yy"}):
@@ -334,8 +258,12 @@ def genptr_src_read(f, tag, regtype, regid):
             f.write("                                 hex_gpr[%s%sN + 1]);\n" % \
                 (regtype, regid))
         elif (regid in {"x", "y"}):
-            f.write("    tcg_gen_mov_tl(%s%sV, hex_gpr[%s%sN]);\n" % \
-                (regtype,regid,regtype,regid))
+            ## For read/write registers, we need to get the original value into
+            ## the result TCGv.  For conditional instructions, this is done in
+            ## gen_start_packet.  For unconditional instructions, we do it here.
+            if ('A_CONDEXEC' not in hex_common.attribdict[tag]):
+                f.write("    tcg_gen_mov_tl(%s%sV, hex_gpr[%s%sN]);\n" % \
+                    (regtype, regid, regtype, regid))
         elif (regid not in {"s", "t", "u", "v"}):
             print("Bad register parse: ", regtype, regid)
     elif (regtype == "P"):
@@ -379,9 +307,6 @@ def genptr_src_read(f, tag, regtype, regid):
             f.write("        vreg_src_off(ctx, %s%sN),\n" % \
                              (regtype, regid))
             f.write("        sizeof(MMVector), sizeof(MMVector));\n")
-            if (not hex_common.skip_qemu_helper(tag)):
-                f.write("    tcg_gen_addi_ptr(%s%sV, cpu_env, %s%sV_off);\n" % \
-                                 (regtype, regid, regtype, regid))
         else:
             print("Bad register parse: ", regtype, regid)
     elif (regtype == "Q"):
@@ -448,37 +373,22 @@ def gen_helper_call_imm(f,immlett):
     f.write(", tcgv_%s" % hex_common.imm_name(immlett))
 
 def genptr_dst_write_pair(f, tag, regtype, regid):
-    if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-        f.write("    gen_log_predicated_reg_write_pair(%s%sN, %s%sV, insn->slot);\n" % \
-            (regtype, regid, regtype, regid))
-    else:
-        f.write("    gen_log_reg_write_pair(%s%sN, %s%sV);\n" % \
-            (regtype, regid, regtype, regid))
-    f.write("    ctx_log_reg_write_pair(ctx, %s%sN);\n" % \
-        (regtype, regid))
+    f.write("    gen_log_reg_write_pair(%s%sN, %s%sV);\n" % \
+        (regtype, regid, regtype, regid))
 
 def genptr_dst_write(f, tag, regtype, regid):
     if (regtype == "R"):
         if (regid in {"dd", "xx", "yy"}):
             genptr_dst_write_pair(f, tag, regtype, regid)
         elif (regid in {"d", "e", "x", "y"}):
-            if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-                f.write("    gen_log_predicated_reg_write(%s%sN, %s%sV,\n" % \
-                    (regtype, regid, regtype, regid))
-                f.write("                                 insn->slot);\n")
-            else:
-                f.write("    gen_log_reg_write(%s%sN, %s%sV);\n" % \
-                    (regtype, regid, regtype, regid))
-            f.write("    ctx_log_reg_write(ctx, %s%sN);\n" % \
-                (regtype, regid))
+            f.write("    gen_log_reg_write(%s%sN, %s%sV);\n" % \
+                (regtype, regid, regtype, regid))
         else:
             print("Bad register parse: ", regtype, regid)
     elif (regtype == "P"):
         if (regid in {"d", "e", "x"}):
             f.write("    gen_log_pred_write(ctx, %s%sN, %s%sV);\n" % \
                 (regtype, regid, regtype, regid))
-            f.write("    ctx_log_pred_write(ctx, %s%sN);\n" % \
-                (regtype, regid))
         else:
             print("Bad register parse: ", regtype, regid)
     elif (regtype == "C"):
@@ -495,43 +405,18 @@ def genptr_dst_write(f, tag, regtype, regid):
 
 def genptr_dst_write_ext(f, tag, regtype, regid, newv="EXT_DFL"):
     if (regtype == "V"):
-        if (regid in {"dd", "xx", "yy"}):
-            if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-                is_predicated = "true"
-            else:
-                is_predicated = "false"
+        if (regid in {"xx"}):
             f.write("    gen_log_vreg_write_pair(ctx, %s%sV_off, %s%sN, " % \
                 (regtype, regid, regtype, regid))
-            f.write("%s, insn->slot, %s);\n" % \
-                (newv, is_predicated))
-            f.write("    ctx_log_vreg_write_pair(ctx, %s%sN, %s,\n" % \
-                (regtype, regid, newv))
-            f.write("        %s);\n" % (is_predicated))
-        elif (regid in {"d", "x", "y"}):
-            if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-                is_predicated = "true"
-            else:
-                is_predicated = "false"
-            f.write("    gen_log_vreg_write(ctx, %s%sV_off, %s%sN, %s, " % \
+            f.write("%s);\n" % \
+                (newv))
+        elif (regid in {"y"}):
+            f.write("    gen_log_vreg_write(ctx, %s%sV_off, %s%sN, %s);\n" % \
                 (regtype, regid, regtype, regid, newv))
-            f.write("insn->slot, %s);\n" % \
-                (is_predicated))
-            f.write("    ctx_log_vreg_write(ctx, %s%sN, %s, %s);\n" % \
-                (regtype, regid, newv, is_predicated))
-        else:
+        elif (regid not in {"dd", "d", "x"}):
             print("Bad register parse: ", regtype, regid)
     elif (regtype == "Q"):
-        if (regid in {"d", "e", "x"}):
-            if ('A_CONDEXEC' in hex_common.attribdict[tag]):
-                is_predicated = "true"
-            else:
-                is_predicated = "false"
-            f.write("    gen_log_qreg_write(%s%sV_off, %s%sN, %s, " % \
-                (regtype, regid, regtype, regid, newv))
-            f.write("insn->slot, %s);\n" % (is_predicated))
-            f.write("    ctx_log_qreg_write(ctx, %s%sN, %s);\n" % \
-                (regtype, regid, is_predicated))
-        else:
+        if (regid not in {"d", "e", "x"}):
             print("Bad register parse: ", regtype, regid)
     else:
         print("Bad register parse: ", regtype, regid)
@@ -549,7 +434,7 @@ def genptr_dst_write_opn(f,regtype, regid, tag):
         if (hex_common.is_hvx_reg(regtype)):
             if (hex_common.is_new_result(tag)):
                 genptr_dst_write_ext(f, tag, regtype, regid, "EXT_NEW")
-            if (hex_common.is_tmp_result(tag)):
+            elif (hex_common.is_tmp_result(tag)):
                 genptr_dst_write_ext(f, tag, regtype, regid, "EXT_TMP")
             else:
                 genptr_dst_write_ext(f, tag, regtype, regid, "EXT_DFL")
@@ -562,21 +447,16 @@ def genptr_dst_write_opn(f,regtype, regid, tag):
 ## Generate the TCG code to call the helper
 ##     For A2_add: Rd32=add(Rs32,Rt32), { RdV=RsV+RtV;}
 ##     We produce:
-##    static void generate_A2_add()
-##                    CPUHexagonState *env
-##                    DisasContext *ctx,
-##                    Insn *insn,
-##                    Packet *pkt)
-##       {
-##           TCGv RdV = tcg_temp_local_new();
-##           const int RdN = insn->regno[0];
-##           TCGv RsV = hex_gpr[insn->regno[1]];
-##           TCGv RtV = hex_gpr[insn->regno[2]];
-##           <GEN>
-##           gen_log_reg_write(RdN, RdV);
-##           ctx_log_reg_write(ctx, RdN);
-##           tcg_temp_free(RdV);
-##       }
+##    static void generate_A2_add(DisasContext *ctx)
+##    {
+##        Insn *insn __attribute__((unused)) = ctx->insn;
+##        const int RdN = insn->regno[0];
+##        TCGv RdV = get_result_gpr(ctx, RdN);
+##        TCGv RsV = hex_gpr[insn->regno[1]];
+##        TCGv RtV = hex_gpr[insn->regno[2]];
+##        <GEN>
+##        gen_log_reg_write(RdN, RdV);
+##    }
 ##
 ##       where <GEN> depends on hex_common.skip_qemu_helper(tag)
 ##       if hex_common.skip_qemu_helper(tag) is True
@@ -585,12 +465,11 @@ def genptr_dst_write_opn(f,regtype, regid, tag):
 ##       <GEN>  is gen_helper_A2_add(RdV, cpu_env, RsV, RtV);
 ##
 def gen_tcg_func(f, tag, regs, imms):
-    f.write("static void generate_%s(\n" %tag)
-    f.write("                CPUHexagonState *env,\n")
-    f.write("                DisasContext *ctx,\n")
-    f.write("                Insn *insn,\n")
-    f.write("                Packet *pkt)\n")
+    f.write("static void generate_%s(DisasContext *ctx)\n" %tag)
     f.write('{\n')
+
+    f.write("    Insn *insn __attribute__((unused)) = ctx->insn;\n")
+
     if hex_common.need_ea(tag): gen_decl_ea_tcg(f, tag)
     i=0
     ## Declare all the operands (regs and immediates)
@@ -610,16 +489,45 @@ def gen_tcg_func(f, tag, regs, imms):
         if (hex_common.is_read(regid)):
             genptr_src_read_opn(f,regtype,regid,tag)
 
-    if ( hex_common.skip_qemu_helper(tag) ):
+    if hex_common.is_idef_parser_enabled(tag):
+        declared = []
+        ## Handle registers
+        for regtype,regid,toss,numregs in regs:
+            if (hex_common.is_pair(regid)
+                or (hex_common.is_single(regid)
+                    and hex_common.is_old_val(regtype, regid, tag))):
+                declared.append("%s%sV" % (regtype, regid))
+                if regtype == "M":
+                    declared.append("%s%sN" % (regtype, regid))
+            elif hex_common.is_new_val(regtype, regid, tag):
+                declared.append("%s%sN" % (regtype,regid))
+            else:
+                print("Bad register parse: ",regtype,regid,toss,numregs)
+
+        ## Handle immediates
+        for immlett,bits,immshift in imms:
+            declared.append(hex_common.imm_name(immlett))
+
+        arguments = ", ".join(["ctx", "ctx->insn", "ctx->pkt"] + declared)
+        f.write("    emit_%s(%s);\n" % (tag, arguments))
+
+    elif ( hex_common.skip_qemu_helper(tag) ):
         f.write("    fGEN_TCG_%s(%s);\n" % (tag, hex_common.semdict[tag]))
     else:
         ## Generate the call to the helper
         for immlett,bits,immshift in imms:
             gen_helper_decl_imm(f,immlett)
+        if hex_common.need_pkt_has_multi_cof(tag):
+            f.write("    TCGv pkt_has_multi_cof = ")
+            f.write("tcg_constant_tl(ctx->pkt->pkt_has_multi_cof);\n")
         if hex_common.need_part1(tag):
             f.write("    TCGv part1 = tcg_constant_tl(insn->part1);\n")
         if hex_common.need_slot(tag):
             f.write("    TCGv slot = tcg_constant_tl(insn->slot);\n")
+        if hex_common.need_PC(tag):
+            f.write("    TCGv PC = tcg_constant_tl(ctx->pkt->pc);\n")
+        if hex_common.helper_needs_next_PC(tag):
+            f.write("    TCGv next_PC = tcg_constant_tl(ctx->next_PC);\n")
         f.write("    gen_helper_%s(" % (tag))
         i=0
         ## If there is a scalar result, it is the return type
@@ -632,6 +540,14 @@ def gen_tcg_func(f, tag, regs, imms):
         if (i > 0): f.write(", ")
         f.write("cpu_env")
         i=1
+        ## For conditional instructions, we pass in the destination register
+        if 'A_CONDEXEC' in hex_common.attribdict[tag]:
+            for regtype, regid, toss, numregs in regs:
+                if (hex_common.is_writeonly(regid) and
+                    not hex_common.is_hvx_reg(regtype)):
+                    gen_helper_call_opn(f, tag, regtype, regid, toss, \
+                                        numregs, i)
+                    i += 1
         for regtype,regid,toss,numregs in regs:
             if (hex_common.is_written(regid)):
                 if (not hex_common.is_hvx_reg(regtype)):
@@ -648,6 +564,10 @@ def gen_tcg_func(f, tag, regs, imms):
         for immlett,bits,immshift in imms:
             gen_helper_call_imm(f,immlett)
 
+        if hex_common.need_pkt_has_multi_cof(tag):
+            f.write(", pkt_has_multi_cof")
+        if hex_common.need_PC(tag): f.write(", PC")
+        if hex_common.helper_needs_next_PC(tag): f.write(", next_PC")
         if hex_common.need_slot(tag): f.write(", slot")
         if hex_common.need_part1(tag): f.write(", part1" )
         f.write(");\n")
@@ -656,12 +576,6 @@ def gen_tcg_func(f, tag, regs, imms):
     for regtype,regid,toss,numregs in regs:
         if (hex_common.is_written(regid)):
             genptr_dst_write_opn(f,regtype, regid, tag)
-
-    ## Free all the operands (regs and immediates)
-    if hex_common.need_ea(tag): gen_free_ea_tcg(f)
-    for regtype,regid,toss,numregs in regs:
-        genptr_free_opn(f,regtype,regid,i,tag)
-        i += 1
 
     f.write("}\n\n")
 
@@ -677,12 +591,27 @@ def main():
     hex_common.read_overrides_file(sys.argv[3])
     hex_common.read_overrides_file(sys.argv[4])
     hex_common.calculate_attribs()
+    ## Whether or not idef-parser is enabled is
+    ## determined by the number of arguments to
+    ## this script:
+    ##
+    ##   5 args. -> not enabled,
+    ##   6 args. -> idef-parser enabled.
+    ##
+    ## The 6:th arg. then holds a list of the successfully
+    ## parsed instructions.
+    is_idef_parser_enabled = len(sys.argv) > 6
+    if is_idef_parser_enabled:
+        hex_common.read_idef_parser_enabled_file(sys.argv[5])
     tagregs = hex_common.get_tagregs()
     tagimms = hex_common.get_tagimms()
 
-    with open(sys.argv[5], 'w') as f:
+    output_file = sys.argv[-1]
+    with open(output_file, 'w') as f:
         f.write("#ifndef HEXAGON_TCG_FUNCS_H\n")
         f.write("#define HEXAGON_TCG_FUNCS_H\n\n")
+        if is_idef_parser_enabled:
+            f.write("#include \"idef-generated-emitter.h.inc\"\n\n")
 
         for tag in hex_common.tags:
             ## Skip the priv instructions

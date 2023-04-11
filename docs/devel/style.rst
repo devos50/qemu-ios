@@ -12,6 +12,10 @@ patches before submitting.
 Formatting and style
 ********************
 
+The repository includes a ``.editorconfig`` file which can help with
+getting the right settings for your preferred $EDITOR. See
+`<https://editorconfig.org/>`_ for details.
+
 Whitespace
 ==========
 
@@ -151,6 +155,12 @@ If there are two versions of a function to be called with or without a
 lock held, the function that expects the lock to be already held
 usually uses the suffix ``_locked``.
 
+If a function is a shim designed to deal with compatibility
+workarounds we use the suffix ``_compat``. These are generally not
+called directly and aliased to the plain function name via the
+pre-processor. Another common suffix is ``_impl``; it is used for the
+concrete implementation of a function that will not be called
+directly, but rather through a macro or an inline function.
 
 Block structure
 ===============
@@ -282,6 +292,13 @@ that QEMU depends on.
 
 Do not include "qemu/osdep.h" from header files since the .c file will have
 already included it.
+
+Headers should normally include everything they need beyond osdep.h.
+If exceptions are needed for some reason, they must be documented in
+the header.  If all that's needed from a header is typedefs, consider
+putting those into qemu/typedefs.h instead of including the header.
+
+Cyclic inclusion is forbidden.
 
 C types
 =======
@@ -483,11 +500,11 @@ of arguments.
 C standard, implementation defined and undefined behaviors
 ==========================================================
 
-C code in QEMU should be written to the C99 language specification. A copy
-of the final version of the C99 standard with corrigenda TC1, TC2, and TC3
-included, formatted as a draft, can be downloaded from:
+C code in QEMU should be written to the C11 language specification. A
+copy of the final version of the C11 standard formatted as a draft,
+can be downloaded from:
 
-    `<http://www.open-std.org/jtc1/sc22/WG14/www/docs/n1256.pdf>`_
+    `<http://www.open-std.org/jtc1/sc22/wg14/www/docs/n1548.pdf>`_
 
 The C language specification defines regions of undefined behavior and
 implementation defined behavior (to give compiler authors enough leeway to
@@ -512,7 +529,7 @@ documented in the GNU Compiler Collection manual starting at version 4.0.
 Automatic memory deallocation
 =============================
 
-QEMU has a mandatory dependency either the GCC or CLang compiler. As
+QEMU has a mandatory dependency on either the GCC or the Clang compiler. As
 such it has the freedom to make use of a C language extension for
 automatically running a cleanup function when a stack variable goes
 out of scope. This can be used to simplify function cleanup paths,

@@ -59,8 +59,8 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
 
 void process_pending_signals(CPUArchState *cpu_env);
 void signal_init(void);
-int queue_signal(CPUArchState *env, int sig, int si_type,
-                 target_siginfo_t *info);
+void queue_signal(CPUArchState *env, int sig, int si_type,
+                  target_siginfo_t *info);
 void host_to_target_siginfo(target_siginfo_t *tinfo, const siginfo_t *info);
 void target_to_host_siginfo(siginfo_t *info, const target_siginfo_t *tinfo);
 int target_to_host_signal(int sig);
@@ -91,5 +91,77 @@ abi_long do_swapcontext(CPUArchState *env, abi_ulong uold_ctx,
  * Return value: non-zero if there was a pending signal, zero if not.
  */
 int block_signals(void); /* Returns non zero if signal pending */
+
+/**
+ * process_sigsuspend_mask: read and apply syscall-local signal mask
+ *
+ * Read the guest signal mask from @sigset, length @sigsize.
+ * Convert that to a host signal mask and save it to sigpending_mask.
+ *
+ * Return value: negative target errno, or zero;
+ *               store &sigpending_mask into *pset on success.
+ */
+int process_sigsuspend_mask(sigset_t **pset, target_ulong sigset,
+                            target_ulong sigsize);
+
+/**
+ * finish_sigsuspend_mask: finish a sigsuspend-like syscall
+ *
+ * Set in_sigsuspend if we need to use the modified sigset
+ * during process_pending_signals.
+ */
+static inline void finish_sigsuspend_mask(int ret)
+{
+    if (ret != -QEMU_ERESTARTSYS) {
+        TaskState *ts = (TaskState *)thread_cpu->opaque;
+        ts->in_sigsuspend = 1;
+    }
+}
+
+#if defined(SIGSTKFLT) && defined(TARGET_SIGSTKFLT)
+#define MAKE_SIG_ENTRY_SIGSTKFLT        MAKE_SIG_ENTRY(SIGSTKFLT)
+#else
+#define MAKE_SIG_ENTRY_SIGSTKFLT
+#endif
+
+#if defined(SIGIOT) && defined(TARGET_SIGIOT)
+#define MAKE_SIG_ENTRY_SIGIOT           MAKE_SIG_ENTRY(SIGIOT)
+#else
+#define MAKE_SIG_ENTRY_SIGIOT
+#endif
+
+#define MAKE_SIGNAL_LIST \
+        MAKE_SIG_ENTRY(SIGHUP) \
+        MAKE_SIG_ENTRY(SIGINT) \
+        MAKE_SIG_ENTRY(SIGQUIT) \
+        MAKE_SIG_ENTRY(SIGILL) \
+        MAKE_SIG_ENTRY(SIGTRAP) \
+        MAKE_SIG_ENTRY(SIGABRT) \
+        MAKE_SIG_ENTRY(SIGBUS) \
+        MAKE_SIG_ENTRY(SIGFPE) \
+        MAKE_SIG_ENTRY(SIGKILL) \
+        MAKE_SIG_ENTRY(SIGUSR1) \
+        MAKE_SIG_ENTRY(SIGSEGV) \
+        MAKE_SIG_ENTRY(SIGUSR2) \
+        MAKE_SIG_ENTRY(SIGPIPE) \
+        MAKE_SIG_ENTRY(SIGALRM) \
+        MAKE_SIG_ENTRY(SIGTERM) \
+        MAKE_SIG_ENTRY(SIGCHLD) \
+        MAKE_SIG_ENTRY(SIGCONT) \
+        MAKE_SIG_ENTRY(SIGSTOP) \
+        MAKE_SIG_ENTRY(SIGTSTP) \
+        MAKE_SIG_ENTRY(SIGTTIN) \
+        MAKE_SIG_ENTRY(SIGTTOU) \
+        MAKE_SIG_ENTRY(SIGURG) \
+        MAKE_SIG_ENTRY(SIGXCPU) \
+        MAKE_SIG_ENTRY(SIGXFSZ) \
+        MAKE_SIG_ENTRY(SIGVTALRM) \
+        MAKE_SIG_ENTRY(SIGPROF) \
+        MAKE_SIG_ENTRY(SIGWINCH) \
+        MAKE_SIG_ENTRY(SIGIO) \
+        MAKE_SIG_ENTRY(SIGPWR) \
+        MAKE_SIG_ENTRY(SIGSYS) \
+        MAKE_SIG_ENTRY_SIGSTKFLT \
+        MAKE_SIG_ENTRY_SIGIOT
 
 #endif

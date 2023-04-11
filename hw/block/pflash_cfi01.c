@@ -45,7 +45,6 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/bitops.h"
-#include "qemu/error-report.h"
 #include "qemu/host-utils.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -392,8 +391,8 @@ static void pflash_update(PFlashCFI01 *pfl, int offset,
         /* widen to sector boundaries */
         offset = QEMU_ALIGN_DOWN(offset, BDRV_SECTOR_SIZE);
         offset_end = QEMU_ALIGN_UP(offset_end, BDRV_SECTOR_SIZE);
-        ret = blk_pwrite(pfl->blk, offset, pfl->storage + offset,
-                   offset_end - offset, 0);
+        ret = blk_pwrite(pfl->blk, offset, offset_end - offset,
+                         pfl->storage + offset, 0);
         if (ret < 0) {
             /* TODO set error bit in status */
             error_report("Could not update PFLASH: %s", strerror(-ret));
@@ -645,7 +644,7 @@ static void pflash_write(PFlashCFI01 *pfl, hwaddr offset,
 
  error_flash:
     qemu_log_mask(LOG_UNIMP, "%s: Unimplemented flash cmd sequence "
-                  "(offset " TARGET_FMT_plx ", wcycle 0x%x cmd 0x%x value 0x%x)"
+                  "(offset " HWADDR_FMT_plx ", wcycle 0x%x cmd 0x%x value 0x%x)"
                   "\n", __func__, offset, pfl->wcycle, pfl->cmd, value);
 
  mode_read_array:
@@ -1023,7 +1022,7 @@ static void postload_update_cb(void *opaque, bool running, RunState state)
 {
     PFlashCFI01 *pfl = opaque;
 
-    /* This is called after bdrv_invalidate_cache_all.  */
+    /* This is called after bdrv_activate_all.  */
     qemu_del_vm_change_state_handler(pfl->vmstate);
     pfl->vmstate = NULL;
 

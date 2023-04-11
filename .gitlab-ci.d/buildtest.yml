@@ -2,20 +2,16 @@ include:
   - local: '/.gitlab-ci.d/buildtest-template.yml'
 
 build-system-alpine:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
     - job: amd64-alpine-container
   variables:
     IMAGE: alpine
-    TARGETS: aarch64-softmmu alpha-softmmu cris-softmmu hppa-softmmu
-      microblazeel-softmmu mips64el-softmmu
+    TARGETS: avr-softmmu loongarch64-softmmu mips64-softmmu mipsel-softmmu
     MAKE_CHECK_ARGS: check-build
     CONFIGURE_ARGS: --enable-docs --enable-trace-backends=log,simple,syslog
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - .git-submodule-status
-      - build
 
 check-system-alpine:
   extends: .native_test_job_template
@@ -24,7 +20,7 @@ check-system-alpine:
       artifacts: true
   variables:
     IMAGE: alpine
-    MAKE_CHECK_ARGS: check
+    MAKE_CHECK_ARGS: check-unit check-qtest
 
 avocado-system-alpine:
   extends: .avocado_test_job_template
@@ -36,19 +32,17 @@ avocado-system-alpine:
     MAKE_CHECK_ARGS: check-avocado
 
 build-system-ubuntu:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
-    job: amd64-ubuntu2004-container
+    job: amd64-ubuntu2204-container
   variables:
-    IMAGE: ubuntu2004
-    CONFIGURE_ARGS: --enable-docs --enable-fdt=system --enable-slirp=system
-    TARGETS: aarch64-softmmu alpha-softmmu cris-softmmu hppa-softmmu
+    IMAGE: ubuntu2204
+    CONFIGURE_ARGS: --enable-docs
+    TARGETS: alpha-softmmu cris-softmmu hppa-softmmu
       microblazeel-softmmu mips64el-softmmu
     MAKE_CHECK_ARGS: check-build
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
 
 check-system-ubuntu:
   extends: .native_test_job_template
@@ -56,7 +50,7 @@ check-system-ubuntu:
     - job: build-system-ubuntu
       artifacts: true
   variables:
-    IMAGE: ubuntu2004
+    IMAGE: ubuntu2204
     MAKE_CHECK_ARGS: check
 
 avocado-system-ubuntu:
@@ -65,22 +59,21 @@ avocado-system-ubuntu:
     - job: build-system-ubuntu
       artifacts: true
   variables:
-    IMAGE: ubuntu2004
+    IMAGE: ubuntu2204
     MAKE_CHECK_ARGS: check-avocado
 
 build-system-debian:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
     job: amd64-debian-container
   variables:
     IMAGE: debian-amd64
-    TARGETS: arm-softmmu avr-softmmu i386-softmmu mipsel-softmmu
-      riscv64-softmmu sh4eb-softmmu sparc-softmmu xtensaeb-softmmu
+    CONFIGURE_ARGS: --with-coroutine=sigaltstack
+    TARGETS: arm-softmmu i386-softmmu riscv64-softmmu sh4eb-softmmu
+      sparc-softmmu xtensaeb-softmmu
     MAKE_CHECK_ARGS: check-build
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
 
 check-system-debian:
   extends: .native_test_job_template
@@ -109,23 +102,21 @@ crash-test-debian:
     IMAGE: debian-amd64
   script:
     - cd build
-    - scripts/device-crash-test -q ./qemu-system-i386
+    - make check-venv
+    - tests/venv/bin/python3 scripts/device-crash-test -q ./qemu-system-i386
 
 build-system-fedora:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
     job: amd64-fedora-container
   variables:
     IMAGE: fedora
     CONFIGURE_ARGS: --disable-gcrypt --enable-nettle --enable-docs
-             --enable-fdt=system --enable-slirp=system --enable-capstone=system
     TARGETS: tricore-softmmu microblaze-softmmu mips-softmmu
       xtensa-softmmu m68k-softmmu riscv32-softmmu ppc-softmmu sparc64-softmmu
     MAKE_CHECK_ARGS: check-build
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
 
 check-system-fedora:
   extends: .native_test_job_template
@@ -154,24 +145,23 @@ crash-test-fedora:
     IMAGE: fedora
   script:
     - cd build
-    - scripts/device-crash-test -q ./qemu-system-ppc
-    - scripts/device-crash-test -q ./qemu-system-riscv32
+    - make check-venv
+    - tests/venv/bin/python3 scripts/device-crash-test -q ./qemu-system-ppc
+    - tests/venv/bin/python3 scripts/device-crash-test -q ./qemu-system-riscv32
 
 build-system-centos:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
     job: amd64-centos8-container
   variables:
     IMAGE: centos8
-    CONFIGURE_ARGS: --disable-nettle --enable-gcrypt --enable-fdt=system
-                    --enable-modules --enable-trace-backends=dtrace
+    CONFIGURE_ARGS: --disable-nettle --enable-gcrypt --enable-vfio-user-server
+      --enable-modules --enable-trace-backends=dtrace --enable-docs
     TARGETS: ppc64-softmmu or1k-softmmu s390x-softmmu
       x86_64-softmmu rx-softmmu sh4-softmmu nios2-softmmu
     MAKE_CHECK_ARGS: check-build
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
 
 check-system-centos:
   extends: .native_test_job_template
@@ -192,18 +182,15 @@ avocado-system-centos:
     MAKE_CHECK_ARGS: check-avocado
 
 build-system-opensuse:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
     job: amd64-opensuse-leap-container
   variables:
     IMAGE: opensuse-leap
-    CONFIGURE_ARGS: --enable-fdt=system
     TARGETS: s390x-softmmu x86_64-softmmu aarch64-softmmu
     MAKE_CHECK_ARGS: check-build
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
 
 check-system-opensuse:
   extends: .native_test_job_template
@@ -241,6 +228,7 @@ build-tcg-disabled:
     - mkdir build
     - cd build
     - ../configure --disable-tcg --audio-drv-list="" --with-coroutine=ucontext
+                   --disable-docs --disable-sdl --disable-gtk --disable-vnc
       || { cat config.log meson-logs/meson-log.txt && exit 1; }
     - make -j"$JOBS"
     - make check-unit
@@ -272,14 +260,10 @@ build-user-static:
     CONFIGURE_ARGS: --disable-tools --disable-system --static
     MAKE_CHECK_ARGS: check-tcg
 
-# Because the hexagon cross-compiler takes so long to build we don't rely
-# on the CI system to build it and hence this job has an optional dependency
-# declared. The image is manually uploaded.
 build-user-hexagon:
   extends: .native_build_job_template
   needs:
     job: hexagon-cross-container
-    optional: true
   variables:
     IMAGE: debian-hexagon-cross
     TARGETS: hexagon-linux-user
@@ -316,14 +300,14 @@ clang-system:
     IMAGE: fedora
     CONFIGURE_ARGS: --cc=clang --cxx=clang++
       --extra-cflags=-fsanitize=undefined --extra-cflags=-fno-sanitize-recover=undefined
-    TARGETS: alpha-softmmu arm-softmmu m68k-softmmu mips64-softmmu
-      ppc-softmmu s390x-softmmu
+    TARGETS: alpha-softmmu arm-softmmu m68k-softmmu mips64-softmmu s390x-softmmu
     MAKE_CHECK_ARGS: check-qtest check-tcg
 
 clang-user:
   extends: .native_build_job_template
   needs:
     job: amd64-debian-user-cross-container
+  timeout: 70m
   variables:
     IMAGE: debian-all-test-cross
     CONFIGURE_ARGS: --cc=clang --cxx=clang++ --disable-system
@@ -335,15 +319,15 @@ clang-user:
 # On gitlab runners, default value sometimes end up calling 2 lds concurrently and
 # triggers an Out-Of-Memory error
 #
-# Since slirp callbacks are used in QEMU Timers, slirp needs to be compiled together
-# with QEMU and linked as a static library to avoid false positives in CFI checks.
-# This can be accomplished by using -enable-slirp=git, which avoids the use of
-# a system-wide version of the library
+# Since slirp callbacks are used in QEMU Timers, we cannot use libslirp with
+# CFI builds, and thus have to disable it here.
 #
 # Split in three sets of build/check/avocado to limit the execution time of each
 # job
 build-cfi-aarch64:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
   - job: amd64-fedora-container
   variables:
@@ -351,20 +335,14 @@ build-cfi-aarch64:
     AR: llvm-ar
     IMAGE: fedora
     CONFIGURE_ARGS: --cc=clang --cxx=clang++ --enable-cfi --enable-cfi-debug
-      --enable-safe-stack --enable-slirp=git
+      --enable-safe-stack --disable-slirp
     TARGETS: aarch64-softmmu
     MAKE_CHECK_ARGS: check-build
-  timeout: 70m
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
-  rules:
     # FIXME: This job is often failing, likely due to out-of-memory problems in
     # the constrained containers of the shared runners. Thus this is marked as
-    # manual until the situation has been solved.
-    - when: manual
-      allow_failure: true
+    # skipped until the situation has been solved.
+    QEMU_JOB_SKIPPED: 1
+  timeout: 90m
 
 check-cfi-aarch64:
   extends: .native_test_job_template
@@ -385,7 +363,9 @@ avocado-cfi-aarch64:
     MAKE_CHECK_ARGS: check-avocado
 
 build-cfi-ppc64-s390x:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
   - job: amd64-fedora-container
   variables:
@@ -393,20 +373,14 @@ build-cfi-ppc64-s390x:
     AR: llvm-ar
     IMAGE: fedora
     CONFIGURE_ARGS: --cc=clang --cxx=clang++ --enable-cfi --enable-cfi-debug
-      --enable-safe-stack --enable-slirp=git
+      --enable-safe-stack --disable-slirp
     TARGETS: ppc64-softmmu s390x-softmmu
     MAKE_CHECK_ARGS: check-build
-  timeout: 70m
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
-  rules:
     # FIXME: This job is often failing, likely due to out-of-memory problems in
     # the constrained containers of the shared runners. Thus this is marked as
-    # manual until the situation has been solved.
-    - when: manual
-      allow_failure: true
+    # skipped until the situation has been solved.
+    QEMU_JOB_SKIPPED: 1
+  timeout: 80m
 
 check-cfi-ppc64-s390x:
   extends: .native_test_job_template
@@ -427,7 +401,9 @@ avocado-cfi-ppc64-s390x:
     MAKE_CHECK_ARGS: check-avocado
 
 build-cfi-x86_64:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
   - job: amd64-fedora-container
   variables:
@@ -435,14 +411,10 @@ build-cfi-x86_64:
     AR: llvm-ar
     IMAGE: fedora
     CONFIGURE_ARGS: --cc=clang --cxx=clang++ --enable-cfi --enable-cfi-debug
-      --enable-safe-stack --enable-slirp=git
+      --enable-safe-stack --disable-slirp
     TARGETS: x86_64-softmmu
     MAKE_CHECK_ARGS: check-build
   timeout: 70m
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
 
 check-cfi-x86_64:
   extends: .native_test_job_template
@@ -465,65 +437,36 @@ avocado-cfi-x86_64:
 tsan-build:
   extends: .native_build_job_template
   needs:
-    job: amd64-ubuntu2004-container
+    job: amd64-ubuntu2204-container
   variables:
-    IMAGE: ubuntu2004
-    CONFIGURE_ARGS: --enable-tsan --cc=clang-10 --cxx=clang++-10
-          --enable-trace-backends=ust --enable-fdt=system --enable-slirp=system
+    IMAGE: ubuntu2204
+    CONFIGURE_ARGS: --enable-tsan --cc=clang --cxx=clang++
+          --enable-trace-backends=ust --disable-slirp
     TARGETS: x86_64-softmmu ppc64-softmmu riscv64-softmmu x86_64-linux-user
-    MAKE_CHECK_ARGS: bench V=1
 
-# These targets are on the way out
-build-deprecated:
+# gcov is a GCC features
+gcov:
   extends: .native_build_job_template
   needs:
-    job: amd64-debian-user-cross-container
+    job: amd64-ubuntu2204-container
+  timeout: 80m
   variables:
-    IMAGE: debian-all-test-cross
-    CONFIGURE_ARGS: --disable-tools
-    MAKE_CHECK_ARGS: build-tcg
-    TARGETS: ppc64abi32-linux-user
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
-
-# We split the check-tcg step as test failures are expected but we still
-# want to catch the build breaking.
-check-deprecated:
-  extends: .native_test_job_template
-  needs:
-    - job: build-deprecated
-      artifacts: true
-  variables:
-    IMAGE: debian-all-test-cross
-    MAKE_CHECK_ARGS: check-tcg
-  allow_failure: true
-
-# gprof/gcov are GCC features
-build-gprof-gcov:
-  extends: .native_build_job_template
-  needs:
-    job: amd64-ubuntu2004-container
-  variables:
-    IMAGE: ubuntu2004
-    CONFIGURE_ARGS: --enable-gprof --enable-gcov
+    IMAGE: ubuntu2204
+    CONFIGURE_ARGS: --enable-gcov
     TARGETS: aarch64-softmmu ppc64-softmmu s390x-softmmu x86_64-softmmu
-  artifacts:
-    expire_in: 1 days
-    paths:
-      - build
-
-check-gprof-gcov:
-  extends: .native_test_job_template
-  needs:
-    - job: build-gprof-gcov
-      artifacts: true
-  variables:
-    IMAGE: ubuntu2004
     MAKE_CHECK_ARGS: check
   after_script:
-    - ${CI_PROJECT_DIR}/scripts/ci/coverage-summary.sh
+    - cd build
+    - gcovr --xml-pretty --exclude-unreachable-branches --print-summary
+        -o coverage.xml --root ${CI_PROJECT_DIR} . *.p
+  coverage: /^\s*lines:\s*\d+.\d+\%/
+  artifacts:
+    name: ${CI_JOB_NAME}-${CI_COMMIT_REF_NAME}-${CI_COMMIT_SHA}
+    expire_in: 2 days
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: build/coverage.xml
 
 build-oss-fuzz:
   extends: .native_build_job_template
@@ -533,6 +476,7 @@ build-oss-fuzz:
     IMAGE: fedora
   script:
     - mkdir build-oss-fuzz
+    - export LSAN_OPTIONS=suppressions=scripts/oss-fuzz/lsan_suppressions.txt
     - CC="clang" CXX="clang++" CFLAGS="-fsanitize=address"
       ./scripts/oss-fuzz/build.sh
     - export ASAN_OPTIONS="fast_unwind_on_malloc=0"
@@ -542,8 +486,6 @@ build-oss-fuzz:
         echo Testing ${fuzzer} ... ;
         "${fuzzer}" -runs=1 -seed=1 || exit 1 ;
       done
-    # Unrelated to fuzzer: run some tests with -fsanitize=address
-    - cd build-oss-fuzz && make check-qtest-i386 check-unit
 
 build-tci:
   extends: .native_build_job_template
@@ -555,8 +497,9 @@ build-tci:
     - TARGETS="aarch64 alpha arm hppa m68k microblaze ppc64 s390x x86_64"
     - mkdir build
     - cd build
-    - ../configure --enable-tcg-interpreter
-        --target-list="$(for tg in $TARGETS; do echo -n ${tg}'-softmmu '; done)" || { cat config.log meson-logs/meson-log.txt && exit 1; }
+    - ../configure --enable-tcg-interpreter --disable-docs --disable-gtk --disable-vnc
+        --target-list="$(for tg in $TARGETS; do echo -n ${tg}'-softmmu '; done)"
+        || { cat config.log meson-logs/meson-log.txt && exit 1; }
     - make -j"$JOBS"
     - make tests/qtest/boot-serial-test tests/qtest/cdrom-test tests/qtest/pxe-test
     - for tg in $TARGETS ; do
@@ -568,45 +511,26 @@ build-tci:
     - QTEST_QEMU_BINARY="./qemu-system-s390x" ./tests/qtest/pxe-test -m slow
     - make check-tcg
 
-# Alternate coroutines implementations are only really of interest to KVM users
-# However we can't test against KVM on Gitlab-CI so we can only run unit tests
-build-coroutine-sigaltstack:
-  extends: .native_build_job_template
-  needs:
-    job: amd64-ubuntu2004-container
-  variables:
-    IMAGE: ubuntu2004
-    CONFIGURE_ARGS: --with-coroutine=sigaltstack --disable-tcg
-                    --enable-trace-backends=ftrace
-    MAKE_CHECK_ARGS: check-unit
-
 # Check our reduced build configurations
-build-without-default-devices:
+build-without-defaults:
   extends: .native_build_job_template
   needs:
     job: amd64-centos8-container
   variables:
     IMAGE: centos8
-    CONFIGURE_ARGS: --without-default-devices --disable-user
-
-build-without-default-features:
-  extends: .native_build_job_template
-  needs:
-    job: amd64-fedora-container
-  variables:
-    IMAGE: fedora
     CONFIGURE_ARGS:
+      --without-default-devices
       --without-default-features
-      --disable-capstone
+      --disable-fdt
       --disable-pie
       --disable-qom-cast-debug
-      --disable-slirp
       --disable-strip
-    TARGETS: avr-softmmu i386-softmmu mips64-softmmu s390x-softmmu sh4-softmmu
+    TARGETS: avr-softmmu mips64-softmmu s390x-softmmu sh4-softmmu
       sparc64-softmmu hexagon-linux-user i386-linux-user s390x-linux-user
-    MAKE_CHECK_ARGS: check-unit check-qtest SPEED=slow
+    MAKE_CHECK_ARGS: check-unit check-qtest-avr check-qtest-mips64
 
 build-libvhost-user:
+  extends: .base_job_template
   stage: build
   image: $CI_REGISTRY_IMAGE/qemu/fedora:latest
   needs:
@@ -620,17 +544,18 @@ build-libvhost-user:
 # No targets are built here, just tools, docs, and unit tests. This
 # also feeds into the eventual documentation deployment steps later
 build-tools-and-docs-debian:
-  extends: .native_build_job_template
+  extends:
+    - .native_build_job_template
+    - .native_build_artifact_template
   needs:
     job: amd64-debian-container
+    # when running on 'master' we use pre-existing container
+    optional: true
   variables:
     IMAGE: debian-amd64
-    MAKE_CHECK_ARGS: check-unit check-softfloat ctags TAGS cscope
+    MAKE_CHECK_ARGS: check-unit ctags TAGS cscope
     CONFIGURE_ARGS: --disable-system --disable-user --enable-docs --enable-tools
-  artifacts:
-    expire_in: 2 days
-    paths:
-      - build
+    QEMU_JOB_PUBLISH: 1
 
 # Prepare for GitLab pages deployment. Anything copied into the
 # "public" directory will be deployed to $USER.gitlab.io/$PROJECT
@@ -646,6 +571,7 @@ build-tools-and-docs-debian:
 # that users can see the results of their commits, regardless
 # of what topic branch they're currently using
 pages:
+  extends: .base_job_template
   image: $CI_REGISTRY_IMAGE/qemu/debian-amd64:latest
   stage: test
   needs:
@@ -663,10 +589,5 @@ pages:
   artifacts:
     paths:
       - public
-  rules:
-    - if: '$CI_PROJECT_NAMESPACE == "qemu-project" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-      when: on_success
-    - if: '$CI_PROJECT_NAMESPACE == "qemu-project"'
-      when: never
-    - if: '$CI_PROJECT_NAMESPACE != "qemu-project"'
-      when: on_success
+  variables:
+    QEMU_JOB_PUBLISH: 1

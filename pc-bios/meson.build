@@ -23,12 +23,11 @@ if unpack_edk2_blobs
   endforeach
 endif
 
-blobs = files(
+blobs = [
   'bios.bin',
   'bios-256k.bin',
   'bios-microvm.bin',
   'qboot.rom',
-  'sgabios.bin',
   'vgabios.bin',
   'vgabios-cirrus.bin',
   'vgabios-stdvga.bin',
@@ -80,10 +79,10 @@ blobs = files(
   'hppa-firmware.img',
   'opensbi-riscv32-generic-fw_dynamic.bin',
   'opensbi-riscv64-generic-fw_dynamic.bin',
-  'opensbi-riscv32-generic-fw_dynamic.elf',
-  'opensbi-riscv64-generic-fw_dynamic.elf',
   'npcm7xx_bootrom.bin',
-)
+  'vof.bin',
+  'vof-nvram.bin',
+]
 
 if get_option('install_blobs')
   install_data(blobs, install_dir: qemu_datadir)

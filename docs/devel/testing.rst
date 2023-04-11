@@ -1,3 +1,5 @@
+.. _testing:
+
 Testing in QEMU
 ===============
 
@@ -78,6 +80,36 @@ QTest cases can be executed with
 .. code::
 
    make check-qtest
+
+Writing portable test cases
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Both unit tests and qtests can run on POSIX hosts as well as Windows hosts.
+Care must be taken when writing portable test cases that can be built and run
+successfully on various hosts. The following list shows some best practices:
+
+* Use portable APIs from glib whenever necessary, e.g.: g_setenv(),
+  g_mkdtemp(), g_mkdir().
+* Avoid using hardcoded /tmp for temporary file directory.
+  Use g_get_tmp_dir() instead.
+* Bear in mind that Windows has different special string representation for
+  stdin/stdout/stderr and null devices. For example if your test case uses
+  "/dev/fd/2" and "/dev/null" on Linux, remember to use "2" and "nul" on
+  Windows instead. Also IO redirection does not work on Windows, so avoid
+  using "2>nul" whenever necessary.
+* If your test cases uses the blkdebug feature, use relative path to pass
+  the config and image file paths in the command line as Windows absolute
+  path contains the delimiter ":" which will confuse the blkdebug parser.
+* Use double quotes in your extra QEMU command line in your test cases
+  instead of single quotes, as Windows does not drop single quotes when
+  passing the command line to QEMU.
+* Windows opens a file in text mode by default, while a POSIX compliant
+  implementation treats text files and binary files the same. So if your
+  test cases opens a file to write some data and later wants to compare the
+  written data with the original one, be sure to pass the letter 'b' as
+  part of the mode string to fopen(), or O_BINARY flag for the open() call.
+* If a certain test case can only run on POSIX or Linux hosts, use a proper
+  #ifdef in the codes. If the whole test suite cannot run on Windows, disable
+  the build in the meson.build file.
 
 QAPI schema tests
 ~~~~~~~~~~~~~~~~~
@@ -295,7 +327,7 @@ build and test QEMU in predefined and widely accessible Linux
 environments. This makes it possible to expand the test coverage
 across distros, toolchain flavors and library versions. The support
 was originally written for Docker although we also support Podman as
-an alternative container runtime. Although the many of the target
+an alternative container runtime. Although many of the target
 names and scripts are prefixed with "docker" the system will
 automatically run on whichever is configured.
 
@@ -373,7 +405,7 @@ locally by using the ``NOCACHE`` build option:
 
 .. code::
 
-   make docker-image-debian10 NOCACHE=1
+   make docker-image-debian-arm64-cross NOCACHE=1
 
 Images
 ~~~~~~
@@ -382,13 +414,125 @@ Along with many other images, the ``centos8`` image is defined in a Dockerfile
 in ``tests/docker/dockerfiles/``, called ``centos8.docker``. ``make docker-help``
 command will list all the available images.
 
-To add a new image, simply create a new ``.docker`` file under the
-``tests/docker/dockerfiles/`` directory.
-
 A ``.pre`` script can be added beside the ``.docker`` file, which will be
 executed before building the image under the build context directory. This is
 mainly used to do necessary host side setup. One such setup is ``binfmt_misc``,
 for example, to make qemu-user powered cross build containers work.
+
+Most of the existing Dockerfiles were written by hand, simply by creating a
+a new ``.docker`` file under the ``tests/docker/dockerfiles/`` directory.
+This has led to an inconsistent set of packages being present across the
+different containers.
+
+Thus going forward, QEMU is aiming to automatically generate the Dockerfiles
+using the ``lcitool`` program provided by the ``libvirt-ci`` project:
+
+  https://gitlab.com/libvirt/libvirt-ci
+
+``libvirt-ci`` contains an ``lcitool`` program as well as a list of
+mappings to distribution package names for a wide variety of third
+party projects.  ``lcitool`` applies the mappings to a list of build
+pre-requisites in ``tests/lcitool/projects/qemu.yml``, determines the
+list of native packages to install on each distribution, and uses them
+to generate build environments (dockerfiles and Cirrus CI variable files)
+that are consistent across OS distribution.
+
+
+Adding new build pre-requisites
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When preparing a patch series that adds a new build
+pre-requisite to QEMU, the prerequisites should to be added to
+``tests/lcitool/projects/qemu.yml`` in order to make the dependency
+available in the CI build environments.
+
+In the simple case where the pre-requisite is already known to ``libvirt-ci``
+the following steps are needed:
+
+ * Edit ``tests/lcitool/projects/qemu.yml`` and add the pre-requisite
+
+ * Run ``make lcitool-refresh`` to re-generate all relevant build environment
+   manifests
+
+It may be that ``libvirt-ci`` does not know about the new pre-requisite.
+If that is the case, some extra preparation steps will be required
+first to contribute the mapping to the ``libvirt-ci`` project:
+
+ * Fork the ``libvirt-ci`` project on gitlab
+
+ * Add an entry for the new build prerequisite to
+   ``lcitool/facts/mappings.yml``, listing its native package name on as
+   many OS distros as practical.  Run ``python -m pytest --regenerate-output``
+   and check that the changes are correct.
+
+ * Commit the ``mappings.yml`` change together with the regenerated test
+   files, and submit a merge request to the ``libvirt-ci`` project.
+   Please note in the description that this is a new build pre-requisite
+   desired for use with QEMU.
+
+ * CI pipeline will run to validate that the changes to ``mappings.yml``
+   are correct, by attempting to install the newly listed package on
+   all OS distributions supported by ``libvirt-ci``.
+
+ * Once the merge request is accepted, go back to QEMU and update
+   the ``tests/lcitool/libvirt-ci`` submodule to point to a commit that
+   contains the ``mappings.yml`` update.  Then add the prerequisite and
+   run ``make lcitool-refresh``.
+
+For enterprise distros that default to old, end-of-life versions of the
+Python runtime, QEMU uses a separate set of mappings that work with more
+recent versions.  These can be found in ``tests/lcitool/mappings.yml``.
+Modifying this file should not be necessary unless the new pre-requisite
+is a Python library or tool.
+
+
+Adding new OS distros
+^^^^^^^^^^^^^^^^^^^^^
+
+In some cases ``libvirt-ci`` will not know about the OS distro that is
+desired to be tested. Before adding a new OS distro, discuss the proposed
+addition:
+
+ * Send a mail to qemu-devel, copying people listed in the
+   MAINTAINERS file for ``Build and test automation``.
+
+   There are limited CI compute resources available to QEMU, so the
+   cost/benefit tradeoff of adding new OS distros needs to be considered.
+
+ * File an issue at https://gitlab.com/libvirt/libvirt-ci/-/issues
+   pointing to the qemu-devel mail thread in the archives.
+
+   This alerts other people who might be interested in the work
+   to avoid duplication, as well as to get feedback from libvirt-ci
+   maintainers on any tips to ease the addition
+
+Assuming there is agreement to add a new OS distro then
+
+ * Fork the ``libvirt-ci`` project on gitlab
+
+ * Add metadata under ``lcitool/facts/targets/`` for the new OS
+   distro. There might be code changes required if the OS distro
+   uses a package format not currently known. The ``libvirt-ci``
+   maintainers can advise on this when the issue is filed.
+
+ * Edit the ``lcitool/facts/mappings.yml`` change to add entries for
+   the new OS, listing the native package names for as many packages
+   as practical.  Run ``python -m pytest --regenerate-output`` and
+   check that the changes are correct.
+
+ * Commit the changes to ``lcitool/facts`` and the regenerated test
+   files, and submit a merge request to the ``libvirt-ci`` project.
+   Please note in the description that this is a new build pre-requisite
+   desired for use with QEMU
+
+ * CI pipeline will run to validate that the changes to ``mappings.yml``
+   are correct, by attempting to install the newly listed package on
+   all OS distributions supported by ``libvirt-ci``.
+
+ * Once the merge request is accepted, go back to QEMU and update
+   the ``libvirt-ci`` submodule to point to a commit that contains
+   the ``mappings.yml`` update.
+
 
 Tests
 ~~~~~
@@ -444,13 +588,13 @@ https://github.com/google/sanitizers/wiki/ThreadSanitizerCppManual
 
 Thread Sanitizer in Docker
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-TSan is currently supported in the ubuntu2004 docker.
+TSan is currently supported in the ubuntu2204 docker.
 
 The test-tsan test will build using TSan and then run make check.
 
 .. code::
 
-  make docker-test-tsan@ubuntu2004
+  make docker-test-tsan@ubuntu2204
 
 TSan warnings under docker are placed in files located at build/tsan/.
 
@@ -538,6 +682,44 @@ Good files to start with are: annotate_happens_before.cpp and ignore_race.cpp
 The full set of annotations can be found here:
 
 https://github.com/llvm/llvm-project/blob/master/compiler-rt/lib/tsan/rtl/tsan_interface_ann.cpp
+
+docker-binfmt-image-debian-% targets
+------------------------------------
+
+It is possible to combine Debian's bootstrap scripts with a configured
+``binfmt_misc`` to bootstrap a number of Debian's distros including
+experimental ports not yet supported by a released OS. This can
+simplify setting up a rootfs by using docker to contain the foreign
+rootfs rather than manually invoking chroot.
+
+Setting up ``binfmt_misc``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can use the script ``qemu-binfmt-conf.sh`` to configure a QEMU
+user binary to automatically run binaries for the foreign
+architecture. While the scripts will try their best to work with
+dynamically linked QEMU's a statically linked one will present less
+potential complications when copying into the docker image. Modern
+kernels support the ``F`` (fix binary) flag which will open the QEMU
+executable on setup and avoids the need to find and re-open in the
+chroot environment. This is triggered with the ``--persistent`` flag.
+
+Example invocation
+~~~~~~~~~~~~~~~~~~
+
+For example to setup the HPPA ports builds of Debian::
+
+  make docker-binfmt-image-debian-sid-hppa \
+    DEB_TYPE=sid DEB_ARCH=hppa \
+    DEB_URL=http://ftp.ports.debian.org/debian-ports/ \
+    DEB_KEYRING=/usr/share/keyrings/debian-ports-archive-keyring.gpg \
+    EXECUTABLE=(pwd)/qemu-hppa V=1
+
+The ``DEB_`` variables are substitutions used by
+``debian-boostrap.pre`` which is called to do the initial debootstrap
+of the rootfs before it is copied into the container. The second stage
+is run as part of the build. The final image will be tagged as
+``qemu/debian-sid-hppa``.
 
 VM testing
 ----------
@@ -1226,7 +1408,7 @@ for the architecture in question, for example::
 
   $(configure) --cross-cc-aarch64=aarch64-cc
 
-There is also a ``--cross-cc-flags-ARCH`` flag in case additional
+There is also a ``--cross-cc-cflags-ARCH`` flag in case additional
 compiler flags are needed to build for a given target.
 
 If you have the ability to run containers as the user the build system

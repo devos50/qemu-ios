@@ -21,6 +21,7 @@ Hyperscale applications. The following machines are based on this chip :
 - ``quanta-gbs-bmc``    Quanta GBS server BMC
 - ``quanta-gsj``        Quanta GSJ server BMC
 - ``kudo-bmc``          Fii USA Kudo server BMC
+- ``mori-bmc``          Fii USA Mori server BMC
 
 There are also two more SoCs, NPCM710 and NPCM705, which are single-core
 variants of NPCM750 and NPCM730, respectively. These are currently not
@@ -48,6 +49,7 @@ Supported devices
  * SMBus controller (SMBF)
  * Ethernet controller (EMC)
  * Tachometer
+ * Peripheral SPI controller (PSPI)
 
 Missing devices
 ---------------
@@ -63,7 +65,6 @@ Missing devices
 
  * Ethernet controller (GMAC)
  * USB device (USBD)
- * Peripheral SPI controller (PSPI)
  * SD/MMC host
  * PECI interface
  * PCI and PCIe root complex and bridges
@@ -81,9 +82,9 @@ Boot options
 
 The Nuvoton machines can boot from an OpenBMC firmware image, or directly into
 a kernel using the ``-kernel`` option. OpenBMC images for ``quanta-gsj`` and
-possibly others can be downloaded from the OpenPOWER jenkins :
+possibly others can be downloaded from the OpenBMC jenkins :
 
-   https://openpower.xyz/
+   https://jenkins.openbmc.org/
 
 The firmware image should be attached as an MTD drive. Example :
 
