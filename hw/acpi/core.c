@@ -32,6 +32,7 @@
 #include "qemu/module.h"
 #include "qemu/option.h"
 #include "sysemu/runstate.h"
+#include "trace.h"
 
 struct acpi_table_header {
     uint16_t _length;         /* our length, not actual part of the hdr */
@@ -551,8 +552,35 @@ void acpi_pm_tmr_reset(ACPIREGS *ar)
 }
 
 /* ACPI PM1aCNT */
-static void acpi_pm1_cnt_write(ACPIREGS *ar, uint16_t val)
+void acpi_pm1_cnt_update(ACPIREGS *ar,
+                         bool sci_enable, bool sci_disable)
 {
+    /* ACPI specs 3.0, 4.7.2.5 */
+    if (ar->pm1.cnt.acpi_only) {
+        return;
+    }
+
+    if (sci_enable) {
+        ar->pm1.cnt.cnt |= ACPI_BITMASK_SCI_ENABLE;
+    } else if (sci_disable) {
+        ar->pm1.cnt.cnt &= ~ACPI_BITMASK_SCI_ENABLE;
+    }
+}
+
+static uint64_t acpi_pm_cnt_read(void *opaque, hwaddr addr, unsigned width)
+{
+    ACPIREGS *ar = opaque;
+    return ar->pm1.cnt.cnt >> addr * 8;
+}
+
+static void acpi_pm_cnt_write(void *opaque, hwaddr addr, uint64_t val,
+                              unsigned width)
+{
+    ACPIREGS *ar = opaque;
+
+    if (addr == 1) {
+        val = val << 8 | (ar->pm1.cnt.cnt & 0xff);
+    }
     ar->pm1.cnt.cnt = val & ~(ACPI_BITMASK_SLEEP_ENABLE);
 
     if (val & ACPI_BITMASK_SLEEP_ENABLE) {
@@ -573,33 +601,6 @@ static void acpi_pm1_cnt_write(ACPIREGS *ar, uint16_t val)
             break;
         }
     }
-}
-
-void acpi_pm1_cnt_update(ACPIREGS *ar,
-                         bool sci_enable, bool sci_disable)
-{
-    /* ACPI specs 3.0, 4.7.2.5 */
-    if (ar->pm1.cnt.acpi_only) {
-        return;
-    }
-
-    if (sci_enable) {
-        ar->pm1.cnt.cnt |= ACPI_BITMASK_SCI_ENABLE;
-    } else if (sci_disable) {
-        ar->pm1.cnt.cnt &= ~ACPI_BITMASK_SCI_ENABLE;
-    }
-}
-
-static uint64_t acpi_pm_cnt_read(void *opaque, hwaddr addr, unsigned width)
-{
-    ACPIREGS *ar = opaque;
-    return ar->pm1.cnt.cnt;
-}
-
-static void acpi_pm_cnt_write(void *opaque, hwaddr addr, uint64_t val,
-                              unsigned width)
-{
-    acpi_pm1_cnt_write(opaque, val);
 }
 
 static const MemoryRegionOps acpi_pm_cnt_ops = {
@@ -688,9 +689,11 @@ void acpi_gpe_ioport_writeb(ACPIREGS *ar, uint32_t addr, uint32_t val)
 
     cur = acpi_gpe_ioport_get_ptr(ar, addr);
     if (addr < ar->gpe.len / 2) {
+        trace_acpi_gpe_sts_ioport_writeb(addr, val);
         /* GPE_STS */
         *cur = (*cur) & ~val;
     } else if (addr < ar->gpe.len) {
+        trace_acpi_gpe_en_ioport_writeb(addr - (ar->gpe.len / 2), val);
         /* GPE_EN */
         *cur = val;
     } else {
@@ -707,6 +710,12 @@ uint32_t acpi_gpe_ioport_readb(ACPIREGS *ar, uint32_t addr)
     val = 0;
     if (cur != NULL) {
         val = *cur;
+    }
+
+    if (addr < ar->gpe.len / 2) {
+        trace_acpi_gpe_sts_ioport_readb(addr, val);
+    } else {
+        trace_acpi_gpe_en_ioport_readb(addr - (ar->gpe.len / 2), val);
     }
 
     return val;

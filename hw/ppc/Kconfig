@@ -3,7 +3,7 @@ config PSERIES
     imply PCI_DEVICES
     imply TEST_DEVICES
     imply VIRTIO_VGA
-    imply NVDIMM
+    select NVDIMM
     select DIMM
     select PCI
     select SPAPR_VSCSI
@@ -69,6 +69,13 @@ config SAM460EX
     select USB_OHCI
     select FDT_PPC
 
+config AMIGAONE
+    bool
+    imply ATI_VGA
+    select ARTICIA
+    select VT82C686
+    select SMBUS_EEPROM
+
 config PEGASOS2
     bool
     imply ATI_VGA
@@ -76,8 +83,6 @@ config PEGASOS2
     select VT82C686
     select SMBUS_EEPROM
     select VOF
-# This should come with VT82C686
-    select ACPI_X86
 
 config PREP
     bool
@@ -117,6 +122,7 @@ config MAC_NEWWORLD
     select MAC_PMU
     select UNIN_PCI
     select FW_CFG_PPC
+    select USB_OHCI_PCI
 
 config E500
     bool

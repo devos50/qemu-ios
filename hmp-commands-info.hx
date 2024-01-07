@@ -360,21 +360,6 @@ SRST
     Show host USB devices.
 ERST
 
-#if defined(CONFIG_TCG)
-    {
-        .name       = "profile",
-        .args_type  = "",
-        .params     = "",
-        .help       = "show profiling information",
-        .cmd_info_hrt = qmp_x_query_profile,
-    },
-#endif
-
-SRST
-  ``info profile``
-    Show profiling information.
-ERST
-
     {
         .name       = "capture",
         .args_type  = "",
@@ -992,4 +977,18 @@ ERST
 SRST
   ``info virtio-queue-element`` *path* *queue* [*index*]
     Display element of a given virtio queue
+ERST
+
+    {
+        .name       = "cryptodev",
+        .args_type  = "",
+        .params     = "",
+        .help       = "show the crypto devices",
+        .cmd        = hmp_info_cryptodev,
+        .flags      = "p",
+    },
+
+SRST
+  ``info cryptodev``
+    Show the crypto devices.
 ERST

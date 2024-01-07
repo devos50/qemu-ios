@@ -30,6 +30,7 @@
 #include "hw/arm/ipod_touch_tvout.h"
 #include "hw/arm/guest-services/general.h"
 
+
 #define TYPE_IPOD_TOUCH "iPod-Touch"
 
 #define S5L8720_VIC_N	  2
@@ -158,5 +159,3 @@ typedef struct {
 	IT2G_CPREG_VAR_DEF(REG1);
   IT2G_CPREG_VAR_DEF(QEMU_CALL);
 } IPodTouchMachineState;
-
-#endif

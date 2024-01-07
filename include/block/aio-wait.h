@@ -63,7 +63,7 @@ extern AioWait global_aio_wait;
  * @ctx: the aio context, or NULL if multiple aio contexts (for which the
  *       caller does not hold a lock) are involved in the polling condition.
  * @cond: wait while this conditional expression is true
- * @unlock: whether to unlock and then lock again @ctx. This apples
+ * @unlock: whether to unlock and then lock again @ctx. This applies
  * only when waiting for another AioContext from the main loop.
  * Otherwise it's ignored.
  *
@@ -85,7 +85,7 @@ extern AioWait global_aio_wait;
     /* Increment wait_->num_waiters before evaluating cond. */     \
     qatomic_inc(&wait_->num_waiters);                              \
     /* Paired with smp_mb in aio_wait_kick(). */                   \
-    smp_mb();                                                      \
+    smp_mb__after_rmw();                                           \
     if (ctx_ && in_aio_context_home_thread(ctx_)) {                \
         while ((cond)) {                                           \
             aio_poll(ctx_, true);                                  \
@@ -131,7 +131,7 @@ void aio_wait_kick(void);
  *
  * Run a BH in @ctx and wait for it to complete.
  *
- * Must be called from the main loop thread with @ctx acquired exactly once.
+ * Must be called from the main loop thread without @ctx acquired.
  * Note that main loop event processing may occur.
  */
 void aio_wait_bh_oneshot(AioContext *ctx, QEMUBHFunc *cb, void *opaque);

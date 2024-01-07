@@ -1,5 +1,5 @@
 /*
- *  Copyright(c) 2019-2022 Qualcomm Innovation Center, Inc. All Rights Reserved.
+ *  Copyright(c) 2019-2023 Qualcomm Innovation Center, Inc. All Rights Reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,7 +18,6 @@
 #ifndef HEXAGON_MMVEC_MACROS_H
 #define HEXAGON_MMVEC_MACROS_H
 
-#include "qemu/osdep.h"
 #include "qemu/host-utils.h"
 #include "arch.h"
 #include "mmvec/system_ext_mmvec.h"
@@ -202,7 +201,7 @@
     } while (0)
 #define SCATTER_OP_WRITE_TO_MEM(TYPE) \
     do { \
-        uintptr_t ra = GETPC(); \
+        ra = GETPC(); \
         for (int i = 0; i < sizeof(MMVector); i += sizeof(TYPE)) { \
             if (test_bit(i, env->vtcm_log.mask)) { \
                 TYPE dst = 0; \
@@ -347,4 +346,11 @@
 #define fUARCH_NOTE_PUMP_2X()
 
 #define IV1DEAD()
+
+#define fGET10BIT(COE, VAL, POS) \
+    do { \
+        COE = (sextract32(VAL, 24 + 2 * POS, 2) << 8) | \
+               extract32(VAL, POS * 8, 8); \
+    } while (0);
+
 #endif

@@ -1,5 +1,5 @@
 /*
- *  Copyright(c) 2019-2022 rev.ng Labs Srl. All Rights Reserved.
+ *  Copyright(c) 2019-2023 rev.ng Labs Srl. All Rights Reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -167,8 +167,9 @@ void reg_print(Context *c, YYLTYPE *locp, HexReg *reg)
     EMIT(c, "hex_gpr[%u]", reg->id);
 }
 
-void imm_print(Context *c, YYLTYPE *locp, HexImm *imm)
+void imm_print(Context *c, YYLTYPE *locp, HexValue *rvalue)
 {
+    HexImm *imm = &rvalue->imm;
     switch (imm->type) {
     case I:
         EMIT(c, "i");
@@ -177,16 +178,27 @@ void imm_print(Context *c, YYLTYPE *locp, HexImm *imm)
         EMIT(c, "%ciV", imm->id);
         break;
     case VALUE:
-        EMIT(c, "((int64_t) %" PRIu64 "ULL)", (int64_t) imm->value);
+        if (rvalue->bit_width == 32) {
+            if (rvalue->signedness == UNSIGNED) {
+                EMIT(c, "((uint32_t) 0x%" PRIx32 ")", (uint32_t) imm->value);
+            }  else {
+                EMIT(c, "((int32_t) 0x%" PRIx32 ")", (int32_t) imm->value);
+            }
+        } else if (rvalue->bit_width == 64) {
+            if (rvalue->signedness == UNSIGNED) {
+                EMIT(c, "((uint64_t) 0x%" PRIx64 "ULL)", (uint64_t) imm->value);
+            } else {
+                EMIT(c, "((int64_t) 0x%" PRIx64 "LL)", (int64_t) imm->value);
+            }
+        } else {
+            g_assert_not_reached();
+        }
         break;
     case QEMU_TMP:
         EMIT(c, "qemu_tmp_%" PRIu64, imm->index);
         break;
     case IMM_PC:
         EMIT(c, "ctx->base.pc_next");
-        break;
-    case IMM_NPC:
-        EMIT(c, "ctx->npc");
         break;
     case IMM_CONSTEXT:
         EMIT(c, "insn->extension_valid");
@@ -216,7 +228,7 @@ void rvalue_print(Context *c, YYLTYPE *locp, void *pointer)
       tmp_print(c, locp, &rvalue->tmp);
       break;
   case IMMEDIATE:
-      imm_print(c, locp, &rvalue->imm);
+      imm_print(c, locp, rvalue);
       break;
   case VARID:
       var_print(c, locp, &rvalue->var);
@@ -278,7 +290,6 @@ static HexValue gen_constant(Context *c,
     rvalue.bit_width = bit_width;
     rvalue.signedness = signedness;
     rvalue.is_dotnew = false;
-    rvalue.is_manual = true;
     rvalue.tmp.index = c->inst.tmp_count;
     OUT(c, locp, "TCGv_i", &bit_width, " tmp_", &c->inst.tmp_count,
         " = tcg_constant_i", &bit_width, "(", value, ");\n");
@@ -299,7 +310,6 @@ HexValue gen_tmp(Context *c,
     rvalue.bit_width = bit_width;
     rvalue.signedness = signedness;
     rvalue.is_dotnew = false;
-    rvalue.is_manual = false;
     rvalue.tmp.index = c->inst.tmp_count;
     OUT(c, locp, "TCGv_i", &bit_width, " tmp_", &c->inst.tmp_count,
         " = tcg_temp_new_i", &bit_width, "();\n");
@@ -307,50 +317,9 @@ HexValue gen_tmp(Context *c,
     return rvalue;
 }
 
-HexValue gen_tmp_local(Context *c,
-                       YYLTYPE *locp,
-                       unsigned bit_width,
-                       HexSignedness signedness)
-{
-    HexValue rvalue;
-    assert(bit_width == 32 || bit_width == 64);
-    memset(&rvalue, 0, sizeof(HexValue));
-    rvalue.type = TEMP;
-    rvalue.bit_width = bit_width;
-    rvalue.signedness = signedness;
-    rvalue.is_dotnew = false;
-    rvalue.is_manual = false;
-    rvalue.tmp.index = c->inst.tmp_count;
-    OUT(c, locp, "TCGv_i", &bit_width, " tmp_", &c->inst.tmp_count,
-        " = tcg_temp_local_new_i", &bit_width, "();\n");
-    c->inst.tmp_count++;
-    return rvalue;
-}
-
-HexValue gen_tmp_value(Context *c,
-                       YYLTYPE *locp,
-                       const char *value,
-                       unsigned bit_width,
-                       HexSignedness signedness)
-{
-    HexValue rvalue;
-    assert(bit_width == 32 || bit_width == 64);
-    memset(&rvalue, 0, sizeof(HexValue));
-    rvalue.type = TEMP;
-    rvalue.bit_width = bit_width;
-    rvalue.signedness = signedness;
-    rvalue.is_dotnew = false;
-    rvalue.is_manual = false;
-    rvalue.tmp.index = c->inst.tmp_count;
-    OUT(c, locp, "TCGv_i", &bit_width, " tmp_", &c->inst.tmp_count,
-        " = tcg_const_i", &bit_width, "(", value, ");\n");
-    c->inst.tmp_count++;
-    return rvalue;
-}
-
-static HexValue gen_tmp_value_from_imm(Context *c,
-                                       YYLTYPE *locp,
-                                       HexValue *value)
+static HexValue gen_constant_from_imm(Context *c,
+                                      YYLTYPE *locp,
+                                      HexValue *value)
 {
     HexValue rvalue;
     assert(value->type == IMMEDIATE);
@@ -359,14 +328,13 @@ static HexValue gen_tmp_value_from_imm(Context *c,
     rvalue.bit_width = value->bit_width;
     rvalue.signedness = value->signedness;
     rvalue.is_dotnew = false;
-    rvalue.is_manual = false;
     rvalue.tmp.index = c->inst.tmp_count;
     /*
-     * Here we output the call to `tcg_const_i<width>` in
+     * Here we output the call to `tcg_constant_i<width>` in
      * order to create the temporary value. Note, that we
      * add a cast
      *
-     *   `tcg_const_i<width>`((int<width>_t) ...)`
+     *   `tcg_constant_i<width>`((int<width>_t) ...)`
      *
      * This cast is required to avoid implicit integer
      * conversion warnings since all immediates are
@@ -374,7 +342,7 @@ static HexValue gen_tmp_value_from_imm(Context *c,
      * integer is 32-bit.
      */
     OUT(c, locp, "TCGv_i", &rvalue.bit_width, " tmp_", &c->inst.tmp_count);
-    OUT(c, locp, " = tcg_const_i", &rvalue.bit_width,
+    OUT(c, locp, " = tcg_constant_i", &rvalue.bit_width,
         "((int", &rvalue.bit_width, "_t) (", value, "));\n");
 
     c->inst.tmp_count++;
@@ -395,7 +363,6 @@ HexValue gen_imm_value(Context *c __attribute__((unused)),
     rvalue.bit_width = bit_width;
     rvalue.signedness = signedness;
     rvalue.is_dotnew = false;
-    rvalue.is_manual = false;
     rvalue.imm.type = VALUE;
     rvalue.imm.value = value;
     return rvalue;
@@ -410,7 +377,6 @@ HexValue gen_imm_qemu_tmp(Context *c, YYLTYPE *locp, unsigned bit_width,
     memset(&rvalue, 0, sizeof(HexValue));
     rvalue.type = IMMEDIATE;
     rvalue.is_dotnew = false;
-    rvalue.is_manual = false;
     rvalue.bit_width = bit_width;
     rvalue.signedness = signedness;
     rvalue.imm.type = QEMU_TMP;
@@ -418,26 +384,10 @@ HexValue gen_imm_qemu_tmp(Context *c, YYLTYPE *locp, unsigned bit_width,
     return rvalue;
 }
 
-void gen_rvalue_free(Context *c, YYLTYPE *locp, HexValue *rvalue)
-{
-    if (rvalue->type == TEMP && !rvalue->is_manual) {
-        const char *bit_suffix = (rvalue->bit_width == 64) ? "i64" : "i32";
-        OUT(c, locp, "tcg_temp_free_", bit_suffix, "(", rvalue, ");\n");
-    }
-}
-
-static void gen_rvalue_free_manual(Context *c, YYLTYPE *locp, HexValue *rvalue)
-{
-    rvalue->is_manual = false;
-    gen_rvalue_free(c, locp, rvalue);
-}
-
 HexValue rvalue_materialize(Context *c, YYLTYPE *locp, HexValue *rvalue)
 {
     if (rvalue->type == IMMEDIATE) {
-        HexValue res = gen_tmp_value_from_imm(c, locp, rvalue);
-        gen_rvalue_free(c, locp, rvalue);
-        return res;
+        return gen_constant_from_imm(c, locp, rvalue);
     }
     return *rvalue;
 }
@@ -451,13 +401,10 @@ HexValue gen_rvalue_extend(Context *c, YYLTYPE *locp, HexValue *rvalue)
 
     if (rvalue->type == IMMEDIATE) {
         HexValue res = gen_imm_qemu_tmp(c, locp, 64, rvalue->signedness);
-        bool is_unsigned = (rvalue->signedness == UNSIGNED);
-        const char *sign_suffix = is_unsigned ? "u" : "";
         gen_c_int_type(c, locp, 64, rvalue->signedness);
-        OUT(c, locp, " ", &res, " = ");
-        OUT(c, locp, "(", sign_suffix, "int64_t) ");
-        OUT(c, locp, "(", sign_suffix, "int32_t) ");
-        OUT(c, locp, rvalue, ";\n");
+        OUT(c, locp, " ", &res, " = (");
+        gen_c_int_type(c, locp, 64, rvalue->signedness);
+        OUT(c, locp, ")", rvalue, ";\n");
         return res;
     } else {
         HexValue res = gen_tmp(c, locp, 64, rvalue->signedness);
@@ -465,7 +412,6 @@ HexValue gen_rvalue_extend(Context *c, YYLTYPE *locp, HexValue *rvalue)
         const char *sign_suffix = is_unsigned ? "u" : "";
         OUT(c, locp, "tcg_gen_ext", sign_suffix,
             "_i32_i64(", &res, ", ", rvalue, ");\n");
-        gen_rvalue_free(c, locp, rvalue);
         return res;
     }
 }
@@ -480,7 +426,6 @@ HexValue gen_rvalue_truncate(Context *c, YYLTYPE *locp, HexValue *rvalue)
         if (rvalue->bit_width == 64) {
             HexValue res = gen_tmp(c, locp, 32, rvalue->signedness);
             OUT(c, locp, "tcg_gen_trunc_i64_tl(", &res, ", ", rvalue, ");\n");
-            gen_rvalue_free(c, locp, rvalue);
             return res;
         }
     }
@@ -514,7 +459,7 @@ static bool try_find_variable(Context *c, YYLTYPE *locp,
     return false;
 }
 
-/* Calls `try_find_variable` and asserts succcess. */
+/* Calls `try_find_variable` and asserts success. */
 static void find_variable(Context *c, YYLTYPE *locp,
                           HexValue *dst,
                           HexValue *varid)
@@ -554,7 +499,7 @@ void gen_varid_allocate(Context *c,
     new_var.signedness = signedness;
 
     EMIT_HEAD(c, "TCGv_%s %s", bit_suffix, varid->var.name->str);
-    EMIT_HEAD(c, " = tcg_temp_local_new_%s();\n", bit_suffix);
+    EMIT_HEAD(c, " = tcg_temp_new_%s();\n", bit_suffix);
     g_array_append_val(c->inst.allocated, new_var);
 }
 
@@ -604,14 +549,9 @@ HexValue gen_bin_cmp(Context *c,
             ");\n");
         break;
     default:
-        fprintf(stderr, "Error in evalutating immediateness!");
+        fprintf(stderr, "Error in evaluating immediateness!");
         abort();
     }
-
-    /* Free operands */
-    gen_rvalue_free(c, locp, &op1_m);
-    gen_rvalue_free(c, locp, &op2_m);
-
     return res;
 }
 
@@ -647,8 +587,6 @@ static void gen_simple_op(Context *c, YYLTYPE *locp, unsigned bit_width,
             "(", res, ", ", op1, ", ", op2, ");\n");
         break;
     }
-    gen_rvalue_free(c, locp, op1);
-    gen_rvalue_free(c, locp, op2);
 }
 
 static void gen_sub_op(Context *c, YYLTYPE *locp, unsigned bit_width,
@@ -678,8 +616,6 @@ static void gen_sub_op(Context *c, YYLTYPE *locp, unsigned bit_width,
             "(", res, ", ", op1, ", ", op2, ");\n");
     } break;
     }
-    gen_rvalue_free(c, locp, op1);
-    gen_rvalue_free(c, locp, op2);
 }
 
 static void gen_asl_op(Context *c, YYLTYPE *locp, unsigned bit_width,
@@ -731,10 +667,7 @@ static void gen_asl_op(Context *c, YYLTYPE *locp, unsigned bit_width,
         OUT(c, locp, "tcg_gen_movcond_i", &bit_width);
         OUT(c, locp, "(TCG_COND_GEU, ", res, ", ", &op2_m, ", ", &edge);
         OUT(c, locp, ", ", &zero, ", ", res, ");\n");
-        gen_rvalue_free(c, locp, &edge);
     }
-    gen_rvalue_free(c, locp, &op1_m);
-    gen_rvalue_free(c, locp, &op2_m);
 }
 
 static void gen_asr_op(Context *c, YYLTYPE *locp, unsigned bit_width,
@@ -789,11 +722,7 @@ static void gen_asr_op(Context *c, YYLTYPE *locp, unsigned bit_width,
         OUT(c, locp, "tcg_gen_movcond_i", &bit_width);
         OUT(c, locp, "(TCG_COND_GEU, ", res, ", ", &op2_m, ", ", &edge);
         OUT(c, locp, ", ", &tmp, ", ", res, ");\n");
-        gen_rvalue_free(c, locp, &edge);
-        gen_rvalue_free(c, locp, &tmp);
     }
-    gen_rvalue_free(c, locp, &op1_m);
-    gen_rvalue_free(c, locp, &op2_m);
 }
 
 static void gen_lsr_op(Context *c, YYLTYPE *locp, unsigned bit_width,
@@ -835,10 +764,7 @@ static void gen_lsr_op(Context *c, YYLTYPE *locp, unsigned bit_width,
         OUT(c, locp, "tcg_gen_movcond_i", &bit_width);
         OUT(c, locp, "(TCG_COND_GEU, ", res, ", ", &op2_m, ", ", &edge);
         OUT(c, locp, ", ", &zero, ", ", res, ");\n");
-        gen_rvalue_free(c, locp, &edge);
     }
-    gen_rvalue_free(c, locp, &op1_m);
-    gen_rvalue_free(c, locp, &op2_m);
 }
 
 /*
@@ -867,9 +793,6 @@ static void gen_andl_op(Context *c, YYLTYPE *locp, unsigned bit_width,
         tmp2 = gen_bin_cmp(c, locp, TCG_COND_NE, op2, &zero);
         OUT(c, locp, "tcg_gen_and_", bit_suffix,
             "(", res, ", ", &tmp1, ", ", &tmp2, ");\n");
-        gen_rvalue_free_manual(c, locp, &zero);
-        gen_rvalue_free(c, locp, &tmp1);
-        gen_rvalue_free(c, locp, &tmp2);
         break;
     }
 }
@@ -912,8 +835,6 @@ static void gen_minmax_op(Context *c, YYLTYPE *locp, unsigned bit_width,
         OUT(c, locp, res, ", ", op1, ", ", &op2_m, ");\n");
         break;
     }
-    gen_rvalue_free(c, locp, &op1_m);
-    gen_rvalue_free(c, locp, &op2_m);
 }
 
 /* Code generation functions */
@@ -1050,34 +971,18 @@ HexValue gen_cast_op(Context *c,
                      unsigned target_width,
                      HexSignedness signedness)
 {
+    HexValue res;
     assert_signedness(c, locp, src->signedness);
     if (src->bit_width == target_width) {
-        return *src;
-    } else if (src->type == IMMEDIATE) {
-        HexValue res = *src;
-        res.bit_width = target_width;
-        res.signedness = signedness;
-        return res;
+        res = *src;
+    } else if (src->bit_width < target_width) {
+        res = gen_rvalue_extend(c, locp, src);
     } else {
-        HexValue res = gen_tmp(c, locp, target_width, signedness);
-        /* Truncate */
-        if (src->bit_width > target_width) {
-            OUT(c, locp, "tcg_gen_trunc_i64_tl(", &res, ", ", src, ");\n");
-        } else {
-            assert_signedness(c, locp, src->signedness);
-            if (src->signedness == UNSIGNED) {
-                /* Extend unsigned */
-                OUT(c, locp, "tcg_gen_extu_i32_i64(",
-                    &res, ", ", src, ");\n");
-            } else {
-                /* Extend signed */
-                OUT(c, locp, "tcg_gen_ext_i32_i64(",
-                    &res, ", ", src, ");\n");
-            }
-        }
-        gen_rvalue_free(c, locp, src);
-        return res;
+        /* src->bit_width > target_width */
+        res = gen_rvalue_truncate(c, locp, src);
     }
+    res.signedness = signedness;
+    return res;
 }
 
 
@@ -1135,8 +1040,6 @@ static HexValue gen_extend_imm_width_op(Context *c,
         if (need_guarding) {
             OUT(c, locp, "}\n");
         }
-
-        gen_rvalue_free(c, locp, value);
         return res;
     } else {
         /*
@@ -1161,8 +1064,6 @@ static HexValue gen_extend_imm_width_op(Context *c,
                 ", 0);\n");
             OUT(c, locp, "}\n");
         }
-
-        gen_rvalue_free(c, locp, value);
         return res;
     }
 }
@@ -1193,16 +1094,11 @@ static HexValue gen_extend_tcg_width_op(Context *c,
     OUT(c, locp, "tcg_gen_subfi_i", &dst_width);
     OUT(c, locp, "(", &shift, ", ", &dst_width, ", ", &src_width_m, ");\n");
     if (signedness == UNSIGNED) {
-        const char *mask_str = (dst_width == 32)
-            ? "0xffffffff"
-            : "0xffffffffffffffff";
-        HexValue mask = gen_tmp_value(c, locp, mask_str,
-                                     dst_width, UNSIGNED);
+        HexValue mask = gen_constant(c, locp, "-1", dst_width, UNSIGNED);
         OUT(c, locp, "tcg_gen_shr_i", &dst_width, "(",
-            &mask, ", ", &mask, ", ", &shift, ");\n");
+            &res, ", ", &mask, ", ", &shift, ");\n");
         OUT(c, locp, "tcg_gen_and_i", &dst_width, "(",
-            &res, ", ", value, ", ", &mask, ");\n");
-        gen_rvalue_free(c, locp, &mask);
+            &res, ", ", &res, ", ", value, ");\n");
     } else {
         OUT(c, locp, "tcg_gen_shl_i", &dst_width, "(",
             &res, ", ", value, ", ", &shift, ");\n");
@@ -1214,10 +1110,6 @@ static HexValue gen_extend_tcg_width_op(Context *c,
     OUT(c, locp, &src_width_m, ", ", &zero, ", ", &zero, ", ", &res,
         ");\n");
 
-    gen_rvalue_free(c, locp, &src_width_m);
-    gen_rvalue_free(c, locp, value);
-    gen_rvalue_free(c, locp, &shift);
-
     return res;
 }
 
@@ -1228,7 +1120,7 @@ HexValue gen_extend_op(Context *c,
                        HexValue *value,
                        HexSignedness signedness)
 {
-    unsigned bit_width = (dst_width = 64) ? 64 : 32;
+    unsigned bit_width = (dst_width == 64) ? 64 : 32;
     HexValue value_m = *value;
     HexValue src_width_m = *src_width;
 
@@ -1272,7 +1164,7 @@ void gen_rdeposit_op(Context *c,
 {
     /*
      * Otherwise if the width is not known, we fallback on reimplementing
-     * desposit in TCG.
+     * deposit in TCG.
      */
     HexValue begin_m = *begin;
     HexValue value_m = *value;
@@ -1313,15 +1205,12 @@ void gen_rdeposit_op(Context *c,
      */
     k64 = gen_bin_op(c, locp, SUB_OP, &k64, &width_m);
     mask = gen_bin_op(c, locp, LSR_OP, &mask, &k64);
-    begin_m.is_manual = true;
     mask = gen_bin_op(c, locp, ASL_OP, &mask, &begin_m);
-    mask.is_manual = true;
     value_m = gen_bin_op(c, locp, ASL_OP, &value_m, &begin_m);
     value_m = gen_bin_op(c, locp, ANDB_OP, &value_m, &mask);
 
     OUT(c, locp, "tcg_gen_not_i", &dst->bit_width, "(", &mask, ", ",
         &mask, ");\n");
-    mask.is_manual = false;
     res = gen_bin_op(c, locp, ANDB_OP, dst, &mask);
     res = gen_bin_op(c, locp, ORB_OP, &res, &value_m);
 
@@ -1336,9 +1225,6 @@ void gen_rdeposit_op(Context *c,
         dst);
     OUT(c, locp, ", ", &width_m, ", ", &zero, ", ", &res, ", ", dst,
         ");\n");
-
-    gen_rvalue_free(c, locp, width);
-    gen_rvalue_free(c, locp, &res);
 }
 
 void gen_deposit_op(Context *c,
@@ -1372,8 +1258,6 @@ void gen_deposit_op(Context *c,
     value_m = rvalue_materialize(c, locp, &value_m);
     OUT(c, locp, "tcg_gen_deposit_i", &bit_width, "(", dst, ", ", dst, ", ");
     OUT(c, locp, &value_m, ", ", index, " * ", &width, ", ", &width, ");\n");
-    gen_rvalue_free(c, locp, index);
-    gen_rvalue_free(c, locp, &value_m);
 }
 
 HexValue gen_rextract_op(Context *c,
@@ -1386,7 +1270,6 @@ HexValue gen_rextract_op(Context *c,
     HexValue res = gen_tmp(c, locp, bit_width, UNSIGNED);
     OUT(c, locp, "tcg_gen_extract_i", &bit_width, "(", &res);
     OUT(c, locp, ", ", src, ", ", &begin, ", ", &width, ");\n");
-    gen_rvalue_free(c, locp, src);
     return res;
 }
 
@@ -1419,12 +1302,8 @@ HexValue gen_extract_op(Context *c,
         const char *sign_suffix = (extract->signedness == UNSIGNED) ? "u" : "";
         OUT(c, locp, "tcg_gen_ext", sign_suffix, "_i32_i64(",
             &tmp, ", ", &res, ");\n");
-        gen_rvalue_free(c, locp, &res);
         res = tmp;
     }
-
-    gen_rvalue_free(c, locp, src);
-    gen_rvalue_free(c, locp, index);
     return res;
 }
 
@@ -1436,14 +1315,8 @@ void gen_write_reg(Context *c, YYLTYPE *locp, HexValue *reg, HexValue *value)
     value_m = rvalue_materialize(c, locp, &value_m);
     OUT(c,
         locp,
-        "gen_log_reg_write(", &reg->reg.id, ", ",
+        "gen_log_reg_write(ctx, ", &reg->reg.id, ", ",
         &value_m, ");\n");
-    OUT(c,
-        locp,
-        "ctx_log_reg_write(ctx, ", &reg->reg.id,
-        ");\n");
-    gen_rvalue_free(c, locp, reg);
-    gen_rvalue_free(c, locp, &value_m);
 }
 
 void gen_assign(Context *c,
@@ -1478,8 +1351,6 @@ void gen_assign(Context *c,
     const char *imm_suffix = (value_m.type == IMMEDIATE) ? "i" : "";
     OUT(c, locp, "tcg_gen_mov", imm_suffix, "_i", &bit_width,
         "(", dst, ", ", &value_m, ");\n");
-
-    gen_rvalue_free(c, locp, &value_m);
 }
 
 HexValue gen_convround(Context *c,
@@ -1495,20 +1366,12 @@ HexValue gen_convround(Context *c,
     HexValue and;
     HexValue src_p1;
 
-    src_m.is_manual = true;
-
     and = gen_bin_op(c, locp, ANDB_OP, &src_m, &mask);
     src_p1 = gen_bin_op(c, locp, ADD_OP, &src_m, &one);
 
     OUT(c, locp, "tcg_gen_movcond_i", size, "(TCG_COND_EQ, ", &res);
     OUT(c, locp, ", ", &and, ", ", &mask, ", ");
     OUT(c, locp, &src_p1, ", ", &src_m, ");\n");
-
-    /* Free src but use the original `is_manual` value */
-    gen_rvalue_free(c, locp, src);
-
-    /* Free the rest of the values */
-    gen_rvalue_free(c, locp, &src_p1);
 
     return res;
 }
@@ -1535,9 +1398,6 @@ static HexValue gen_convround_n_b(Context *c,
     OUT(c, locp, "tcg_gen_add_i64(", &res);
     OUT(c, locp, ", ", &res, ", ", &tmp_64, ");\n");
 
-    gen_rvalue_free(c, locp, &tmp);
-    gen_rvalue_free(c, locp, &tmp_64);
-
     return res;
 }
 
@@ -1559,10 +1419,6 @@ static HexValue gen_convround_n_c(Context *c,
     OUT(c, locp, "tcg_gen_ext_i32_i64(", &tmp_64, ", ", &tmp, ");\n");
     OUT(c, locp, "tcg_gen_add_i64(", &res);
     OUT(c, locp, ", ", &res, ", ", &tmp_64, ");\n");
-
-    gen_rvalue_free(c, locp, &one);
-    gen_rvalue_free(c, locp, &tmp);
-    gen_rvalue_free(c, locp, &tmp_64);
 
     return res;
 }
@@ -1634,18 +1490,6 @@ HexValue gen_convround_n(Context *c,
     OUT(c, locp, "tcg_gen_shr_i64(", &res);
     OUT(c, locp, ", ", &res, ", ", &n_64, ");\n");
 
-    gen_rvalue_free(c, locp, &src_casted);
-    gen_rvalue_free(c, locp, &pos_casted);
-
-    gen_rvalue_free(c, locp, &r1);
-    gen_rvalue_free(c, locp, &r2);
-    gen_rvalue_free(c, locp, &r3);
-
-    gen_rvalue_free(c, locp, &cond);
-    gen_rvalue_free(c, locp, &cond_64);
-    gen_rvalue_free(c, locp, &mask);
-    gen_rvalue_free(c, locp, &n_64);
-
     res = gen_rvalue_truncate(c, locp, &res);
     return res;
 }
@@ -1679,10 +1523,6 @@ HexValue gen_round(Context *c,
     b = gen_extend_op(c, locp, &src_width, 64, pos, UNSIGNED);
     b = rvalue_materialize(c, locp, &b);
 
-    /* Disable auto-free of values used more than once */
-    a.is_manual = true;
-    b.is_manual = true;
-
     n_m1 = gen_bin_op(c, locp, SUB_OP, &b, &one);
     shifted = gen_bin_op(c, locp, ASL_OP, &one, &n_m1);
     sum = gen_bin_op(c, locp, ADD_OP, &shifted, &a);
@@ -1690,10 +1530,6 @@ HexValue gen_round(Context *c,
     OUT(c, locp, "tcg_gen_movcond_i64");
     OUT(c, locp, "(TCG_COND_EQ, ", &res, ", ", &b, ", ", &zero);
     OUT(c, locp, ", ", &a, ", ", &sum, ");\n");
-
-    gen_rvalue_free_manual(c, locp, &a);
-    gen_rvalue_free_manual(c, locp, &b);
-    gen_rvalue_free(c, locp, &sum);
 
     return res;
 }
@@ -1720,9 +1556,6 @@ void gen_circ_op(Context *c,
         ", ",
         modifier);
     OUT(c, locp, ", ", &cs, ");\n");
-    gen_rvalue_free(c, locp, &increment_m);
-    gen_rvalue_free(c, locp, modifier);
-    gen_rvalue_free(c, locp, &cs);
 }
 
 HexValue gen_locnt_op(Context *c, YYLTYPE *locp, HexValue *src)
@@ -1738,7 +1571,6 @@ HexValue gen_locnt_op(Context *c, YYLTYPE *locp, HexValue *src)
         &res, ", ", &src_m, ");\n");
     OUT(c, locp, "tcg_gen_clzi_i", bit_suffix, "(", &res, ", ", &res, ", ");
     OUT(c, locp, bit_suffix, ");\n");
-    gen_rvalue_free(c, locp, &src_m);
     return res;
 }
 
@@ -1752,7 +1584,6 @@ HexValue gen_ctpop_op(Context *c, YYLTYPE *locp, HexValue *src)
     src_m = rvalue_materialize(c, locp, &src_m);
     OUT(c, locp, "tcg_gen_ctpop_i", bit_suffix,
         "(", &res, ", ", &src_m, ");\n");
-    gen_rvalue_free(c, locp, &src_m);
     return res;
 }
 
@@ -1771,8 +1602,6 @@ HexValue gen_rotl(Context *c, YYLTYPE *locp, HexValue *src, HexValue *width)
     amount = rvalue_materialize(c, locp, &amount);
     OUT(c, locp, "tcg_gen_rotl_", suffix, "(",
         &res, ", ", src, ", ", &amount, ");\n");
-    gen_rvalue_free(c, locp, src);
-    gen_rvalue_free(c, locp, &amount);
 
     return res;
 }
@@ -1797,10 +1626,6 @@ HexValue gen_carry_from_add(Context *c,
     OUT(c, locp, "tcg_gen_add2_i64(", &res, ", ", &cf, ", ", &res, ", ", &cf);
     OUT(c, locp, ", ", &op2_m, ", ", &zero, ");\n");
 
-    gen_rvalue_free(c, locp, &op1_m);
-    gen_rvalue_free(c, locp, &op2_m);
-    gen_rvalue_free(c, locp, &op3_m);
-    gen_rvalue_free(c, locp, &res);
     return cf;
 }
 
@@ -1812,7 +1637,8 @@ void gen_addsat64(Context *c,
 {
     HexValue op1_m = rvalue_materialize(c, locp, op1);
     HexValue op2_m = rvalue_materialize(c, locp, op2);
-    OUT(c, locp, "gen_add_sat_i64(", dst, ", ", &op1_m, ", ", &op2_m, ");\n");
+    OUT(c, locp, "gen_add_sat_i64(ctx, ", dst, ", ", &op1_m, ", ",
+                                  &op2_m, ");\n");
 }
 
 void gen_inst(Context *c, GString *iname)
@@ -1840,9 +1666,7 @@ void gen_inst_init_args(Context *c, YYLTYPE *locp)
     for (unsigned i = 0; i < c->inst.init_list->len; i++) {
         HexValue *val = &g_array_index(c->inst.init_list, HexValue, i);
         if (val->type == REGISTER_ARG) {
-            char reg_id[5];
-            reg_compose(c, locp, &val->reg, reg_id);
-            EMIT_HEAD(c, "tcg_gen_movi_i%u(%s, 0);\n", val->bit_width, reg_id);
+            /* Nothing to do here */
         } else if (val->type == PREDICATE) {
             char suffix = val->is_dotnew ? 'N' : 'V';
             EMIT_HEAD(c, "tcg_gen_movi_i%u(P%c%c, 0);\n", val->bit_width,
@@ -1865,7 +1689,6 @@ void gen_inst_code(Context *c, YYLTYPE *locp)
                 c->inst.name->str,
                 c->inst.error_count);
     } else {
-        free_variables(c, locp);
         c->implemented_insn++;
         fprintf(c->enabled_file, "%s\n", c->inst.name->str);
         emit_footer(c);
@@ -1885,20 +1708,14 @@ void gen_pred_assign(Context *c, YYLTYPE *locp, HexValue *left_pred,
              "Predicate assign not allowed in ternary!");
     /* Extract predicate TCGv */
     if (is_direct) {
-        *left_pred = gen_tmp_value(c, locp, "0", 32, UNSIGNED);
+        *left_pred = gen_tmp(c, locp, 32, UNSIGNED);
     }
     /* Extract first 8 bits, and store new predicate value */
-    OUT(c, locp, "tcg_gen_mov_i32(", left_pred, ", ", &r, ");\n");
-    OUT(c, locp, "tcg_gen_andi_i32(", left_pred, ", ", left_pred,
-        ", 0xff);\n");
+    OUT(c, locp, "tcg_gen_andi_i32(", left_pred, ", ", &r, ", 0xff);\n");
     if (is_direct) {
         OUT(c, locp, "gen_log_pred_write(ctx, ", pred_id, ", ", left_pred,
             ");\n");
-        OUT(c, locp, "ctx_log_pred_write(ctx, ", pred_id, ");\n");
-        gen_rvalue_free(c, locp, left_pred);
     }
-    /* Free temporary value */
-    gen_rvalue_free(c, locp, &r);
 }
 
 void gen_cancel(Context *c, YYLTYPE *locp)
@@ -1908,7 +1725,6 @@ void gen_cancel(Context *c, YYLTYPE *locp)
 
 void gen_load_cancel(Context *c, YYLTYPE *locp)
 {
-    gen_cancel(c, locp);
     OUT(c, locp, "if (insn->slot == 0 && pkt->pkt_has_store_s1) {\n");
     OUT(c, locp, "ctx->s1_store_processed = false;\n");
     OUT(c, locp, "process_store(ctx, 1);\n");
@@ -1918,38 +1734,34 @@ void gen_load_cancel(Context *c, YYLTYPE *locp)
 void gen_load(Context *c, YYLTYPE *locp, HexValue *width,
               HexSignedness signedness, HexValue *ea, HexValue *dst)
 {
-    char size_suffix[4] = {0};
-    const char *sign_suffix;
+    unsigned dst_bit_width;
+    unsigned src_bit_width;
+
     /* Memop width is specified in the load macro */
     assert_signedness(c, locp, signedness);
-    sign_suffix = (width->imm.value > 4)
-                   ? ""
-                   : ((signedness == UNSIGNED) ? "u" : "s");
+
     /* If dst is a variable, assert that is declared and load the type info */
     if (dst->type == VARID) {
         find_variable(c, locp, dst, dst);
     }
 
-    snprintf(size_suffix, 4, "%" PRIu64, width->imm.value * 8);
+    src_bit_width = width->imm.value * 8;
+    dst_bit_width = MAX(dst->bit_width, 32);
+
     /* Lookup the effective address EA */
     find_variable(c, locp, ea, ea);
     OUT(c, locp, "if (insn->slot == 0 && pkt->pkt_has_store_s1) {\n");
     OUT(c, locp, "probe_noshuf_load(", ea, ", ", width, ", ctx->mem_idx);\n");
     OUT(c, locp, "process_store(ctx, 1);\n");
     OUT(c, locp, "}\n");
-    OUT(c, locp, "tcg_gen_qemu_ld", size_suffix, sign_suffix);
+
+    OUT(c, locp, "tcg_gen_qemu_ld_i", &dst_bit_width);
     OUT(c, locp, "(");
-    if (dst->bit_width > width->imm.value * 8) {
-        /*
-         * Cast to the correct TCG type if necessary, to avoid implict cast
-         * warnings. This is needed when the width of the destination var is
-         * larger than the size of the requested load.
-         */
-        OUT(c, locp, "(TCGv) ");
+    OUT(c, locp, dst, ", ", ea, ", ctx->mem_idx, MO_", &src_bit_width);
+    if (signedness == SIGNED) {
+        OUT(c, locp, " | MO_SIGN");
     }
-    OUT(c, locp, dst, ", ", ea, ", ctx->mem_idx);\n");
-    /* If the var in EA was truncated it is now a tmp HexValue, so free it. */
-    gen_rvalue_free(c, locp, ea);
+    OUT(c, locp, " | MO_TE);\n");
 }
 
 void gen_store(Context *c, YYLTYPE *locp, HexValue *width, HexValue *ea,
@@ -1961,11 +1773,8 @@ void gen_store(Context *c, YYLTYPE *locp, HexValue *width, HexValue *ea,
     /* Lookup the effective address EA */
     find_variable(c, locp, ea, ea);
     src_m = rvalue_materialize(c, locp, &src_m);
-    OUT(c, locp, "gen_store", &mem_width, "(cpu_env, ", ea, ", ", &src_m);
+    OUT(c, locp, "gen_store", &mem_width, "(tcg_env, ", ea, ", ", &src_m);
     OUT(c, locp, ", insn->slot);\n");
-    gen_rvalue_free(c, locp, &src_m);
-    /* If the var in ea was truncated it is now a tmp HexValue, so free it. */
-    gen_rvalue_free(c, locp, ea);
 }
 
 void gen_sethalf(Context *c, YYLTYPE *locp, HexCast *sh, HexValue *n,
@@ -2002,11 +1811,6 @@ void gen_setbits(Context *c, YYLTYPE *locp, HexValue *hi, HexValue *lo,
     OUT(c, locp, "tcg_gen_deposit_i32(", dst, ", ", dst,
         ", ", &tmp, ", ");
     OUT(c, locp, lo, ", ", &len, ");\n");
-
-    gen_rvalue_free(c, locp, &tmp);
-    gen_rvalue_free(c, locp, hi);
-    gen_rvalue_free(c, locp, lo);
-    gen_rvalue_free(c, locp, value);
 }
 
 unsigned gen_if_cond(Context *c, YYLTYPE *locp, HexValue *cond)
@@ -2019,7 +1823,6 @@ unsigned gen_if_cond(Context *c, YYLTYPE *locp, HexValue *cond)
     bit_suffix = (cond->bit_width == 64) ? "i64" : "i32";
     OUT(c, locp, "tcg_gen_brcondi_", bit_suffix, "(TCG_COND_EQ, ", cond,
         ", 0, if_label_", &c->inst.if_count, ");\n");
-    gen_rvalue_free(c, locp, cond);
     return c->inst.if_count++;
 }
 
@@ -2045,10 +1848,10 @@ HexValue gen_rvalue_pred(Context *c, YYLTYPE *locp, HexValue *pred)
         bool is_dotnew = pred->is_dotnew;
         char predicate_id[2] = { pred->pred.id, '\0' };
         char *pred_str = (char *) &predicate_id;
-        *pred = gen_tmp_value(c, locp, "0", 32, UNSIGNED);
+        *pred = gen_tmp(c, locp, 32, UNSIGNED);
         if (is_dotnew) {
             OUT(c, locp, "tcg_gen_mov_i32(", pred,
-                ", hex_new_pred_value[");
+                ", ctx->new_pred_value[");
             OUT(c, locp, pred_str, "]);\n");
         } else {
             OUT(c, locp, "gen_read_preg(", pred, ", ", pred_str, ");\n");
@@ -2110,7 +1913,6 @@ static inline HexValue gen_rvalue_simple_unary(Context *c, YYLTYPE *locp,
         res = gen_tmp(c, locp, bit_width, value->signedness);
         OUT(c, locp, tcg_code, "_i", &bit_width, "(", &res, ", ", value,
             ");\n");
-        gen_rvalue_free(c, locp, value);
     }
     return res;
 }
@@ -2136,7 +1938,6 @@ HexValue gen_rvalue_notl(Context *c, YYLTYPE *locp, HexValue *value)
         OUT(c, locp, "tcg_gen_movcond_i", &bit_width);
         OUT(c, locp, "(TCG_COND_EQ, ", &res, ", ", value, ", ", &zero);
         OUT(c, locp, ", ", &one, ", ", &zero, ");\n");
-        gen_rvalue_free(c, locp, value);
     }
     return res;
 }
@@ -2161,13 +1962,12 @@ HexValue gen_rvalue_sat(Context *c, YYLTYPE *locp, HexSat *sat,
     assert_signedness(c, locp, sat->signedness);
 
     unsigned_str = (sat->signedness == UNSIGNED) ? "u" : "";
-    res = gen_tmp_local(c, locp, value->bit_width, sat->signedness);
-    ovfl = gen_tmp_local(c, locp, 32, sat->signedness);
+    res = gen_tmp(c, locp, value->bit_width, sat->signedness);
+    ovfl = gen_tmp(c, locp, 32, sat->signedness);
     OUT(c, locp, "gen_sat", unsigned_str, "_", bit_suffix, "_ovfl(");
     OUT(c, locp, &ovfl, ", ", &res, ", ", value, ", ", &width->imm.value,
         ");\n");
-    OUT(c, locp, "gen_set_usr_field_if(USR_OVF,", &ovfl, ");\n");
-    gen_rvalue_free(c, locp, value);
+    OUT(c, locp, "gen_set_usr_field_if(ctx, USR_OVF,", &ovfl, ");\n");
 
     return res;
 }
@@ -2182,9 +1982,6 @@ HexValue gen_rvalue_fscr(Context *c, YYLTYPE *locp, HexValue *value)
     OUT(c, locp, "tcg_gen_concat_i32_i64(",
         &key, ", ", &frame_key, ", ", &frame_key, ");\n");
     OUT(c, locp, "tcg_gen_xor_i64(", &res, ", ", value, ", ", &key, ");\n");
-    gen_rvalue_free(c, locp, &key);
-    gen_rvalue_free(c, locp, &frame_key);
-    gen_rvalue_free(c, locp, value);
     return res;
 }
 
@@ -2206,7 +2003,6 @@ HexValue gen_rvalue_brev(Context *c, YYLTYPE *locp, HexValue *value)
     res = gen_tmp(c, locp, value->bit_width, value->signedness);
     *value = rvalue_materialize(c, locp, value);
     OUT(c, locp, "gen_helper_fbrev(", &res, ", ", value, ");\n");
-    gen_rvalue_free(c, locp, value);
     return res;
 }
 
@@ -2218,7 +2014,6 @@ HexValue gen_rvalue_ternary(Context *c, YYLTYPE *locp, HexValue *cond,
     unsigned bit_width = (is_64bit) ? 64 : 32;
     HexValue zero = gen_constant(c, locp, "0", bit_width, UNSIGNED);
     HexValue res = gen_tmp(c, locp, bit_width, UNSIGNED);
-    Ternary *ternary = NULL;
 
     if (is_64bit) {
         *cond = gen_rvalue_extend(c, locp, cond);
@@ -2236,13 +2031,8 @@ HexValue gen_rvalue_ternary(Context *c, YYLTYPE *locp, HexValue *cond,
     OUT(c, locp, ", ", true_branch, ", ", false_branch, ");\n");
 
     assert(c->ternary->len > 0);
-    ternary = &g_array_index(c->ternary, Ternary, c->ternary->len - 1);
-    gen_rvalue_free_manual(c, locp, &ternary->cond);
     g_array_remove_index(c->ternary, c->ternary->len - 1);
 
-    gen_rvalue_free(c, locp, cond);
-    gen_rvalue_free(c, locp, true_branch);
-    gen_rvalue_free(c, locp, false_branch);
     return res;
 }
 
@@ -2319,15 +2109,6 @@ void emit_footer(Context *c)
 void track_string(Context *c, GString *s)
 {
     g_array_append_val(c->inst.strings, s);
-}
-
-void free_variables(Context *c, YYLTYPE *locp)
-{
-    for (unsigned i = 0; i < c->inst.allocated->len; ++i) {
-        Var *var = &g_array_index(c->inst.allocated, Var, i);
-        const char *suffix = var->bit_width == 64 ? "i64" : "i32";
-        OUT(c, locp, "tcg_temp_free_", suffix, "(", var->name->str, ");\n");
-    }
 }
 
 void free_instruction(Context *c)

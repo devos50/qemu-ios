@@ -129,23 +129,27 @@ static int query_port(PVRDMADev *dev, union pvrdma_cmd_req *req,
 {
     struct pvrdma_cmd_query_port *cmd = &req->query_port;
     struct pvrdma_cmd_query_port_resp *resp = &rsp->query_port_resp;
-    struct pvrdma_port_attr attrs = {};
+    struct ibv_port_attr attrs = {};
 
     if (cmd->port_num > MAX_PORTS) {
         return -EINVAL;
     }
 
-    if (rdma_backend_query_port(&dev->backend_dev,
-                                (struct ibv_port_attr *)&attrs)) {
+    if (rdma_backend_query_port(&dev->backend_dev, &attrs)) {
         return -ENOMEM;
     }
 
     memset(resp, 0, sizeof(*resp));
 
-    resp->attrs.state = dev->func0->device_active ? attrs.state :
-                                                    PVRDMA_PORT_DOWN;
-    resp->attrs.max_mtu = attrs.max_mtu;
-    resp->attrs.active_mtu = attrs.active_mtu;
+    /*
+     * The state, max_mtu and active_mtu fields are enums; the values
+     * for pvrdma_port_state and pvrdma_mtu match those for
+     * ibv_port_state and ibv_mtu, so we can cast them safely.
+     */
+    resp->attrs.state = dev->func0->device_active ?
+        (enum pvrdma_port_state)attrs.state : PVRDMA_PORT_DOWN;
+    resp->attrs.max_mtu = (enum pvrdma_mtu)attrs.max_mtu;
+    resp->attrs.active_mtu = (enum pvrdma_mtu)attrs.active_mtu;
     resp->attrs.phys_state = attrs.phys_state;
     resp->attrs.gid_tbl_len = MIN(MAX_PORT_GIDS, attrs.gid_tbl_len);
     resp->attrs.max_msg_sz = 1024;
@@ -775,6 +779,12 @@ int pvrdma_exec_cmd(PVRDMADev *dev)
     DSRInfo *dsr_info;
 
     dsr_info = &dev->dsr_info;
+
+    if (!dsr_info->dsr) {
+            /* Buggy or malicious guest driver */
+            rdma_error_report("Exec command without dsr, req or rsp buffers");
+            goto out;
+    }
 
     if (dsr_info->req->hdr.cmd >= sizeof(cmd_handlers) /
                       sizeof(struct cmd_handler)) {

@@ -1,6 +1,6 @@
 %{
 /*
- *  Copyright(c) 2019-2022 rev.ng Labs Srl. All Rights Reserved.
+ *  Copyright(c) 2019-2023 rev.ng Labs Srl. All Rights Reserved.
  *
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -52,8 +52,8 @@
 %token IN INAME VAR
 %token ABS CROUND ROUND CIRCADD COUNTONES INC DEC ANDA ORA XORA PLUSPLUS ASL
 %token ASR LSR EQ NEQ LTE GTE MIN MAX ANDL FOR ICIRC IF MUN FSCR FCHK SXT
-%token ZXT CONSTEXT LOCNT BREV SIGN LOAD STORE PC NPC LPCFG
-%token LOAD_CANCEL CANCEL IDENTITY PART1 ROTL INSBITS SETBITS EXTRANGE
+%token ZXT CONSTEXT LOCNT BREV SIGN LOAD STORE PC LPCFG
+%token LOAD_CANCEL STORE_CANCEL CANCEL IDENTITY ROTL INSBITS SETBITS EXTRANGE
 %token CAST4_8U FAIL CARRY_FROM_ADD ADDSAT64 LSBNEW
 %token TYPE_SIZE_T TYPE_INT TYPE_SIGNED TYPE_UNSIGNED TYPE_LONG
 
@@ -99,6 +99,8 @@
 /* Input file containing the description of each hexagon instruction */
 input : instructions
       {
+          /* Suppress warning about unused yynerrs */
+          (void) yynerrs;
           YYACCEPT;
       }
       ;
@@ -267,9 +269,6 @@ statements : statements statement
 statement : control_statement
           | var_decl ';'
           | rvalue ';'
-            {
-                gen_rvalue_free(c, &@1, &$1);
-            }
           | code_block
           | ';'
           ;
@@ -337,16 +336,6 @@ assign_statement : lvalue '=' rvalue
                        OUT(c, &@1, &$1, " = ", &$3, ";\n");
                        $$ = $1;
                    }
-                 | PC '=' rvalue
-                   {
-                       @1.last_column = @3.last_column;
-                       yyassert(c, &@1, !is_inside_ternary(c),
-                                "Assignment side-effect not modeled!");
-                       $3 = gen_rvalue_truncate(c, &@1, &$3);
-                       $3 = rvalue_materialize(c, &@1, &$3);
-                       OUT(c, &@1, "gen_write_new_pc(", &$3, ");\n");
-                       gen_rvalue_free(c, &@1, &$3); /* Free temporary value */
-                   }
                  | LOAD '(' IMM ',' IMM ',' SIGN ',' var ',' lvalue ')'
                    {
                        @1.last_column = @12.last_column;
@@ -373,8 +362,7 @@ assign_statement : lvalue '=' rvalue
                                 "Assignment side-effect not modeled!");
                        $3 = gen_rvalue_truncate(c, &@1, &$3);
                        $3 = rvalue_materialize(c, &@1, &$3);
-                       OUT(c, &@1, "SET_USR_FIELD(USR_LPCFG, ", &$3, ");\n");
-                       gen_rvalue_free(c, &@1, &$3);
+                       OUT(c, &@1, "gen_set_usr_field(ctx, USR_LPCFG, ", &$3, ");\n");
                    }
                  | DEPOSIT '(' rvalue ',' rvalue ',' rvalue ')'
                    {
@@ -415,24 +403,20 @@ control_statement : frame_check
                   | cancel_statement
                   | if_statement
                   | for_statement
-                  | fpart1_statement
                   ;
 
 frame_check : FCHK '(' rvalue ',' rvalue ')' ';'
-              {
-                  gen_rvalue_free(c, &@1, &$3);
-                  gen_rvalue_free(c, &@1, &$5);
-              }
             ;
 
 cancel_statement : LOAD_CANCEL
                    {
                        gen_load_cancel(c, &@1);
                    }
-                 | CANCEL
+                 | STORE_CANCEL
                    {
                        gen_cancel(c, &@1);
                    }
+                 | CANCEL
                  ;
 
 if_statement : if_stmt
@@ -468,17 +452,6 @@ for_statement : FOR '(' IMM '=' IMM ';' IMM '<' IMM ';' IMM PLUSPLUS ')'
                     OUT(c, &@1, "}\n");
                 }
               ;
-
-fpart1_statement : PART1
-                   {
-                       OUT(c, &@1, "if (insn->part1) {\n");
-                   }
-                   '(' statements ')'
-                   {
-                       @1.last_column = @3.last_column;
-                       OUT(c, &@1, "return; }\n");
-                   }
-                 ;
 
 if_stmt : IF '(' rvalue ')'
           {
@@ -519,20 +492,6 @@ rvalue : FAIL
              rvalue.signedness = UNSIGNED;
              $$ = rvalue;
          }
-       | NPC
-         {
-             /*
-              * NPC is only read from CALLs, so we can hardcode it
-              * at translation time
-              */
-             HexValue rvalue;
-             memset(&rvalue, 0, sizeof(HexValue));
-             rvalue.type = IMMEDIATE;
-             rvalue.imm.type = IMM_NPC;
-             rvalue.bit_width = 32;
-             rvalue.signedness = UNSIGNED;
-             $$ = rvalue;
-         }
        | CONSTEXT
          {
              HexValue rvalue;
@@ -541,7 +500,6 @@ rvalue : FAIL
              rvalue.imm.type = IMM_CONSTEXT;
              rvalue.signedness = UNSIGNED;
              rvalue.is_dotnew = false;
-             rvalue.is_manual = false;
              $$ = rvalue;
          }
        | var
@@ -636,8 +594,6 @@ rvalue : FAIL
        | CAST rvalue
          {
              @1.last_column = @2.last_column;
-             /* Assign target signedness */
-             $2.signedness = $1.signedness;
              $$ = gen_cast_op(c, &@1, &$2, $1.bit_width, $1.signedness);
          }
        | rvalue EQ rvalue
@@ -700,7 +656,6 @@ rvalue : FAIL
          }
        | rvalue '?'
          {
-             $1.is_manual = true;
              Ternary t = { 0 };
              t.state = IN_LEFT;
              t.cond = $1;
@@ -728,7 +683,7 @@ rvalue : FAIL
              yyassert(c, &@1, $5.type == IMMEDIATE &&
                       $5.imm.type == VALUE,
                       "SXT expects immediate values\n");
-             $$ = gen_extend_op(c, &@1, &$3, $5.imm.value, &$7, SIGNED);
+             $$ = gen_extend_op(c, &@1, &$3, 64, &$7, SIGNED);
          }
        | ZXT '(' rvalue ',' IMM ',' rvalue ')'
          {
@@ -736,7 +691,7 @@ rvalue : FAIL
              yyassert(c, &@1, $5.type == IMMEDIATE &&
                       $5.imm.type == VALUE,
                       "ZXT expects immediate values\n");
-             $$ = gen_extend_op(c, &@1, &$3, $5.imm.value, &$7, UNSIGNED);
+             $$ = gen_extend_op(c, &@1, &$3, 64, &$7, UNSIGNED);
          }
        | '(' rvalue ')'
          {
@@ -772,7 +727,6 @@ rvalue : FAIL
              @1.last_column = @6.last_column;
              $$ = gen_tmp(c, &@1, 32, UNSIGNED);
              OUT(c, &@1, "gen_read_ireg(", &$$, ", ", &$3, ", ", &$6, ");\n");
-             gen_rvalue_free(c, &@1, &$3);
          }
        | CIRCADD '(' rvalue ',' rvalue ',' rvalue ')'
          {
@@ -790,11 +744,6 @@ rvalue : FAIL
              @1.last_column = @4.last_column;
              /* Ones count */
              $$ = gen_ctpop_op(c, &@1, &$3);
-         }
-       | LPCFG
-         {
-             $$ = gen_tmp_value(c, &@1, "0", 32, UNSIGNED);
-             OUT(c, &@1, "GET_USR_FIELD(USR_LPCFG, ", &$$, ");\n");
          }
        | EXTRACT '(' rvalue ',' rvalue ')'
          {
@@ -894,13 +843,14 @@ int main(int argc, char **argv)
     fputs("#include \"qemu/log.h\"\n", output_file);
     fputs("#include \"cpu.h\"\n", output_file);
     fputs("#include \"internal.h\"\n", output_file);
+    fputs("#include \"tcg/tcg.h\"\n", output_file);
     fputs("#include \"tcg/tcg-op.h\"\n", output_file);
+    fputs("#include \"exec/helper-gen.h\"\n", output_file);
     fputs("#include \"insn.h\"\n", output_file);
     fputs("#include \"opcodes.h\"\n", output_file);
     fputs("#include \"translate.h\"\n", output_file);
     fputs("#define QEMU_GENERATE\n", output_file);
     fputs("#include \"genptr.h\"\n", output_file);
-    fputs("#include \"tcg/tcg.h\"\n", output_file);
     fputs("#include \"macros.h\"\n", output_file);
     fprintf(output_file, "#include \"%s\"\n", argv[ARG_INDEX_EMITTER_H]);
 

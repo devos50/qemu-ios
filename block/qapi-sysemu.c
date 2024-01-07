@@ -32,6 +32,7 @@
 
 #include "qemu/osdep.h"
 
+#include "block/block_int.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-block.h"
 #include "qapi/qmp/qdict.h"
@@ -168,13 +169,15 @@ void qmp_blockdev_close_tray(const char *device,
     }
 }
 
-static void blockdev_remove_medium(const char *device, const char *id,
-                                   Error **errp)
+static void GRAPH_UNLOCKED
+blockdev_remove_medium(const char *device, const char *id, Error **errp)
 {
     BlockBackend *blk;
     BlockDriverState *bs;
     AioContext *aio_context;
     bool has_attached_device;
+
+    GLOBAL_STATE_CODE();
 
     blk = qmp_get_blk(device, id, errp);
     if (!blk) {
@@ -204,9 +207,12 @@ static void blockdev_remove_medium(const char *device, const char *id,
     aio_context = bdrv_get_aio_context(bs);
     aio_context_acquire(aio_context);
 
+    bdrv_graph_rdlock_main_loop();
     if (bdrv_op_is_blocked(bs, BLOCK_OP_TYPE_EJECT, errp)) {
+        bdrv_graph_rdunlock_main_loop();
         goto out;
     }
+    bdrv_graph_rdunlock_main_loop();
 
     blk_remove_bs(blk);
 
@@ -231,6 +237,7 @@ static void qmp_blockdev_insert_anon_medium(BlockBackend *blk,
                                             BlockDriverState *bs, Error **errp)
 {
     Error *local_err = NULL;
+    AioContext *ctx;
     bool has_device;
     int ret;
 
@@ -252,7 +259,11 @@ static void qmp_blockdev_insert_anon_medium(BlockBackend *blk,
         return;
     }
 
+    ctx = bdrv_get_aio_context(bs);
+    aio_context_acquire(ctx);
     ret = blk_insert_bs(blk, bs, errp);
+    aio_context_release(ctx);
+
     if (ret < 0) {
         return;
     }
@@ -277,6 +288,8 @@ static void blockdev_insert_medium(const char *device, const char *id,
 {
     BlockBackend *blk;
     BlockDriverState *bs;
+
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     blk = qmp_get_blk(device, id, errp);
     if (!blk) {
@@ -361,7 +374,10 @@ void qmp_blockdev_change_medium(const char *device,
         qdict_put_str(options, "driver", format);
     }
 
+    aio_context_acquire(qemu_get_aio_context());
     medium_bs = bdrv_open(filename, NULL, options, bdrv_flags, errp);
+    aio_context_release(qemu_get_aio_context());
+
     if (!medium_bs) {
         goto fail;
     }
@@ -516,6 +532,7 @@ void qmp_block_latency_histogram_set(
     bool has_boundaries, uint64List *boundaries,
     bool has_boundaries_read, uint64List *boundaries_read,
     bool has_boundaries_write, uint64List *boundaries_write,
+    bool has_boundaries_append, uint64List *boundaries_append,
     bool has_boundaries_flush, uint64List *boundaries_flush,
     Error **errp)
 {
@@ -552,6 +569,16 @@ void qmp_block_latency_histogram_set(
             has_boundaries_write ? boundaries_write : boundaries);
         if (ret) {
             error_setg(errp, "Device '%s' set write boundaries fail", id);
+            return;
+        }
+    }
+
+    if (has_boundaries || has_boundaries_append) {
+        ret = block_latency_histogram_set(
+                stats, BLOCK_ACCT_ZONE_APPEND,
+                has_boundaries_append ? boundaries_append : boundaries);
+        if (ret) {
+            error_setg(errp, "Device '%s' set append write boundaries fail", id);
             return;
         }
     }

@@ -249,12 +249,12 @@ static int inet_listen_saddr(InetSocketAddress *saddr,
 
     /* lookup */
     if (port_offset) {
-        unsigned long long baseport;
+        uint64_t baseport;
         if (strlen(port) == 0) {
             error_setg(errp, "port not specified");
             return -1;
         }
-        if (parse_uint_full(port, &baseport, 10) < 0) {
+        if (parse_uint_full(port, 10, &baseport) < 0) {
             error_setg(errp, "can't convert to a number: %s", port);
             return -1;
         }
@@ -326,7 +326,7 @@ static int inet_listen_saddr(InetSocketAddress *saddr,
              * recover from this situation, so we need to recreate the
              * socket to allow bind attempts for subsequent ports:
              */
-            closesocket(slisten);
+            close(slisten);
             slisten = -1;
         }
     }
@@ -337,7 +337,7 @@ static int inet_listen_saddr(InetSocketAddress *saddr,
 listen_failed:
     saved_errno = errno;
     if (slisten >= 0) {
-        closesocket(slisten);
+        close(slisten);
     }
     freeaddrinfo(res);
     errno = saved_errno;
@@ -380,7 +380,7 @@ static int inet_connect_addr(const InetSocketAddress *saddr,
     if (rc < 0) {
         error_setg_errno(errp, errno, "Failed to connect to '%s:%s'",
                          saddr->host, saddr->port);
-        closesocket(sock);
+        close(sock);
         return -1;
     }
 
@@ -483,7 +483,7 @@ int inet_connect_saddr(InetSocketAddress *saddr, Error **errp)
 
         if (ret < 0) {
             error_setg_errno(errp, errno, "Unable to set KEEPALIVE");
-            closesocket(sock);
+            close(sock);
             return -1;
         }
     }
@@ -580,7 +580,7 @@ static int inet_dgram_saddr(InetSocketAddress *sraddr,
 
 err:
     if (sock != -1) {
-        closesocket(sock);
+        close(sock);
     }
     if (local) {
         freeaddrinfo(local);
@@ -732,19 +732,19 @@ static bool vsock_parse_vaddr_to_sockaddr(const VsockSocketAddress *vaddr,
                                           struct sockaddr_vm *svm,
                                           Error **errp)
 {
-    unsigned long long val;
+    uint64_t val;
 
     memset(svm, 0, sizeof(*svm));
     svm->svm_family = AF_VSOCK;
 
-    if (parse_uint_full(vaddr->cid, &val, 10) < 0 ||
+    if (parse_uint_full(vaddr->cid, 10, &val) < 0 ||
         val > UINT32_MAX) {
         error_setg(errp, "Failed to parse cid '%s'", vaddr->cid);
         return false;
     }
     svm->svm_cid = val;
 
-    if (parse_uint_full(vaddr->port, &val, 10) < 0 ||
+    if (parse_uint_full(vaddr->port, 10, &val) < 0 ||
         val > UINT32_MAX) {
         error_setg(errp, "Failed to parse port '%s'", vaddr->port);
         return false;
@@ -777,7 +777,7 @@ static int vsock_connect_addr(const VsockSocketAddress *vaddr,
     if (rc < 0) {
         error_setg_errno(errp, errno, "Failed to connect to '%s:%s'",
                          vaddr->cid, vaddr->port);
-        closesocket(sock);
+        close(sock);
         return -1;
     }
 
@@ -814,13 +814,13 @@ static int vsock_listen_saddr(VsockSocketAddress *vaddr,
 
     if (bind(slisten, (const struct sockaddr *)&svm, sizeof(svm)) != 0) {
         error_setg_errno(errp, errno, "Failed to bind socket");
-        closesocket(slisten);
+        close(slisten);
         return -1;
     }
 
     if (listen(slisten, num) != 0) {
         error_setg_errno(errp, errno, "Failed to listen on socket");
-        closesocket(slisten);
+        close(slisten);
         return -1;
     }
     return slisten;
@@ -929,7 +929,7 @@ static int unix_listen_saddr(UnixSocketAddress *saddr,
 
     if (pathbuf != NULL) {
         /*
-         * This dummy fd usage silences the mktemp() unsecure warning.
+         * This dummy fd usage silences the mktemp() insecure warning.
          * Using mkstemp() doesn't make things more secure here
          * though.  bind() complains about existing files, so we have
          * to unlink first and thus re-open the race window.  The
@@ -978,7 +978,7 @@ static int unix_listen_saddr(UnixSocketAddress *saddr,
 
 err:
     g_free(pathbuf);
-    closesocket(sock);
+    close(sock);
     return -1;
 }
 
@@ -1041,7 +1041,7 @@ static int unix_connect_saddr(UnixSocketAddress *saddr, Error **errp)
     return sock;
 
  err:
-    closesocket(sock);
+    close(sock);
     return -1;
 }
 
@@ -1238,7 +1238,7 @@ int socket_listen(SocketAddress *addr, int num, Error **errp)
          */
         if (listen(fd, num) != 0) {
             error_setg_errno(errp, errno, "Failed to listen on fd socket");
-            closesocket(fd);
+            close(fd);
             return -1;
         }
         break;

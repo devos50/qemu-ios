@@ -20,10 +20,7 @@
 #ifndef GRAPH_LOCK_H
 #define GRAPH_LOCK_H
 
-#include "qemu/osdep.h"
 #include "qemu/clang-tsa.h"
-
-#include "qemu/coroutine.h"
 
 /**
  * Graph Lock API
@@ -76,6 +73,7 @@ extern BdrvGraphLock graph_lock;
  */
 #define GRAPH_WRLOCK TSA_REQUIRES(graph_lock)
 #define GRAPH_RDLOCK TSA_REQUIRES_SHARED(graph_lock)
+#define GRAPH_UNLOCKED TSA_EXCLUDES(graph_lock)
 
 /*
  * TSA annotations are not part of function types, so checks are defeated when
@@ -86,6 +84,7 @@ extern BdrvGraphLock graph_lock;
  */
 #define GRAPH_RDLOCK_PTR TSA_GUARDED_BY(graph_lock)
 #define GRAPH_WRLOCK_PTR TSA_GUARDED_BY(graph_lock)
+#define GRAPH_UNLOCKED_PTR
 
 /*
  * register_aiocontext:
@@ -112,17 +111,33 @@ void unregister_aiocontext(AioContext *ctx);
  * The wrlock can only be taken from the main loop, with BQL held, as only the
  * main loop is allowed to modify the graph.
  *
+ * If @bs is non-NULL, its AioContext is temporarily released.
+ *
  * This function polls. Callers must not hold the lock of any AioContext other
- * than the current one.
+ * than the current one and the one of @bs.
  */
-void bdrv_graph_wrlock(void) TSA_ACQUIRE(graph_lock) TSA_NO_TSA;
+void no_coroutine_fn TSA_ACQUIRE(graph_lock) TSA_NO_TSA
+bdrv_graph_wrlock(BlockDriverState *bs);
 
 /*
  * bdrv_graph_wrunlock:
  * Write finished, reset global has_writer to 0 and restart
  * all readers that are waiting.
+ *
+ * If @bs is non-NULL, its AioContext is temporarily released.
  */
-void bdrv_graph_wrunlock(void) TSA_RELEASE(graph_lock) TSA_NO_TSA;
+void no_coroutine_fn TSA_RELEASE(graph_lock) TSA_NO_TSA
+bdrv_graph_wrunlock(BlockDriverState *bs);
+
+/*
+ * bdrv_graph_wrunlock_ctx:
+ * Write finished, reset global has_writer to 0 and restart
+ * all readers that are waiting.
+ *
+ * If @ctx is non-NULL, its lock is temporarily released.
+ */
+void no_coroutine_fn TSA_RELEASE(graph_lock) TSA_NO_TSA
+bdrv_graph_wrunlock_ctx(AioContext *ctx);
 
 /*
  * bdrv_graph_co_rdlock:
@@ -206,19 +221,19 @@ typedef struct GraphLockable { } GraphLockable;
 #define GML_OBJ_() (&(GraphLockable) { })
 
 /*
- * This is not marked as TSA_ACQUIRE() because TSA doesn't understand the
+ * This is not marked as TSA_ACQUIRE_SHARED() because TSA doesn't understand the
  * cleanup attribute and would therefore complain that the graph is never
- * unlocked. TSA_ASSERT() makes sure that the following calls know that we
- * hold the lock while unlocking is left unchecked.
+ * unlocked. TSA_ASSERT_SHARED() makes sure that the following calls know that
+ * we hold the lock while unlocking is left unchecked.
  */
-static inline GraphLockable * TSA_ASSERT(graph_lock) TSA_NO_TSA
+static inline GraphLockable * TSA_ASSERT_SHARED(graph_lock) TSA_NO_TSA coroutine_fn
 graph_lockable_auto_lock(GraphLockable *x)
 {
     bdrv_graph_co_rdlock();
     return x;
 }
 
-static inline void TSA_NO_TSA
+static inline void TSA_NO_TSA coroutine_fn
 graph_lockable_auto_unlock(GraphLockable *x)
 {
     bdrv_graph_co_rdunlock();
@@ -250,12 +265,12 @@ typedef struct GraphLockableMainloop { } GraphLockableMainloop;
 #define GMLML_OBJ_() (&(GraphLockableMainloop) { })
 
 /*
- * This is not marked as TSA_ACQUIRE() because TSA doesn't understand the
+ * This is not marked as TSA_ACQUIRE_SHARED() because TSA doesn't understand the
  * cleanup attribute and would therefore complain that the graph is never
- * unlocked. TSA_ASSERT() makes sure that the following calls know that we
- * hold the lock while unlocking is left unchecked.
+ * unlocked. TSA_ASSERT_SHARED() makes sure that the following calls know that
+ * we hold the lock while unlocking is left unchecked.
  */
-static inline GraphLockableMainloop * TSA_ASSERT(graph_lock) TSA_NO_TSA
+static inline GraphLockableMainloop * TSA_ASSERT_SHARED(graph_lock) TSA_NO_TSA
 graph_lockable_auto_lock_mainloop(GraphLockableMainloop *x)
 {
     bdrv_graph_rdlock_main_loop();

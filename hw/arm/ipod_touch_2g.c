@@ -13,6 +13,9 @@
 #include "hw/arm/ipod_touch_2g.h"
 #include "target/arm/cpregs.h"
 
+#include "qemu/error-report.h"
+
+
 #define VMSTATE_IT2G_CPREG(name) \
         VMSTATE_UINT64(IT2G_CPREG_VAR_NAME(name), IPodTouchMachineState)
 
@@ -25,6 +28,7 @@
         .fieldoffset = offsetof(IPodTouchMachineState, IT2G_CPREG_VAR_NAME(p_name))           \
                        - offsetof(ARMCPU, env)                                     \
     }
+
 
 #define IT2G_CPREG_DEF_QEMU_CALL \
     {                            \
@@ -46,6 +50,7 @@
     }
 
 const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L8900_GPIO_G2_IRQ, S5L8900_GPIO_G3_IRQ, S5L8900_GPIO_G4_IRQ };
+
 
 static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uint32_t size)
 {
@@ -552,5 +557,6 @@ static void ipod_touch_machine_types(void)
 {
     type_register_static(&ipod_touch_machine_info);
 }
+
 
 type_init(ipod_touch_machine_types)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # group: rw quick
-# Exercize QEMU generated ACPI/SMBIOS tables using biosbits,
+# Exercise QEMU generated ACPI/SMBIOS tables using biosbits,
 # https://biosbits.org/
 #
 # This program is free software; you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 #
 #
 # Author:
-#  Ani Sinha <ani@anisinha.ca>
+#  Ani Sinha <anisinha@redhat.com>
 
 # pylint: disable=invalid-name
 # pylint: disable=consider-using-f-string
@@ -48,6 +48,7 @@ from typing import (
 )
 from qemu.machine import QEMUMachine
 from avocado import skipIf
+from avocado.utils import datadrainer as drainer
 from avocado_qemu import QemuBaseTest
 
 deps = ["xorriso", "mformat"] # dependent tools needed in the test setup/box.
@@ -92,17 +93,14 @@ class QEMUBitsMachine(QEMUMachine): # pylint: disable=too-few-public-methods
                  base_temp_dir: str = "/var/tmp",
                  debugcon_log: str = "debugcon-log.txt",
                  debugcon_addr: str = "0x403",
-                 sock_dir: Optional[str] = None,
                  qmp_timer: Optional[float] = None):
         # pylint: disable=too-many-arguments
 
         if name is None:
             name = "qemu-bits-%d" % os.getpid()
-        if sock_dir is None:
-            sock_dir = base_temp_dir
         super().__init__(binary, args, wrapper=wrapper, name=name,
                          base_temp_dir=base_temp_dir,
-                         sock_dir=sock_dir, qmp_timer=qmp_timer)
+                         qmp_timer=qmp_timer)
         self.debugcon_log = debugcon_log
         self.debugcon_addr = debugcon_addr
         self.base_temp_dir = base_temp_dir
@@ -123,9 +121,9 @@ class QEMUBitsMachine(QEMUMachine): # pylint: disable=too-few-public-methods
         """return the base argument to QEMU binary"""
         return self._base_args
 
-@skipIf(not supported_platform() or missing_deps() or os.getenv('GITLAB_CI'),
-        'incorrect platform or dependencies (%s) not installed ' \
-        'or running on GitLab' % ','.join(deps))
+@skipIf(not supported_platform() or missing_deps(),
+        'unsupported platform or dependencies (%s) not installed' \
+        % ','.join(deps))
 class AcpiBitsTest(QemuBaseTest): #pylint: disable=too-many-instance-attributes
     """
     ACPI and SMBIOS tests using biosbits.
@@ -144,12 +142,12 @@ class AcpiBitsTest(QemuBaseTest): #pylint: disable=too-many-instance-attributes
         self._baseDir = None
 
         # following are some standard configuration constants
-        self._bitsInternalVer = 2020
-        self._bitsCommitHash = 'b48b88ff' # commit hash must match
+        self._bitsInternalVer = 2020 # gitlab CI does shallow clones of depth 20
+        self._bitsCommitHash = 'c7920d2b' # commit hash must match
                                           # the artifact tag below
-        self._bitsTag = "qemu-bits-10182022" # this is the latest bits
+        self._bitsTag = "qemu-bits-10262023" # this is the latest bits
                                              # release as of today.
-        self._bitsArtSHA1Hash = 'b04790ac9b99b5662d0416392c73b97580641fe5'
+        self._bitsArtSHA1Hash = 'b22cdfcfc7453875297d06d626f5474ee36a343f'
         self._bitsArtURL = ("https://gitlab.com/qemu-project/"
                             "biosbits-bits/-/jobs/artifacts/%s/"
                             "download?job=qemu-bits-build" %self._bitsTag)
@@ -356,7 +354,7 @@ class AcpiBitsTest(QemuBaseTest): #pylint: disable=too-many-instance-attributes
         """
         if self._vm:
             self.assertFalse(not self._vm.is_running)
-        if not os.getenv('BITS_DEBUG'):
+        if not os.getenv('BITS_DEBUG') and self._workDir:
             self.logger.info('removing the work directory %s', self._workDir)
             shutil.rmtree(self._workDir)
         else:
@@ -366,7 +364,7 @@ class AcpiBitsTest(QemuBaseTest): #pylint: disable=too-many-instance-attributes
         super().tearDown()
 
     def test_acpi_smbios_bits(self):
-        """The main test case implementaion."""
+        """The main test case implementation."""
 
         iso_file = os.path.join(self._workDir,
                                 'bits-%d.iso' %self._bitsInternalVer)
@@ -383,16 +381,26 @@ class AcpiBitsTest(QemuBaseTest): #pylint: disable=too-many-instance-attributes
         # consistent in terms of timing. smilatency tests have consistent
         # timing requirements.
         self._vm.add_args('-icount', 'auto')
+        # currently there is no support in bits for recognizing 64-bit SMBIOS
+        # entry points. QEMU defaults to 64-bit entry points since the
+        # upstream commit bf376f3020 ("hw/i386/pc: Default to use SMBIOS 3.0
+        # for newer machine models"). Therefore, enforce 32-bit entry point.
+        self._vm.add_args('-machine', 'smbios-entry-point-type=32')
 
-        args = " ".join(str(arg) for arg in self._vm.base_args()) + \
-            " " + " ".join(str(arg) for arg in self._vm.args)
-
-        self.logger.info("launching QEMU vm with the following arguments: %s",
-                         args)
-
+        # enable console logging
+        self._vm.set_console()
         self._vm.launch()
+
+        self.logger.debug("Console output from bits VM follows ...")
+        c_drainer = drainer.LineLogger(self._vm.console_socket.fileno(),
+                                       logger=self.logger.getChild("console"),
+                                       stop_check=(lambda :
+                                                   not self._vm.is_running()))
+        c_drainer.start()
+
         # biosbits has been configured to run all the specified test suites
         # in batch mode and then automatically initiate a vm shutdown.
         # Rely on avocado's unit test timeout.
+        self._vm.event_wait('SHUTDOWN')
         self._vm.wait(timeout=None)
         self.parse_log()

@@ -34,9 +34,6 @@
 #include "hw/pci/pci_ids.h"
 #include "hw/pci/pci_regs.h"
 
-/* TODO actually test the results and get rid of this */
-#define qmp_discard_response(q, ...) qobject_unref(qtest_qmp(q, __VA_ARGS__))
-
 #define TEST_IMAGE_SIZE 64 * 1024 * 1024
 
 #define IDE_PCI_DEV     1
@@ -125,6 +122,7 @@ static QGuestAllocator guest_malloc;
 static char *tmp_path[2];
 static char *debug_path;
 
+G_GNUC_PRINTF(1, 2)
 static QTestState *ide_test_start(const char *cmdline_fmt, ...)
 {
     QTestState *qts;
@@ -765,7 +763,7 @@ static void test_pci_retry_flush(void)
     qtest_qmp_eventwait(qts, "STOP");
 
     /* Complete the command */
-    qmp_discard_response(qts, "{'execute':'cont' }");
+    qtest_qmp_assert_success(qts, "{'execute':'cont' }");
 
     /* Check registers */
     data = qpci_io_readb(dev, ide_bar, reg_device);
@@ -788,7 +786,7 @@ static void test_flush_nodev(void)
     QPCIDevice *dev;
     QPCIBar bmdma_bar, ide_bar;
 
-    qts = ide_test_start("");
+    qts = ide_test_start("%s", "");
 
     dev = get_pci_device(qts, &bmdma_bar, &ide_bar);
 

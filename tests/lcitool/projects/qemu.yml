@@ -24,9 +24,9 @@ packages:
  - fuse3
  - g++
  - gcc
+ - gcc-native
  - gcovr
  - gettext
- - genisoimage
  - glib2
  - glib2-native
  - glib2-static
@@ -69,10 +69,12 @@ packages:
  - liburing
  - libusbx
  - libvdeplug
+ - libxdp
  - libzstd
  - llvm
  - lttng-ust
  - lzo
+ - mtools
  - netcat
  - nettle
  - ninja
@@ -83,8 +85,8 @@ packages:
  - ncursesw
  - pam
  - pcre-static
- - perl
  - pixman
+ - libpipewire-dev
  - pkg-config
  - pulseaudio
  - python3
@@ -95,6 +97,7 @@ packages:
  - python3-pip
  - python3-sphinx
  - python3-sphinx-rtd-theme
+ - python3-tomli
  - python3-venv
  - rpm2cpio
  - sdl2
@@ -102,20 +105,23 @@ packages:
  - sed
  - snappy
  - sndio
+ - socat
  - sparse
  - spice-protocol
  - spice-server
  - ssh-client
+ - swtpm
  - systemd
  - tar
  - tesseract
  - tesseract-eng
- - texinfo
  - usbredir
  - virglrenderer
  - vte
  - which
  - xen
  - xfsprogs
+ - xorriso
+ - zstdtools
  - zlib
  - zlib-static

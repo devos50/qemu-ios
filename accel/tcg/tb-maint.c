@@ -1,5 +1,5 @@
 /*
- * Translation Block Maintaince
+ * Translation Block Maintenance
  *
  *  Copyright (c) 2003 Fabrice Bellard
  *
@@ -19,15 +19,18 @@
 
 #include "qemu/osdep.h"
 #include "qemu/interval-tree.h"
+#include "qemu/qtree.h"
 #include "exec/cputlb.h"
 #include "exec/log.h"
 #include "exec/exec-all.h"
+#include "exec/tb-flush.h"
 #include "exec/translate-all.h"
 #include "sysemu/tcg.h"
 #include "tcg/tcg.h"
 #include "tb-hash.h"
 #include "tb-context.h"
-#include "internal.h"
+#include "internal-common.h"
+#include "internal-target.h"
 
 
 /* List iterators for lists of tagged pointers in TranslationBlock. */
@@ -44,11 +47,10 @@ static bool tb_cmp(const void *ap, const void *bp)
     const TranslationBlock *a = ap;
     const TranslationBlock *b = bp;
 
-    return ((TARGET_TB_PCREL || tb_pc(a) == tb_pc(b)) &&
+    return ((tb_cflags(a) & CF_PCREL || a->pc == b->pc) &&
             a->cs_base == b->cs_base &&
             a->flags == b->flags &&
             (tb_cflags(a) & ~CF_INVALID) == (tb_cflags(b) & ~CF_INVALID) &&
-            a->trace_vcpu_dstate == b->trace_vcpu_dstate &&
             tb_page_addr0(a) == tb_page_addr0(b) &&
             tb_page_addr1(a) == tb_page_addr1(b));
 }
@@ -69,17 +71,7 @@ typedef struct PageDesc PageDesc;
  */
 #define assert_page_locked(pd) tcg_debug_assert(have_mmap_lock())
 
-static inline void page_lock_pair(PageDesc **ret_p1, tb_page_addr_t phys1,
-                                  PageDesc **ret_p2, tb_page_addr_t phys2,
-                                  bool alloc)
-{
-    *ret_p1 = NULL;
-    *ret_p2 = NULL;
-}
-
-static inline void page_unlock(PageDesc *pd) { }
-static inline void page_lock_tb(const TranslationBlock *tb) { }
-static inline void page_unlock_tb(const TranslationBlock *tb) { }
+static inline void tb_lock_pages(const TranslationBlock *tb) { }
 
 /*
  * For user-only, since we are protecting all of memory with a single lock,
@@ -95,9 +87,9 @@ static void tb_remove_all(void)
 }
 
 /* Call with mmap_lock held. */
-static void tb_record(TranslationBlock *tb, PageDesc *p1, PageDesc *p2)
+static void tb_record(TranslationBlock *tb)
 {
-    target_ulong addr;
+    vaddr addr;
     int flags;
 
     assert_memory_lock();
@@ -125,29 +117,29 @@ static void tb_remove(TranslationBlock *tb)
 }
 
 /* TODO: For now, still shared with translate-all.c for system mode. */
-#define PAGE_FOR_EACH_TB(start, end, pagedesc, T, N)    \
-    for (T = foreach_tb_first(start, end),              \
-         N = foreach_tb_next(T, start, end);            \
+#define PAGE_FOR_EACH_TB(start, last, pagedesc, T, N)   \
+    for (T = foreach_tb_first(start, last),             \
+         N = foreach_tb_next(T, start, last);           \
          T != NULL;                                     \
-         T = N, N = foreach_tb_next(N, start, end))
+         T = N, N = foreach_tb_next(N, start, last))
 
 typedef TranslationBlock *PageForEachNext;
 
 static PageForEachNext foreach_tb_first(tb_page_addr_t start,
-                                        tb_page_addr_t end)
+                                        tb_page_addr_t last)
 {
-    IntervalTreeNode *n = interval_tree_iter_first(&tb_root, start, end - 1);
+    IntervalTreeNode *n = interval_tree_iter_first(&tb_root, start, last);
     return n ? container_of(n, TranslationBlock, itree) : NULL;
 }
 
 static PageForEachNext foreach_tb_next(PageForEachNext tb,
                                        tb_page_addr_t start,
-                                       tb_page_addr_t end)
+                                       tb_page_addr_t last)
 {
     IntervalTreeNode *n;
 
     if (tb) {
-        n = interval_tree_iter_next(&tb->itree, start, end - 1);
+        n = interval_tree_iter_next(&tb->itree, start, last);
         if (n) {
             return container_of(n, TranslationBlock, itree);
         }
@@ -216,13 +208,12 @@ static PageDesc *page_find_alloc(tb_page_addr_t index, bool alloc)
 {
     PageDesc *pd;
     void **lp;
-    int i;
 
     /* Level 1.  Always allocated.  */
     lp = l1_map + ((index >> v_l1_shift) & (v_l1_size - 1));
 
     /* Level 2..N-1.  */
-    for (i = v_l2_levels; i > 0; i--) {
+    for (int i = v_l2_levels; i > 0; i--) {
         void **p = qatomic_rcu_read(lp);
 
         if (p == NULL) {
@@ -313,12 +304,12 @@ struct page_entry {
  * See also: page_collection_lock().
  */
 struct page_collection {
-    GTree *tree;
+    QTree *tree;
     struct page_entry *max;
 };
 
 typedef int PageForEachNext;
-#define PAGE_FOR_EACH_TB(start, end, pagedesc, tb, n) \
+#define PAGE_FOR_EACH_TB(start, last, pagedesc, tb, n) \
     TB_FOR_EACH_TAGGED((pagedesc)->first_tb, tb, n, page_next)
 
 #ifdef CONFIG_DEBUG_TCG
@@ -390,10 +381,106 @@ static void page_lock(PageDesc *pd)
     qemu_spin_lock(&pd->lock);
 }
 
+/* Like qemu_spin_trylock, returns false on success */
+static bool page_trylock(PageDesc *pd)
+{
+    bool busy = qemu_spin_trylock(&pd->lock);
+    if (!busy) {
+        page_lock__debug(pd);
+    }
+    return busy;
+}
+
 static void page_unlock(PageDesc *pd)
 {
     qemu_spin_unlock(&pd->lock);
     page_unlock__debug(pd);
+}
+
+void tb_lock_page0(tb_page_addr_t paddr)
+{
+    page_lock(page_find_alloc(paddr >> TARGET_PAGE_BITS, true));
+}
+
+void tb_lock_page1(tb_page_addr_t paddr0, tb_page_addr_t paddr1)
+{
+    tb_page_addr_t pindex0 = paddr0 >> TARGET_PAGE_BITS;
+    tb_page_addr_t pindex1 = paddr1 >> TARGET_PAGE_BITS;
+    PageDesc *pd0, *pd1;
+
+    if (pindex0 == pindex1) {
+        /* Identical pages, and the first page is already locked. */
+        return;
+    }
+
+    pd1 = page_find_alloc(pindex1, true);
+    if (pindex0 < pindex1) {
+        /* Correct locking order, we may block. */
+        page_lock(pd1);
+        return;
+    }
+
+    /* Incorrect locking order, we cannot block lest we deadlock. */
+    if (!page_trylock(pd1)) {
+        return;
+    }
+
+    /*
+     * Drop the lock on page0 and get both page locks in the right order.
+     * Restart translation via longjmp.
+     */
+    pd0 = page_find_alloc(pindex0, false);
+    page_unlock(pd0);
+    page_lock(pd1);
+    page_lock(pd0);
+    siglongjmp(tcg_ctx->jmp_trans, -3);
+}
+
+void tb_unlock_page1(tb_page_addr_t paddr0, tb_page_addr_t paddr1)
+{
+    tb_page_addr_t pindex0 = paddr0 >> TARGET_PAGE_BITS;
+    tb_page_addr_t pindex1 = paddr1 >> TARGET_PAGE_BITS;
+
+    if (pindex0 != pindex1) {
+        page_unlock(page_find_alloc(pindex1, false));
+    }
+}
+
+static void tb_lock_pages(TranslationBlock *tb)
+{
+    tb_page_addr_t paddr0 = tb_page_addr0(tb);
+    tb_page_addr_t paddr1 = tb_page_addr1(tb);
+    tb_page_addr_t pindex0 = paddr0 >> TARGET_PAGE_BITS;
+    tb_page_addr_t pindex1 = paddr1 >> TARGET_PAGE_BITS;
+
+    if (unlikely(paddr0 == -1)) {
+        return;
+    }
+    if (unlikely(paddr1 != -1) && pindex0 != pindex1) {
+        if (pindex0 < pindex1) {
+            page_lock(page_find_alloc(pindex0, true));
+            page_lock(page_find_alloc(pindex1, true));
+            return;
+        }
+        page_lock(page_find_alloc(pindex1, true));
+    }
+    page_lock(page_find_alloc(pindex0, true));
+}
+
+void tb_unlock_pages(TranslationBlock *tb)
+{
+    tb_page_addr_t paddr0 = tb_page_addr0(tb);
+    tb_page_addr_t paddr1 = tb_page_addr1(tb);
+    tb_page_addr_t pindex0 = paddr0 >> TARGET_PAGE_BITS;
+    tb_page_addr_t pindex1 = paddr1 >> TARGET_PAGE_BITS;
+
+    if (unlikely(paddr0 == -1)) {
+        return;
+    }
+    if (unlikely(paddr1 != -1) && pindex0 != pindex1) {
+        page_unlock(page_find_alloc(pindex1, false));
+    }
+    page_unlock(page_find_alloc(pindex0, false));
 }
 
 static inline struct page_entry *
@@ -419,13 +506,10 @@ static void page_entry_destroy(gpointer p)
 /* returns false on success */
 static bool page_entry_trylock(struct page_entry *pe)
 {
-    bool busy;
-
-    busy = qemu_spin_trylock(&pe->pd->lock);
+    bool busy = page_trylock(pe->pd);
     if (!busy) {
         g_assert(!pe->locked);
         pe->locked = true;
-        page_lock__debug(pe->pd);
     }
     return busy;
 }
@@ -466,7 +550,7 @@ static bool page_trylock_add(struct page_collection *set, tb_page_addr_t addr)
     struct page_entry *pe;
     PageDesc *pd;
 
-    pe = g_tree_lookup(set->tree, &index);
+    pe = q_tree_lookup(set->tree, &index);
     if (pe) {
         return false;
     }
@@ -477,7 +561,7 @@ static bool page_trylock_add(struct page_collection *set, tb_page_addr_t addr)
     }
 
     pe = page_entry_new(pd, index);
-    g_tree_insert(set->tree, &pe->index, pe);
+    q_tree_insert(set->tree, &pe->index, pe);
 
     /*
      * If this is either (1) the first insertion or (2) a page whose index
@@ -509,30 +593,30 @@ static gint tb_page_addr_cmp(gconstpointer ap, gconstpointer bp, gpointer udata)
 }
 
 /*
- * Lock a range of pages ([@start,@end[) as well as the pages of all
+ * Lock a range of pages ([@start,@last]) as well as the pages of all
  * intersecting TBs.
  * Locking order: acquire locks in ascending order of page index.
  */
 static struct page_collection *page_collection_lock(tb_page_addr_t start,
-                                                    tb_page_addr_t end)
+                                                    tb_page_addr_t last)
 {
     struct page_collection *set = g_malloc(sizeof(*set));
     tb_page_addr_t index;
     PageDesc *pd;
 
     start >>= TARGET_PAGE_BITS;
-    end   >>= TARGET_PAGE_BITS;
-    g_assert(start <= end);
+    last >>= TARGET_PAGE_BITS;
+    g_assert(start <= last);
 
-    set->tree = g_tree_new_full(tb_page_addr_cmp, NULL, NULL,
+    set->tree = q_tree_new_full(tb_page_addr_cmp, NULL, NULL,
                                 page_entry_destroy);
     set->max = NULL;
     assert_no_pages_locked();
 
  retry:
-    g_tree_foreach(set->tree, page_entry_lock, NULL);
+    q_tree_foreach(set->tree, page_entry_lock, NULL);
 
-    for (index = start; index <= end; index++) {
+    for (index = start; index <= last; index++) {
         TranslationBlock *tb;
         PageForEachNext n;
 
@@ -541,7 +625,7 @@ static struct page_collection *page_collection_lock(tb_page_addr_t start,
             continue;
         }
         if (page_trylock_add(set, index << TARGET_PAGE_BITS)) {
-            g_tree_foreach(set->tree, page_entry_unlock, NULL);
+            q_tree_foreach(set->tree, page_entry_unlock, NULL);
             goto retry;
         }
         assert_page_locked(pd);
@@ -550,7 +634,7 @@ static struct page_collection *page_collection_lock(tb_page_addr_t start,
                 (tb_page_addr1(tb) != -1 &&
                  page_trylock_add(set, tb_page_addr1(tb)))) {
                 /* drop all locks, and reacquire in order */
-                g_tree_foreach(set->tree, page_entry_unlock, NULL);
+                q_tree_foreach(set->tree, page_entry_unlock, NULL);
                 goto retry;
             }
         }
@@ -561,7 +645,7 @@ static struct page_collection *page_collection_lock(tb_page_addr_t start,
 static void page_collection_unlock(struct page_collection *set)
 {
     /* entries are unlocked and freed via page_entry_destroy */
-    g_tree_destroy(set->tree);
+    q_tree_destroy(set->tree);
     g_free(set);
 }
 
@@ -603,8 +687,7 @@ static void tb_remove_all(void)
  * Add the tb in the target page and protect it if necessary.
  * Called with @p->lock held.
  */
-static inline void tb_page_add(PageDesc *p, TranslationBlock *tb,
-                               unsigned int n)
+static void tb_page_add(PageDesc *p, TranslationBlock *tb, unsigned int n)
 {
     bool page_already_protected;
 
@@ -624,15 +707,21 @@ static inline void tb_page_add(PageDesc *p, TranslationBlock *tb,
     }
 }
 
-static void tb_record(TranslationBlock *tb, PageDesc *p1, PageDesc *p2)
+static void tb_record(TranslationBlock *tb)
 {
-    tb_page_add(p1, tb, 0);
-    if (unlikely(p2)) {
-        tb_page_add(p2, tb, 1);
+    tb_page_addr_t paddr0 = tb_page_addr0(tb);
+    tb_page_addr_t paddr1 = tb_page_addr1(tb);
+    tb_page_addr_t pindex0 = paddr0 >> TARGET_PAGE_BITS;
+    tb_page_addr_t pindex1 = paddr0 >> TARGET_PAGE_BITS;
+
+    assert(paddr0 != -1);
+    if (unlikely(paddr1 != -1) && pindex0 != pindex1) {
+        tb_page_add(page_find_alloc(pindex1, false), tb, 1);
     }
+    tb_page_add(page_find_alloc(pindex0, false), tb, 0);
 }
 
-static inline void tb_page_remove(PageDesc *pd, TranslationBlock *tb)
+static void tb_page_remove(PageDesc *pd, TranslationBlock *tb)
 {
     TranslationBlock *tb1;
     uintptr_t *pprev;
@@ -652,74 +741,16 @@ static inline void tb_page_remove(PageDesc *pd, TranslationBlock *tb)
 
 static void tb_remove(TranslationBlock *tb)
 {
-    PageDesc *pd;
+    tb_page_addr_t paddr0 = tb_page_addr0(tb);
+    tb_page_addr_t paddr1 = tb_page_addr1(tb);
+    tb_page_addr_t pindex0 = paddr0 >> TARGET_PAGE_BITS;
+    tb_page_addr_t pindex1 = paddr0 >> TARGET_PAGE_BITS;
 
-    pd = page_find(tb->page_addr[0] >> TARGET_PAGE_BITS);
-    tb_page_remove(pd, tb);
-    if (unlikely(tb->page_addr[1] != -1)) {
-        pd = page_find(tb->page_addr[1] >> TARGET_PAGE_BITS);
-        tb_page_remove(pd, tb);
+    assert(paddr0 != -1);
+    if (unlikely(paddr1 != -1) && pindex0 != pindex1) {
+        tb_page_remove(page_find_alloc(pindex1, false), tb);
     }
-}
-
-static void page_lock_pair(PageDesc **ret_p1, tb_page_addr_t phys1,
-                           PageDesc **ret_p2, tb_page_addr_t phys2, bool alloc)
-{
-    PageDesc *p1, *p2;
-    tb_page_addr_t page1;
-    tb_page_addr_t page2;
-
-    assert_memory_lock();
-    g_assert(phys1 != -1);
-
-    page1 = phys1 >> TARGET_PAGE_BITS;
-    page2 = phys2 >> TARGET_PAGE_BITS;
-
-    p1 = page_find_alloc(page1, alloc);
-    if (ret_p1) {
-        *ret_p1 = p1;
-    }
-    if (likely(phys2 == -1)) {
-        page_lock(p1);
-        return;
-    } else if (page1 == page2) {
-        page_lock(p1);
-        if (ret_p2) {
-            *ret_p2 = p1;
-        }
-        return;
-    }
-    p2 = page_find_alloc(page2, alloc);
-    if (ret_p2) {
-        *ret_p2 = p2;
-    }
-    if (page1 < page2) {
-        page_lock(p1);
-        page_lock(p2);
-    } else {
-        page_lock(p2);
-        page_lock(p1);
-    }
-}
-
-/* lock the page(s) of a TB in the correct acquisition order */
-static void page_lock_tb(const TranslationBlock *tb)
-{
-    page_lock_pair(NULL, tb_page_addr0(tb), NULL, tb_page_addr1(tb), false);
-}
-
-static void page_unlock_tb(const TranslationBlock *tb)
-{
-    PageDesc *p1 = page_find(tb_page_addr0(tb) >> TARGET_PAGE_BITS);
-
-    page_unlock(p1);
-    if (unlikely(tb_page_addr1(tb) != -1)) {
-        PageDesc *p2 = page_find(tb_page_addr1(tb) >> TARGET_PAGE_BITS);
-
-        if (p2 != p1) {
-            page_unlock(p2);
-        }
-    }
+    tb_page_remove(page_find_alloc(pindex0, false), tb);
 }
 #endif /* CONFIG_USER_ONLY */
 
@@ -744,7 +775,7 @@ static void do_tb_flush(CPUState *cpu, run_on_cpu_data tb_flush_count)
 
     tcg_region_reset_all();
     /* XXX: flush processor icache at this point if cache flush is expensive */
-    qatomic_mb_set(&tb_ctx.tb_flush_count, tb_ctx.tb_flush_count + 1);
+    qatomic_inc(&tb_ctx.tb_flush_count);
 
 done:
     mmap_unlock();
@@ -756,9 +787,9 @@ done:
 void tb_flush(CPUState *cpu)
 {
     if (tcg_enabled()) {
-        unsigned tb_flush_count = qatomic_mb_read(&tb_ctx.tb_flush_count);
+        unsigned tb_flush_count = qatomic_read(&tb_ctx.tb_flush_count);
 
-        if (cpu_in_exclusive_context(cpu)) {
+        if (cpu_in_serial_context(cpu)) {
             do_tb_flush(cpu, RUN_ON_CPU_HOST_INT(tb_flush_count));
         } else {
             async_safe_run_on_cpu(cpu, do_tb_flush,
@@ -847,13 +878,13 @@ static void tb_jmp_cache_inval_tb(TranslationBlock *tb)
 {
     CPUState *cpu;
 
-    if (TARGET_TB_PCREL) {
+    if (tb_cflags(tb) & CF_PCREL) {
         /* A TB may be at any virtual address */
         CPU_FOREACH(cpu) {
             tcg_flush_jmp_cache(cpu);
         }
     } else {
-        uint32_t h = tb_jmp_cache_hash_func(tb_pc(tb));
+        uint32_t h = tb_jmp_cache_hash_func(tb->pc);
 
         CPU_FOREACH(cpu) {
             CPUJumpCache *jc = cpu->tb_jmp_cache;
@@ -885,8 +916,8 @@ static void do_tb_phys_invalidate(TranslationBlock *tb, bool rm_from_page_list)
 
     /* remove the TB from the hash list */
     phys_pc = tb_page_addr0(tb);
-    h = tb_hash_func(phys_pc, (TARGET_TB_PCREL ? 0 : tb_pc(tb)),
-                     tb->flags, orig_cflags, tb->trace_vcpu_dstate);
+    h = tb_hash_func(phys_pc, (orig_cflags & CF_PCREL ? 0 : tb->pc),
+                     tb->flags, tb->cs_base, orig_cflags);
     if (!qht_remove(&tb_ctx.htable, tb, h)) {
         return;
     }
@@ -924,18 +955,16 @@ static void tb_phys_invalidate__locked(TranslationBlock *tb)
 void tb_phys_invalidate(TranslationBlock *tb, tb_page_addr_t page_addr)
 {
     if (page_addr == -1 && tb_page_addr0(tb) != -1) {
-        page_lock_tb(tb);
+        tb_lock_pages(tb);
         do_tb_phys_invalidate(tb, true);
-        page_unlock_tb(tb);
+        tb_unlock_pages(tb);
     } else {
         do_tb_phys_invalidate(tb, false);
     }
 }
 
 /*
- * Add a new TB and link it to the physical page tables. phys_page2 is
- * (-1) to indicate that only one page contains the TB.
- *
+ * Add a new TB and link it to the physical page tables.
  * Called with mmap_lock held for user-mode emulation.
  *
  * Returns a pointer @tb, or a pointer to an existing TB that matches @tb.
@@ -943,43 +972,29 @@ void tb_phys_invalidate(TranslationBlock *tb, tb_page_addr_t page_addr)
  * for the same block of guest code that @tb corresponds to. In that case,
  * the caller should discard the original @tb, and use instead the returned TB.
  */
-TranslationBlock *tb_link_page(TranslationBlock *tb, tb_page_addr_t phys_pc,
-                               tb_page_addr_t phys_page2)
+TranslationBlock *tb_link_page(TranslationBlock *tb)
 {
-    PageDesc *p;
-    PageDesc *p2 = NULL;
     void *existing_tb = NULL;
     uint32_t h;
 
     assert_memory_lock();
     tcg_debug_assert(!(tb->cflags & CF_INVALID));
 
-    /*
-     * Add the TB to the page list, acquiring first the pages's locks.
-     * We keep the locks held until after inserting the TB in the hash table,
-     * so that if the insertion fails we know for sure that the TBs are still
-     * in the page descriptors.
-     * Note that inserting into the hash table first isn't an option, since
-     * we can only insert TBs that are fully initialized.
-     */
-    page_lock_pair(&p, phys_pc, &p2, phys_page2, true);
-    tb_record(tb, p, p2);
+    tb_record(tb);
 
     /* add in the hash table */
-    h = tb_hash_func(phys_pc, (TARGET_TB_PCREL ? 0 : tb_pc(tb)),
-                     tb->flags, tb->cflags, tb->trace_vcpu_dstate);
+    h = tb_hash_func(tb_page_addr0(tb), (tb->cflags & CF_PCREL ? 0 : tb->pc),
+                     tb->flags, tb->cs_base, tb->cflags);
     qht_insert(&tb_ctx.htable, tb, h, &existing_tb);
 
     /* remove TB from the page(s) if we couldn't insert it */
     if (unlikely(existing_tb)) {
         tb_remove(tb);
-        tb = existing_tb;
+        tb_unlock_pages(tb);
+        return existing_tb;
     }
 
-    if (p2 && p2 != p) {
-        page_unlock(p2);
-    }
-    page_unlock(p);
+    tb_unlock_pages(tb);
     return tb;
 }
 
@@ -989,14 +1004,14 @@ TranslationBlock *tb_link_page(TranslationBlock *tb, tb_page_addr_t phys_pc,
  * Called with mmap_lock held for user-mode emulation.
  * NOTE: this function must not be called while a TB is running.
  */
-void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end)
+void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t last)
 {
     TranslationBlock *tb;
     PageForEachNext n;
 
     assert_memory_lock();
 
-    PAGE_FOR_EACH_TB(start, end, unused, tb, n) {
+    PAGE_FOR_EACH_TB(start, last, unused, tb, n) {
         tb_phys_invalidate__locked(tb);
     }
 }
@@ -1008,11 +1023,11 @@ void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end)
  */
 void tb_invalidate_phys_page(tb_page_addr_t addr)
 {
-    tb_page_addr_t start, end;
+    tb_page_addr_t start, last;
 
     start = addr & TARGET_PAGE_MASK;
-    end = start + TARGET_PAGE_SIZE;
-    tb_invalidate_phys_range(start, end);
+    last = addr | ~TARGET_PAGE_MASK;
+    tb_invalidate_phys_range(start, last);
 }
 
 /*
@@ -1024,43 +1039,53 @@ void tb_invalidate_phys_page(tb_page_addr_t addr)
  */
 bool tb_invalidate_phys_page_unwind(tb_page_addr_t addr, uintptr_t pc)
 {
-    assert(pc != 0);
-#ifdef TARGET_HAS_PRECISE_SMC
-    assert_memory_lock();
-    {
-        TranslationBlock *current_tb = tcg_tb_lookup(pc);
-        bool current_tb_modified = false;
-        TranslationBlock *tb;
-        PageForEachNext n;
+    TranslationBlock *current_tb;
+    bool current_tb_modified;
+    TranslationBlock *tb;
+    PageForEachNext n;
+    tb_page_addr_t last;
 
-        addr &= TARGET_PAGE_MASK;
-
-        PAGE_FOR_EACH_TB(addr, addr + TARGET_PAGE_SIZE, unused, tb, n) {
-            if (current_tb == tb &&
-                (tb_cflags(current_tb) & CF_COUNT_MASK) != 1) {
-                /*
-                 * If we are modifying the current TB, we must stop its
-                 * execution. We could be more precise by checking that
-                 * the modification is after the current PC, but it would
-                 * require a specialized function to partially restore
-                 * the CPU state.
-                 */
-                current_tb_modified = true;
-                cpu_restore_state_from_tb(current_cpu, current_tb, pc);
-            }
-            tb_phys_invalidate__locked(tb);
-        }
-
-        if (current_tb_modified) {
-            /* Force execution of one insn next time.  */
-            CPUState *cpu = current_cpu;
-            cpu->cflags_next_tb = 1 | CF_NOIRQ | curr_cflags(current_cpu);
-            return true;
-        }
+    /*
+     * Without precise smc semantics, or when outside of a TB,
+     * we can skip to invalidate.
+     */
+#ifndef TARGET_HAS_PRECISE_SMC
+    pc = 0;
+#endif
+    if (!pc) {
+        tb_invalidate_phys_page(addr);
+        return false;
     }
-#else
-    tb_invalidate_phys_page(addr);
-#endif /* TARGET_HAS_PRECISE_SMC */
+
+    assert_memory_lock();
+    current_tb = tcg_tb_lookup(pc);
+
+    last = addr | ~TARGET_PAGE_MASK;
+    addr &= TARGET_PAGE_MASK;
+    current_tb_modified = false;
+
+    PAGE_FOR_EACH_TB(addr, last, unused, tb, n) {
+        if (current_tb == tb &&
+            (tb_cflags(current_tb) & CF_COUNT_MASK) != 1) {
+            /*
+             * If we are modifying the current TB, we must stop its
+             * execution. We could be more precise by checking that
+             * the modification is after the current PC, but it would
+             * require a specialized function to partially restore
+             * the CPU state.
+             */
+            current_tb_modified = true;
+            cpu_restore_state_from_tb(current_cpu, current_tb, pc);
+        }
+        tb_phys_invalidate__locked(tb);
+    }
+
+    if (current_tb_modified) {
+        /* Force execution of one insn next time.  */
+        CPUState *cpu = current_cpu;
+        cpu->cflags_next_tb = 1 | CF_NOIRQ | curr_cflags(current_cpu);
+        return true;
+    }
     return false;
 }
 #else
@@ -1071,34 +1096,36 @@ bool tb_invalidate_phys_page_unwind(tb_page_addr_t addr, uintptr_t pc)
 static void
 tb_invalidate_phys_page_range__locked(struct page_collection *pages,
                                       PageDesc *p, tb_page_addr_t start,
-                                      tb_page_addr_t end,
+                                      tb_page_addr_t last,
                                       uintptr_t retaddr)
 {
     TranslationBlock *tb;
-    tb_page_addr_t tb_start, tb_end;
     PageForEachNext n;
 #ifdef TARGET_HAS_PRECISE_SMC
     bool current_tb_modified = false;
     TranslationBlock *current_tb = retaddr ? tcg_tb_lookup(retaddr) : NULL;
 #endif /* TARGET_HAS_PRECISE_SMC */
 
+    /* Range may not cross a page. */
+    tcg_debug_assert(((start ^ last) & TARGET_PAGE_MASK) == 0);
+
     /*
-     * We remove all the TBs in the range [start, end[.
+     * We remove all the TBs in the range [start, last].
      * XXX: see if in some cases it could be faster to invalidate all the code
      */
-    PAGE_FOR_EACH_TB(start, end, p, tb, n) {
+    PAGE_FOR_EACH_TB(start, last, p, tb, n) {
+        tb_page_addr_t tb_start, tb_last;
+
         /* NOTE: this is subtle as a TB may span two physical pages */
+        tb_start = tb_page_addr0(tb);
+        tb_last = tb_start + tb->size - 1;
         if (n == 0) {
-            /* NOTE: tb_end may be after the end of the page, but
-               it is not a problem */
-            tb_start = tb_page_addr0(tb);
-            tb_end = tb_start + tb->size;
+            tb_last = MIN(tb_last, tb_start | ~TARGET_PAGE_MASK);
         } else {
             tb_start = tb_page_addr1(tb);
-            tb_end = tb_start + ((tb_page_addr0(tb) + tb->size)
-                                 & ~TARGET_PAGE_MASK);
+            tb_last = tb_start + (tb_last & ~TARGET_PAGE_MASK);
         }
-        if (!(tb_end <= start || tb_start >= end)) {
+        if (!(tb_last < start || tb_start > last)) {
 #ifdef TARGET_HAS_PRECISE_SMC
             if (current_tb == tb &&
                 (tb_cflags(current_tb) & CF_COUNT_MASK) != 1) {
@@ -1140,7 +1167,7 @@ tb_invalidate_phys_page_range__locked(struct page_collection *pages,
 void tb_invalidate_phys_page(tb_page_addr_t addr)
 {
     struct page_collection *pages;
-    tb_page_addr_t start, end;
+    tb_page_addr_t start, last;
     PageDesc *p;
 
     p = page_find(addr >> TARGET_PAGE_BITS);
@@ -1149,36 +1176,40 @@ void tb_invalidate_phys_page(tb_page_addr_t addr)
     }
 
     start = addr & TARGET_PAGE_MASK;
-    end = start + TARGET_PAGE_SIZE;
-    pages = page_collection_lock(start, end);
-    tb_invalidate_phys_page_range__locked(pages, p, start, end, 0);
+    last = addr | ~TARGET_PAGE_MASK;
+    pages = page_collection_lock(start, last);
+    tb_invalidate_phys_page_range__locked(pages, p, start, last, 0);
     page_collection_unlock(pages);
 }
 
 /*
  * Invalidate all TBs which intersect with the target physical address range
- * [start;end[. NOTE: start and end may refer to *different* physical pages.
+ * [start;last]. NOTE: start and end may refer to *different* physical pages.
  * 'is_cpu_write_access' should be true if called from a real cpu write
  * access: the virtual CPU will exit the current TB if code is modified inside
  * this TB.
  */
-void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end)
+void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t last)
 {
     struct page_collection *pages;
-    tb_page_addr_t next;
+    tb_page_addr_t index, index_last;
 
-    pages = page_collection_lock(start, end);
-    for (next = (start & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
-         start < end;
-         start = next, next += TARGET_PAGE_SIZE) {
-        PageDesc *pd = page_find(start >> TARGET_PAGE_BITS);
-        tb_page_addr_t bound = MIN(next, end);
+    pages = page_collection_lock(start, last);
+
+    index_last = last >> TARGET_PAGE_BITS;
+    for (index = start >> TARGET_PAGE_BITS; index <= index_last; index++) {
+        PageDesc *pd = page_find(index);
+        tb_page_addr_t page_start, page_last;
 
         if (pd == NULL) {
             continue;
         }
         assert_page_locked(pd);
-        tb_invalidate_phys_page_range__locked(pages, pd, start, bound, 0);
+        page_start = index << TARGET_PAGE_BITS;
+        page_last = page_start | ~TARGET_PAGE_MASK;
+        page_last = MIN(page_last, last);
+        tb_invalidate_phys_page_range__locked(pages, pd,
+                                              page_start, page_last, 0);
     }
     page_collection_unlock(pages);
 }
@@ -1198,7 +1229,7 @@ static void tb_invalidate_phys_page_fast__locked(struct page_collection *pages,
     }
 
     assert_page_locked(p);
-    tb_invalidate_phys_page_range__locked(pages, p, start, start + len, ra);
+    tb_invalidate_phys_page_range__locked(pages, p, start, start + len - 1, ra);
 }
 
 /*
@@ -1212,7 +1243,7 @@ void tb_invalidate_phys_range_fast(ram_addr_t ram_addr,
 {
     struct page_collection *pages;
 
-    pages = page_collection_lock(ram_addr, ram_addr + size);
+    pages = page_collection_lock(ram_addr, ram_addr + size - 1);
     tb_invalidate_phys_page_fast__locked(pages, ram_addr, size, retaddr);
     page_collection_unlock(pages);
 }

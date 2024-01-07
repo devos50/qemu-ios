@@ -31,7 +31,6 @@ idef-parser will compile the above code into the following code:
        TCGv_i32 tmp_0 = tcg_temp_new_i32();
        tcg_gen_add_i32(tmp_0, RsV, RtV);
        tcg_gen_mov_i32(RdV, tmp_0);
-       tcg_temp_free_i32(tmp_0);
    }
 
 The output of the compilation process will be a function, containing the
@@ -101,12 +100,6 @@ registers, storing the result in the just declared temporary.
 The result of the addition is now stored in the temporary, we move it into the
 correct destination register. This code may seem inefficient, but QEMU will
 perform some optimizations on the tinycode, reducing the unnecessary copy.
-
-::
-
-   tcg_temp_free_i32(tmp_0);
-
-Finally, we free the temporary we used to hold the addition result.
 
 Parser Input
 ------------
@@ -294,9 +287,9 @@ generators the previous declarations are mapped to
 
 ::
 
-    int var1;           ->      TCGv_i32 var1 = tcg_temp_local_new_i32();
+    int var1;           ->      TCGv_i32 var1 = tcg_temp_new_i32();
 
-    int var2 = 0;       ->      TCGv_i32 var1 = tcg_temp_local_new_i32();
+    int var2 = 0;       ->      TCGv_i32 var1 = tcg_temp_new_i32();
                                 tcg_gen_movi_i32(j, ((int64_t) 0ULL));
 
 which are later automatically freed at the end of the function they're declared
@@ -447,7 +440,7 @@ interested part of the grammar.
 
 Run-time errors can be divided between lexing and parsing errors, lexing errors
 are hard to detect, since the ``var`` token will catch everything which is not
-catched by other tokens, but easy to fix, because most of the time a simple
+caught by other tokens, but easy to fix, because most of the time a simple
 regex editing will be enough.
 
 idef-parser features a fancy parsing error reporting scheme, which for each
@@ -524,7 +517,6 @@ instruction,
         TCGv_i32 tmp_0 = tcg_temp_new_i32();
         tcg_gen_add_i32(tmp_0, RsV, RsV);
         tcg_gen_mov_i32(RdV, tmp_0);
-        tcg_temp_free_i32(tmp_0);
     }
 
 Here the bug, albeit hard to spot, is in ``tcg_gen_add_i32(tmp_0, RsV, RsV);``
@@ -552,11 +544,11 @@ to compare our buggy CPU state against, running
 
 ::
 
-    meson configure -Dhexagon_idef_parser_enabled=false
+    meson configure -Dhexagon_idef_parser=false
 
 will disable the idef-parser for all instructions and fallback on manual
 tinycode generator overrides, or on helper function implementations. Recompiling
-gives us ``qemu-hexagon`` which passes all tests. If ``qemu-heaxgon-buggy`` is
+gives us ``qemu-hexagon`` which passes all tests. If ``qemu-hexagon-buggy`` is
 our binary with the incorrect tinycode generators, we can compare the CPU state
 between the two versions
 

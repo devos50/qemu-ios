@@ -17,10 +17,14 @@
 #include "trace.h"
 #include "qapi/error.h"
 #include "block/block-copy.h"
+#include "block/block_int-io.h"
+#include "block/dirty-bitmap.h"
 #include "block/reqlist.h"
 #include "sysemu/block-backend.h"
 #include "qemu/units.h"
+#include "qemu/co-shared-resource.h"
 #include "qemu/coroutine.h"
+#include "qemu/ratelimit.h"
 #include "block/aio_task.h"
 #include "qemu/error-report.h"
 #include "qemu/memalign.h"
@@ -63,7 +67,7 @@ typedef struct BlockCopyCallState {
     QLIST_ENTRY(BlockCopyCallState) list;
 
     /*
-     * Fields that report information about return values and erros.
+     * Fields that report information about return values and errors.
      * Protected by lock in BlockCopyState.
      */
     bool error_is_read;
@@ -309,7 +313,12 @@ static int64_t block_copy_calculate_cluster_size(BlockDriverState *target,
 {
     int ret;
     BlockDriverInfo bdi;
-    bool target_does_cow = bdrv_backing_chain_next(target);
+    bool target_does_cow;
+
+    GLOBAL_STATE_CODE();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
+    target_does_cow = bdrv_backing_chain_next(target);
 
     /*
      * If there is no backing file on the target, we cannot rely on COW if our
@@ -351,6 +360,8 @@ BlockCopyState *block_copy_state_new(BdrvChild *source, BdrvChild *target,
     BdrvDirtyBitmap *copy_bitmap;
     bool is_fleecing;
 
+    GLOBAL_STATE_CODE();
+
     cluster_size = block_copy_calculate_cluster_size(target->bs, errp);
     if (cluster_size < 0) {
         return NULL;
@@ -388,7 +399,9 @@ BlockCopyState *block_copy_state_new(BdrvChild *source, BdrvChild *target,
      * For more information see commit f8d59dfb40bb and test
      * tests/qemu-iotests/222
      */
+    bdrv_graph_rdlock_main_loop();
     is_fleecing = bdrv_chain_contains(target->bs, source->bs);
+    bdrv_graph_rdunlock_main_loop();
 
     s = g_new(BlockCopyState, 1);
     *s = (BlockCopyState) {
@@ -458,17 +471,16 @@ static coroutine_fn int block_copy_task_run(AioTaskPool *pool,
  * Do copy of cluster-aligned chunk. Requested region is allowed to exceed
  * s->len only to cover last cluster when s->len is not aligned to clusters.
  *
- * No sync here: nor bitmap neighter intersecting requests handling, only copy.
+ * No sync here: neither bitmap nor intersecting requests handling, only copy.
  *
  * @method is an in-out argument, so that copy_range can be either extended to
  * a full-size buffer or disabled if the copy_range attempt fails.  The output
  * value of @method should be used for subsequent tasks.
  * Returns 0 on success.
  */
-static int coroutine_fn block_copy_do_copy(BlockCopyState *s,
-                                           int64_t offset, int64_t bytes,
-                                           BlockCopyMethod *method,
-                                           bool *error_is_read)
+static int coroutine_fn GRAPH_RDLOCK
+block_copy_do_copy(BlockCopyState *s, int64_t offset, int64_t bytes,
+                   BlockCopyMethod *method, bool *error_is_read)
 {
     int ret;
     int64_t nbytes = MIN(offset + bytes, s->len) - offset;
@@ -554,8 +566,10 @@ static coroutine_fn int block_copy_task_entry(AioTask *task)
     BlockCopyMethod method = t->method;
     int ret;
 
-    ret = block_copy_do_copy(s, t->req.offset, t->req.bytes, &method,
-                             &error_is_read);
+    WITH_GRAPH_RDLOCK_GUARD() {
+        ret = block_copy_do_copy(s, t->req.offset, t->req.bytes, &method,
+                                 &error_is_read);
+    }
 
     WITH_QEMU_LOCK_GUARD(&s->lock) {
         if (s->method == t->method) {
@@ -577,9 +591,9 @@ static coroutine_fn int block_copy_task_entry(AioTask *task)
     return ret;
 }
 
-static coroutine_fn int block_copy_block_status(BlockCopyState *s,
-                                                int64_t offset,
-                                                int64_t bytes, int64_t *pnum)
+static coroutine_fn GRAPH_RDLOCK
+int block_copy_block_status(BlockCopyState *s, int64_t offset, int64_t bytes,
+                            int64_t *pnum)
 {
     int64_t num;
     BlockDriverState *base;
@@ -614,9 +628,9 @@ static coroutine_fn int block_copy_block_status(BlockCopyState *s,
  * Check if the cluster starting at offset is allocated or not.
  * return via pnum the number of contiguous clusters sharing this allocation.
  */
-static int coroutine_fn block_copy_is_cluster_allocated(BlockCopyState *s,
-                                                        int64_t offset,
-                                                        int64_t *pnum)
+static int coroutine_fn GRAPH_RDLOCK
+block_copy_is_cluster_allocated(BlockCopyState *s, int64_t offset,
+                                int64_t *pnum)
 {
     BlockDriverState *bs = s->source->bs;
     int64_t count, total_count = 0;
@@ -626,6 +640,7 @@ static int coroutine_fn block_copy_is_cluster_allocated(BlockCopyState *s,
     assert(QEMU_IS_ALIGNED(offset, s->cluster_size));
 
     while (true) {
+        /* protected in backup_run() */
         ret = bdrv_co_is_allocated(bs, offset, bytes, &count);
         if (ret < 0) {
             return ret;
@@ -700,7 +715,7 @@ int64_t coroutine_fn block_copy_reset_unallocated(BlockCopyState *s,
  * Returns 1 if dirty clusters found and successfully copied, 0 if no dirty
  * clusters found and -errno on failure.
  */
-static int coroutine_fn
+static int coroutine_fn GRAPH_RDLOCK
 block_copy_dirty_clusters(BlockCopyCallState *call_state)
 {
     BlockCopyState *s = call_state->s;
@@ -823,7 +838,8 @@ void block_copy_kick(BlockCopyCallState *call_state)
  * it means that some I/O operation failed in context of _this_ block_copy call,
  * not some parallel operation.
  */
-static int coroutine_fn block_copy_common(BlockCopyCallState *call_state)
+static int coroutine_fn GRAPH_RDLOCK
+block_copy_common(BlockCopyCallState *call_state)
 {
     int ret;
     BlockCopyState *s = call_state->s;
@@ -888,6 +904,7 @@ static int coroutine_fn block_copy_common(BlockCopyCallState *call_state)
 
 static void coroutine_fn block_copy_async_co_entry(void *opaque)
 {
+    GRAPH_RDLOCK_GUARD();
     block_copy_common(opaque);
 }
 

@@ -91,6 +91,11 @@ const generic_fuzz_config predefined_configs[] = {
         "-device e1000e,netdev=net0 -netdev user,id=net0",
         .objects = "e1000e",
     },{
+        .name = "igb",
+        .args = "-M q35 -nodefaults "
+        "-device igb,netdev=net0 -netdev user,id=net0",
+        .objects = "igb",
+    },{
         .name = "cirrus-vga",
         .args = "-machine q35 -nodefaults -device cirrus-vga",
         .objects = "cirrus*",
@@ -101,8 +106,10 @@ const generic_fuzz_config predefined_configs[] = {
     },{
         .name = "intel-hda",
         .args = "-machine q35 -nodefaults -device intel-hda,id=hda0 "
-        "-device hda-output,bus=hda0.0 -device hda-micro,bus=hda0.0 "
-        "-device hda-duplex,bus=hda0.0",
+        "-audiodev driver=none,id=audio0",
+        "-device hda-output,bus=hda0.0,audiodev=audio0 "
+        "-device hda-micro,bus=hda0.0,audiodev=audio0 "
+        "-device hda-duplex,bus=hda0.0,audiodev=audio0",
         .objects = "intel-hda",
     },{
         .name = "ide-hd",

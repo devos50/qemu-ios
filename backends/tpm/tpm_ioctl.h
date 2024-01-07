@@ -12,8 +12,6 @@
 # define __USE_LINUX_IOCTL_DEFS
 #endif
 
-#include <stdint.h>
-#include <sys/types.h>
 #ifndef _WIN32
 #include <sys/uio.h>
 #include <sys/ioctl.h>
@@ -240,7 +238,7 @@ struct ptm_lockstorage {
         } req; /* request */
         struct {
             ptm_res tpm_result;
-        } resp; /* reponse */
+        } resp; /* response */
     } u;
 };
 
