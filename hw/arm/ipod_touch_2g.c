@@ -12,7 +12,9 @@
 #include "hw/arm/exynos4210.h"
 #include "hw/arm/ipod_touch_2g.h"
 #include "target/arm/cpregs.h"
+
 #include "qemu/error-report.h"
+
 
 #define VMSTATE_IT2G_CPREG(name) \
         VMSTATE_UINT64(IT2G_CPREG_VAR_NAME(name), IPodTouchMachineState)
@@ -27,6 +29,29 @@
                        - offsetof(ARMCPU, env)                                     \
     }
 
+
+#define IT2G_CPREG_DEF_QEMU_CALL \
+    {                            \
+        .cp = 15,                \
+        .name = "QEMU_CALL",     \
+        .opc0 = 0,               \
+        .opc1 = 3,               \
+        .crn = 15,               \
+        .crm = 15,               \
+        .opc2 = 0,               \
+        .access = PL0_RW,        \
+        .resetvalue = 0,         \
+        .state = ARM_CP_STATE_AA32, \
+        .type = ARM_CP_IO,       \
+        .fieldoffset = offsetof(IPodTouchMachineState, IT2G_CPREG_VAR_NAME(QEMU_CALL)) \
+                       - offsetof(ARMCPU, env), \
+        .readfn = qemu_call_status, \
+        .writefn = qemu_call,     \
+    }
+
+const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L8900_GPIO_G2_IRQ, S5L8900_GPIO_G3_IRQ, S5L8900_GPIO_G4_IRQ };
+
+
 static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uint32_t size)
 {
     MemoryRegion *sec = g_new(MemoryRegion, 1);
@@ -39,6 +64,7 @@ static const ARMCPRegInfo it2g_cp_reginfo_tcg[] = {
     IT2G_CPREG_DEF(REG1, 0, 0, 15, 2, 4, PL1_RW, 0),
     IT2G_CPREG_DEF(REG1, 0, 0, 7, 14, 0, PL1_RW, 0),
     IT2G_CPREG_DEF(REG1, 0, 0, 7, 10, 0, PL1_RW, 0),
+    IT2G_CPREG_DEF_QEMU_CALL,
 };
 
 static void ipod_touch_cpu_setup(MachineState *machine, MemoryRegion **sysmem, ARMCPU **cpu, AddressSpace **nsas)
@@ -531,5 +557,6 @@ static void ipod_touch_machine_types(void)
 {
     type_register_static(&ipod_touch_machine_info);
 }
+
 
 type_init(ipod_touch_machine_types)

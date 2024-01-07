@@ -4,7 +4,6 @@
 # CONFIG_TEST_DEVICES=n
 
 CONFIG_ARM_VIRT=y
-
 # These are selected by default when TCG is enabled, uncomment them to
 # keep out of the build.
 # CONFIG_CUBIEBOARD=n
@@ -45,3 +44,4 @@ CONFIG_ARM_VIRT=y
 # CONFIG_FSL_IMX6UL=n
 # CONFIG_ALLWINNER_H3=n
 CONFIG_IPOD_TOUCH_2G=y
+

@@ -330,6 +330,7 @@ static void pl192_write(void *opaque, hwaddr offset, uint64_t value, unsigned si
             return;
         default:
             fprintf(stderr, "pl192: bad write offset (2) " HWADDR_FMT_plx "\n", offset);
+
             return;
     }
 
