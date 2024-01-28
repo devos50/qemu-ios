@@ -3,6 +3,7 @@
 
 #include "hw/irq.h"
 #include "hw/usb.h"
+#include "hw/usb/tcp_usb.h"
 
 #define DEVICE_NAME		"usb_synopsys"
 
@@ -223,7 +224,7 @@ typedef struct synopsys_usb_state
 
 	char *server_host;
 	uint32_t server_port;
-	//tcp_usb_state_t tcp_state;
+	tcp_usb_state_t tcp_state;
 
 	uint32_t pcgcctl;
 

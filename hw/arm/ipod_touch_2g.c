@@ -407,7 +407,9 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8720_USB_OTG_IRQ), s5l8720_usb_hwcfg);
     synopsys_usb_state *usb_otg = S5L8900USBOTG(dev);
     nms->usb_otg = usb_otg;
+    busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, USBOTG_MEM_BASE, &nms->usb_otg->iomem);
+    sysbus_realize(busdev, &error_fatal);
 
     // init two pl080 DMAC0 devices
     dev = qdev_new("pl080");
@@ -533,6 +535,10 @@ static void ipod_touch_machine_init(MachineState *machine)
     qemu_register_reset(ipod_touch_cpu_reset, nms);
 
     qemu_add_kbd_event_handler(ipod_touch_key_event, spi4_state->mt);
+
+    // toggle DFU
+    gpio_set_on(nms->gpio_state->gpio_state, GPIO_FORCE_DFU);
+    nms->usb_phys_state->is_cable_connected = true;
 }
 
 static void ipod_touch_machine_class_init(ObjectClass *klass, void *data)

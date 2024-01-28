@@ -11,6 +11,8 @@ system_ss.add(when: 'CONFIG_USB', if_true: files(
   'pcap.c',
 ))
 
+system_ss.add(when: 'CONFIG_USB', if_true: files('tcp_usb.c'))
+
 # usb host adapters
 system_ss.add(when: 'CONFIG_USB_UHCI', if_true: files('hcd-uhci.c'))
 system_ss.add(when: 'CONFIG_USB_OHCI', if_true: files('hcd-ohci.c'))
