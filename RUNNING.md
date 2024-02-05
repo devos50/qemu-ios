@@ -2,6 +2,18 @@
 
 This file contains the instructions on how to run the iPod Touch 2G emulator using QEMU.
 Note that this is an experimental release and the functionality of the device is still limited.
+Linux compatibility is currently unstable. Efforts are underway to improve it.
+
+### Getting the Source Code
+
+Clone the repository using the following commands:
+
+```
+git clone https://github.com/devos50/qemu-ios.git
+cd qemu-ios
+```
+
+Now you can proceed with the rest of the instructions for building and running the emulator.
 
 ### Building QEMU
 
@@ -28,6 +40,9 @@ cd build
 
 # On Apple Silicon Macs
 ../configure --enable-sdl --target-list=arm-softmmu --disable-capstone --disable-pie --disable-slirp --extra-cflags=-I/opt/homebrew/opt/openssl@3/include --extra-ldflags='-L/opt/homebrew/opt/openssl@3/lib -lcrypto'
+
+# On Linux (Ubuntu)
+../configure --enable-sdl --disable-cocoa --target-list=arm-softmmu --disable-capstone --disable-slirp --extra-cflags=-I/usr/include/openssl --extra-ldflags='-lcrypto' --disable-werror --enable-pie
 
 # On Microsoft Windows (with MINGW64)
 ../configure --enable-sdl --disable-cocoa --target-list=arm-softmmu --disable-capstone --disable-slirp --disable-pie --extra-cflags=-I/mingw64/include/openssl --extra-ldflags='-L/mingw64/lib -lcrypto' --disable-stack-protector --disable-werror
