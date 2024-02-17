@@ -35,6 +35,7 @@ Compile QEMU by running the following commands from the root directory:
 ```
 mkdir build
 cd build
+
 # On Intel Macs
 ./configure --target-list=arm-softmmu --extra-cflags=-I/usr/local/opt/openssl@3/include --extra-ldflags='-L/usr/local/opt/openssl@3/lib -lcrypto'
 
