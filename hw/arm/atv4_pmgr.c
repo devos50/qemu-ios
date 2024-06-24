@@ -221,6 +221,58 @@ static void atv4_pmgr_soc_write(void *opaque, hwaddr addr, uint64_t value, unsig
     }
 }
 
+static uint64_t atv4_pmgr_scratch_read(void *opaque, hwaddr addr, unsigned size)
+{
+    //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
+
+    switch (addr) {
+        case 0x0 ... 0x60:
+            // TODO return the right scratch configuration
+            break;
+        default:
+            hw_error("%s: reading from unknown PMGR SCRATCH register 0x%08x\n", __func__, addr);
+    }
+
+    return 0;
+}
+
+static void atv4_pmgr_scratch_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
+    ATV4PMGRState *s = (struct ATV4PMGRState *) opaque;
+
+    switch(addr) {
+      default:
+        break;
+    }
+}
+
+static uint64_t atv4_pmgr_pwrgate_read(void *opaque, hwaddr addr, unsigned size)
+{
+    //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
+
+    switch (addr) {
+        case 0x0 ... 0x300:
+            // TODO return the right scratch configuration
+            break;
+        default:
+            hw_error("%s: reading from unknown PMGR PWRGATE register 0x%08x\n", __func__, addr);
+    }
+
+    return 0;
+}
+
+static void atv4_pmgr_pwrgate_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
+    ATV4PMGRState *s = (struct ATV4PMGRState *) opaque;
+
+    switch(addr) {
+      default:
+        break;
+    }
+}
+
 static const MemoryRegionOps atv4_pmgr_pll_ops = {
     .read = atv4_pmgr_pll_read,
     .write = atv4_pmgr_pll_write,
@@ -269,6 +321,18 @@ static const MemoryRegionOps atv4_pmgr_soc_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static const MemoryRegionOps atv4_pmgr_scratch_ops = {
+    .read = atv4_pmgr_scratch_read,
+    .write = atv4_pmgr_scratch_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
+static const MemoryRegionOps atv4_pmgr_pwrgate_ops = {
+    .read = atv4_pmgr_pwrgate_read,
+    .write = atv4_pmgr_pwrgate_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
 static void atv4_pmgr_init(Object *obj)
 {
     ATV4PMGRState *s = ATV4_PMGR(obj);
@@ -305,6 +369,14 @@ static void atv4_pmgr_init(Object *obj)
     // SOC performance
     memory_region_init_io(&s->soc_iomem, obj, &atv4_pmgr_soc_ops, s, TYPE_ATV4_PMGR_SOC, 0xFF);
     sysbus_init_mmio(sbd, &s->soc_iomem);
+
+    // scratch
+    memory_region_init_io(&s->scratch_iomem, obj, &atv4_pmgr_scratch_ops, s, TYPE_ATV4_PMGR_SCRATCH, 0x60);
+    sysbus_init_mmio(sbd, &s->scratch_iomem);
+
+    // power gate
+    memory_region_init_io(&s->pwrgate_iomem, obj, &atv4_pmgr_pwrgate_ops, s, TYPE_ATV4_PMGR_PWRGATE, 0x300);
+    sysbus_init_mmio(sbd, &s->pwrgate_iomem);
 }
 
 static void atv4_pmgr_class_init(ObjectClass *klass, void *data)

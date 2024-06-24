@@ -68,6 +68,7 @@ static void atv4_memory_setup(MachineState *machine, MemoryRegion *sysmem, Addre
     // ATV4MachineState *nms = ATV4_MACHINE(machine);
     allocate_ram(sysmem, "unknown1", UNKNOWN1_MEM_BASE, 0x200000);
     allocate_ram(sysmem, "unknown2", UNKNOWN2_MEM_BASE, 0x1000);
+    allocate_ram(sysmem, "unknown3", UNKNOWN3_MEM_BASE, 0x20);
 
     // load the bootrom (vrom)
     uint8_t *file_data = NULL;
@@ -92,6 +93,15 @@ static void atv4_machine_init(MachineState *machine)
 
     atv4_memory_setup(machine, sysmem, nsas);
 
+    // init the interrupt controller
+    AppleAICState *aic_state = apple_aic_create();
+    nms->aic_state = aic_state;
+    SysBusDevice *busdev = SYS_BUS_DEVICE(nms->aic_state);
+    sysbus_realize(busdev, &error_fatal);
+    for(int i = 0; i < nms->aic_state->numCPU; i++) {
+        memory_region_add_subregion(sysmem, AIC_MEM_BASE + i * 0x1000, &aic_state->cpus[i].iomem);
+    }
+
     // init the chip ID module
     DeviceState *dev = qdev_new("atv4.chipid");
     ATV4ChipIDState *chipid_state = ATV4_CHIPID(dev);
@@ -110,6 +120,20 @@ static void atv4_machine_init(MachineState *machine)
     memory_region_add_subregion(sysmem, PMGR_CLK_MEM_BASE, &pmgr_state->clk_iomem);
     memory_region_add_subregion(sysmem, PMGR_CLKCFG_MEM_BASE, &pmgr_state->clkcfg_iomem);
     memory_region_add_subregion(sysmem, PMGR_SOC_MEM_BASE, &pmgr_state->soc_iomem);
+    memory_region_add_subregion(sysmem, PMGR_SCRATCH_MEM_BASE, &pmgr_state->scratch_iomem);
+    memory_region_add_subregion(sysmem, PMGR_PWRGATE_MEM_BASE, &pmgr_state->pwrgate_iomem);
+
+    // init GPIO
+    dev = qdev_new("atv4.gpio");
+    ATV4GPIOState *gpio_state = ATV4_GPIO(dev);
+    nms->gpio_state = gpio_state;
+    memory_region_add_subregion(sysmem, GPIO_MEM_BASE, &gpio_state->iomem);
+
+    // init the Apple USB
+    dev = qdev_new("atv4.ausb");
+    ATV4AUSBState *ausb_state = ATV4_AUSB(dev);
+    nms->ausb_state = ausb_state;
+    memory_region_add_subregion(sysmem, AUSB_MEM_BASE, &ausb_state->iomem);
 
     qemu_register_reset(atv4_cpu_reset, nms);
 }

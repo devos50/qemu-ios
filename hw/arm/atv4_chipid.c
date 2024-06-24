@@ -5,6 +5,8 @@ static uint64_t atv4_chipid_read(void *opaque, hwaddr addr, unsigned size)
     //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
 
     switch (addr) {
+        case rCFG_FUSE0:
+            return 0;
         case CHIPID_REVISION:
             return 1;
         default:

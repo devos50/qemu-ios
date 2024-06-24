@@ -5,15 +5,17 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 
-#define TYPE_ATV4_PMGR        "atv4.pmgr"
-#define TYPE_ATV4_PMGR_VOLMAN "atv4.pmgr.volman"
-#define TYPE_ATV4_PMGR_PS     "atv4.pmgr.ps"
-#define TYPE_ATV4_PMGR_GFX    "atv4.pmgr.gfx"
-#define TYPE_ATV4_PMGR_ACG    "atv4.pmgr.acg"
-#define TYPE_ATV4_PMGR_CLK    "atv4.pmgr.clk"
-#define TYPE_ATV4_PMGR_CLKCFG "atv4.pmgr.clkcfg"
-#define TYPE_ATV4_PMGR_SOC    "atv4.pmgr.soc"
-#define TYPE_ATV4_PMGR_PLL    "atv4.pmgr.pll"
+#define TYPE_ATV4_PMGR            "atv4.pmgr"
+#define TYPE_ATV4_PMGR_VOLMAN     "atv4.pmgr.volman"
+#define TYPE_ATV4_PMGR_PS         "atv4.pmgr.ps"
+#define TYPE_ATV4_PMGR_GFX        "atv4.pmgr.gfx"
+#define TYPE_ATV4_PMGR_ACG        "atv4.pmgr.acg"
+#define TYPE_ATV4_PMGR_CLK        "atv4.pmgr.clk"
+#define TYPE_ATV4_PMGR_CLKCFG     "atv4.pmgr.clkcfg"
+#define TYPE_ATV4_PMGR_SOC        "atv4.pmgr.soc"
+#define TYPE_ATV4_PMGR_PLL        "atv4.pmgr.pll"
+#define TYPE_ATV4_PMGR_SCRATCH    "atv4.pmgr.scratch"
+#define TYPE_ATV4_PMGR_PWRGATE    "atv4.pmgr.pwrgate"
 OBJECT_DECLARE_SIMPLE_TYPE(ATV4PMGRState, ATV4_PMGR)
 
 #define NUM_PLLS 0x6
@@ -168,6 +170,8 @@ typedef struct ATV4PMGRState {
     MemoryRegion clk_iomem;
     MemoryRegion clkcfg_iomem;
     MemoryRegion soc_iomem;
+    MemoryRegion scratch_iomem;
+    MemoryRegion pwrgate_iomem;
     uint64_t pll_bypass_cfg[6];
 } ATV4PMGRState;
 
