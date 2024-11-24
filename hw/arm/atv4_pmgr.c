@@ -214,21 +214,21 @@ static void atv4_pmgr_soc_write(void *opaque, hwaddr addr, uint64_t value, unsig
 {
     //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
     ATV4PMGRState *s = (struct ATV4PMGRState *) opaque;
-
-    switch(addr) {
-      default:
-        break;
-    }
+    s->scratch[addr] = value;
 }
 
 static uint64_t atv4_pmgr_scratch_read(void *opaque, hwaddr addr, unsigned size)
 {
-    //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
+    printf("%s: offset = 0x%08x\n", __func__, addr);
+
+    ATV4PMGRState *s = (struct ATV4PMGRState *) opaque;
 
     switch (addr) {
-        case 0x0 ... 0x60:
-            // TODO return the right scratch configuration
+        case 0x0:
+            return s->scratch[0] | (BOOT_DEVICE_NAND << 8);
             break;
+        case 0x4 ... 0xC:
+            return s->scratch[addr];
         default:
             hw_error("%s: reading from unknown PMGR SCRATCH register 0x%08x\n", __func__, addr);
     }
@@ -238,7 +238,7 @@ static uint64_t atv4_pmgr_scratch_read(void *opaque, hwaddr addr, unsigned size)
 
 static void atv4_pmgr_scratch_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
 {
-    //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
+    printf("%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
     ATV4PMGRState *s = (struct ATV4PMGRState *) opaque;
 
     switch(addr) {

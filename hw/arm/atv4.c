@@ -66,7 +66,7 @@ static void atv4_cpu_reset(void *opaque)
 static void atv4_memory_setup(MachineState *machine, MemoryRegion *sysmem, AddressSpace *nsas)
 {
     // ATV4MachineState *nms = ATV4_MACHINE(machine);
-    allocate_ram(sysmem, "unknown1", UNKNOWN1_MEM_BASE, 0x200000);
+    allocate_ram(sysmem, "sram", SRAM_MEM_BASE, SRAM_LENGTH);
     allocate_ram(sysmem, "unknown2", UNKNOWN2_MEM_BASE, 0x1000);
     allocate_ram(sysmem, "unknown3", UNKNOWN3_MEM_BASE, 0x20);
 
@@ -134,6 +134,34 @@ static void atv4_machine_init(MachineState *machine)
     ATV4AUSBState *ausb_state = ATV4_AUSB(dev);
     nms->ausb_state = ausb_state;
     memory_region_add_subregion(sysmem, AUSB_MEM_BASE, &ausb_state->iomem);
+
+    // init the AUSB Widget
+    dev = qdev_new("atv4.ausbwidget");
+    ATV4AUSBWidgetState *ausb_widget_state = ATV4_AUSB_WIDGET(dev);
+    nms->ausb_widget_state = ausb_widget_state;
+    memory_region_add_subregion(sysmem, AUSB_WIDGET_MEM_BASE, &ausb_widget_state->iomem);
+
+    // init the ANCs
+    dev = qdev_new("atv4.anc");
+    ATV4ANCState *anc0_state = ATV4_ANC(dev);
+    nms->anc0_state = anc0_state;
+    memory_region_add_subregion(sysmem, PPNNPL_MEM_BASE, &anc0_state->ppnnpl_iomem);
+    memory_region_add_subregion(sysmem, ANC0_MEM_BASE, &anc0_state->anc_iomem);
+
+    dev = qdev_new("atv4.anc");
+    ATV4ANCState *anc1_state = ATV4_ANC(dev);
+    nms->anc1_state = anc1_state;
+    memory_region_add_subregion(sysmem, PPNNPL_MEM_BASE, &anc1_state->ppnnpl_iomem);
+    memory_region_add_subregion(sysmem, ANC1_MEM_BASE, &anc1_state->anc_iomem);
+
+    // init spis
+    uint64_t spi_bases[] = { SPI0_MEM_BASE, SPI1_MEM_BASE, SPI2_MEM_BASE, SPI3_MEM_BASE };
+    for(int i = 0; i < 4; i++) {
+        set_spi_base(i);
+        dev = sysbus_create_simple("atv4.spi", spi_bases[i], 0); // TODO set the right IRQ!
+        ATV4SPIState *spi_state = ATV4_SPI(dev);
+        nms->spi_state[i] = spi_state;
+    }
 
     qemu_register_reset(atv4_cpu_reset, nms);
 }

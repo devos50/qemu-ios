@@ -5,6 +5,16 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 
+enum boot_device {
+        BOOT_DEVICE_NOR = 0,
+        BOOT_DEVICE_SPI,
+        BOOT_DEVICE_NAND,
+        BOOT_DEVICE_NVME,
+        BOOT_DEVICE_USBDFU,
+        BOOT_DEVICE_TBTDFU,
+        BOOT_DEVICE_XMODEM,
+};
+
 #define TYPE_ATV4_PMGR            "atv4.pmgr"
 #define TYPE_ATV4_PMGR_VOLMAN     "atv4.pmgr.volman"
 #define TYPE_ATV4_PMGR_PS         "atv4.pmgr.ps"
@@ -173,6 +183,7 @@ typedef struct ATV4PMGRState {
     MemoryRegion scratch_iomem;
     MemoryRegion pwrgate_iomem;
     uint64_t pll_bypass_cfg[6];
+    uint64_t scratch[0x4];
 } ATV4PMGRState;
 
 #endif
