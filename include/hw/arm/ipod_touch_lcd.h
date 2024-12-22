@@ -22,6 +22,7 @@ typedef struct IPodTouchLCDState
     QemuConsole *con;
     IPodTouchMultitouchState *mt;
     int invalidate;
+    uint8_t brightness;
     MemoryRegionSection fbsection;
     qemu_irq irq;
     uint32_t lcd_con;
@@ -35,5 +36,7 @@ typedef struct IPodTouchLCDState
 
     QEMUTimer *refresh_timer;
 } IPodTouchLCDState;
+
+void lcd_changebrightness(int brightness);
 
 #endif

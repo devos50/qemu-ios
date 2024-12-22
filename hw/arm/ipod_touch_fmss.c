@@ -34,8 +34,8 @@ static void read_nand_pages(IPodTouchFMSSState *s)
     cpu_physical_memory_write(0x0ff2206c, chr, strlen(chr));
 
     int page_out_buf_ind = 0;
-    dump_registers(s);
-    printf("Start CMD...\n");
+    //dump_registers(s);
+    //printf("Start CMD...\n");
     for(int page_ind = 0; page_ind < s->reg_num_pages; page_ind++) {
         uint32_t page_nr = 0;
         uint32_t page_out_addr = 0;
@@ -47,7 +47,7 @@ static void read_nand_pages(IPodTouchFMSSState *s)
 
         if(cs > 3) {
             printf("CS %d invalid! (original CS: %d, reading page %d)\n", cs, og_cs, page_nr);
-            dump_registers(s);
+            //dump_registers(s);
             hw_error("CS %d invalid!", cs);
         }
 
@@ -76,7 +76,7 @@ static void read_nand_pages(IPodTouchFMSSState *s)
         for(int i = 0; i < 2; i++) {
             cpu_physical_memory_read(s->reg_pages_out_addr + (page_out_buf_ind * sizeof(uint32_t)), &page_out_addr, sizeof(uint32_t));
             cpu_physical_memory_write(page_out_addr, s->page_buffer + i * write_buf_size, write_buf_size);
-            printf("Will read page %d @ cs %d into address 0x%08x and spare into address 0x%08x\n", page_nr, cs, page_out_addr, s->reg_page_spare_out_addr);
+            //printf("Will read page %d @ cs %d into address 0x%08x and spare into address 0x%08x\n", page_nr, cs, page_out_addr, s->reg_page_spare_out_addr);
             page_out_buf_ind++;
 
         }
@@ -88,7 +88,7 @@ static void read_nand_pages(IPodTouchFMSSState *s)
 
 static uint64_t ipod_touch_fmss_read(void *opaque, hwaddr addr, unsigned size)
 {
-    //fprintf(stderr, "%s: read from location 0x%08x\n", __func__, addr);
+    //fprintf(stderr, "%s: read from location 0x%08lx\n", __func__, addr);
 
     IPodTouchFMSSState *s = (IPodTouchFMSSState *)opaque;
     switch(addr)
@@ -115,7 +115,7 @@ static uint64_t ipod_touch_fmss_read(void *opaque, hwaddr addr, unsigned size)
 static void ipod_touch_fmss_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     IPodTouchFMSSState *s = (IPodTouchFMSSState *)opaque;
-    //printf("%s: writing 0x%08x to 0x%08x\n", __func__, val, addr);
+    //printf("%s: writing 0x%08lx to 0x%08lx\n", __func__, val, addr);
 
     switch(addr) {
         case 0xC00:
@@ -150,8 +150,11 @@ static void ipod_touch_fmss_write(void *opaque, hwaddr addr, uint64_t val, unsig
             break;
         case 0xD38:
             if(s->reg_csgenrc == 0xa01) { read_nand_pages(s); }
-            else { printf("NAND write %ld addr %ld\n", val, addr); temp_storage[addr] = val;/*cpu_physical_memory_write(addr, val, sizeof(val)); */}
-            
+            else { /*printf("NAND write %ld addr %ld\n", val, addr); temp_storage[addr] = val;*//*cpu_physical_memory_write(addr, val, sizeof(val)); */}
+            break;
+        default:
+	        //printf("%s unknown write %lx to %lx\n", __func__, val, addr);
+            break;
     }
 }
 
