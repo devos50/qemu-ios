@@ -19,7 +19,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
     else if(cmd_type == 0x5) {
         if(addr == 0) {
             // reading slot 0 - make sure there is a device here
-            s->resp0 = (1 << 31) /* indicate ready */ | (BCM4325_FUNCTIONS << CMD5_FUNC_OFFSET) /* number of functions */;
+            //s->resp0 = (1 << 31) /* indicate ready */ | (BCM4325_FUNCTIONS << CMD5_FUNC_OFFSET) /* number of functions */;
         }
     }
     else if(cmd_type == 0x7) {
@@ -52,7 +52,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
         // CMD53 - block transfer
         addr = addr & 0x7fff;
         bool is_write = (s->arg >> 31) != 0;
-        printf("SDIO: Executing cmd53 with block size %d and %d blocks (reg address: 0x%08x, destination address: 0x%08x, write? %d)\n", s->blklen, s->numblk, addr, s->baddr, is_write);
+        printf("SDIO: Executing cmd53 func %x with block size %d and %d blocks (reg address: 0x%08x, destination address: 0x%08x, write? %d)\n", func, s->blklen, s->numblk, addr, s->baddr, is_write);
         
         if(is_write) {
             if(func == 0x1) {
@@ -61,7 +61,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
             else if(func == 0x2) {
                 // this is a BCM4325 command - add a frame to the queue and schedule the IRQ request to indicate that the command has been completed
                 BCM4325FrameHeaderPacket *frame_header = calloc(sizeof(BCM4325FrameHeaderPacket), sizeof(uint8_t *));
-                uint16_t length = 14;
+                uint16_t length = s->blklen * s->numblk;
                 frame_header->frame_length = length;
                 frame_header->checksum = length ^ 0xffff;
                 g_queue_push_tail(s->rx_fifo, frame_header);
@@ -83,6 +83,9 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
                 if(!frame_header) {
                     // create an empty frame
                     frame_header = calloc(sizeof(BCM4325FrameHeaderPacket), sizeof(uint8_t *));
+
+		    frame_header->frame_length = s->blklen  * s->numblk;
+		    frame_header->checksum = (s->blklen * s->numblk) ^ 0xffff;
                 }
                 cpu_physical_memory_write(s->baddr, frame_header, sizeof(BCM4325FrameHeaderPacket));
             }
@@ -164,11 +167,11 @@ static uint64_t ipod_touch_sdio_read(void *opaque, hwaddr addr, unsigned size)
         case SDIO_RESP0:
             return s->resp0;
         case SDIO_RESP1:
-            return s->resp1;
+            return s->resp1 == 0 ? 0x7465 : s->resp1;
         case SDIO_RESP2:
-            return s->resp2;
+            return s->resp2 == 0 ? 0x7374 : s->resp2;
         case SDIO_RESP3:
-            return s->resp3;
+            return s->resp3 == 0 ? 0xFFFF : s->resp3;
         case SDIO_CSR:
             return s->csr;
         case SDIO_IRQ:

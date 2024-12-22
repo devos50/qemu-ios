@@ -1,7 +1,21 @@
 #include "hw/arm/ipod_touch_pcf50633_pmu.h"
+#include "hw/arm/ipod_touch_lcd.h"
 
 static int pcf50633_event(I2CSlave *i2c, enum i2c_event event)
 {
+    Pcf50633State *s = PCF50633(i2c);
+    // printf("%s Event %d\n", __func__, s->cmd);
+
+    if (event == I2C_START_SEND)
+    {
+        // printf("%s start send %d\n", __func__, s->cmd);
+    }
+    else if (event == I2C_FINISH)
+    {
+	s->ready = 1;
+	// printf("%s end send %d\n", __func__, s->cmd);
+    }
+
     return 0;
 }
 
@@ -70,7 +84,22 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
 static int pcf50633_send(I2CSlave *i2c, uint8_t data)
 {
     Pcf50633State *s = PCF50633(i2c);
-    s->cmd = data;
+    if (s->ready)
+    {
+        s->curreg = data;
+	s->ready = 0;
+    }
+    else
+    {
+        s->cmd = data;
+    }
+
+    printf("Writing PMU register cmd %d reg %d\n", s->cmd, s->curreg);
+    switch(s->curreg) {
+        case PMU_DSBL1:
+            lcd_changebrightness(s->cmd);
+	    break;
+    }
     return 0;
 }
 

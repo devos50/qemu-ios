@@ -3,6 +3,8 @@
 #include "ui/console.h"
 #include "hw/display/framebuffer.h"
 
+int lcd_brightness = 255;
+
 static uint64_t ipod_touch_lcd_read(void *opaque, hwaddr addr, unsigned size)
 {
     // printf("%s: read from location 0x%08x\n", __func__, addr);
@@ -64,6 +66,11 @@ static void ipod_touch_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsign
     }
 }
 
+void lcd_changebrightness(int brightness)
+{
+    lcd_brightness = brightness & 0xFF;
+}
+
 static void lcd_invalidate(void *opaque)
 {
     IPodTouchLCDState *s = opaque;
@@ -72,6 +79,7 @@ static void lcd_invalidate(void *opaque)
 
 static void draw_line32_32(void *opaque, uint8_t *d, const uint8_t *s, int width, int deststep)
 {
+    // IPodTouchLCDState *lcd = (IPodTouchLCDState *) opaque;
     uint8_t r, g, b;
 
     do {
@@ -80,8 +88,8 @@ static void draw_line32_32(void *opaque, uint8_t *d, const uint8_t *s, int width
         b = s[0];
         g = s[1];
         r = s[2];
-        //printf("R: %d, G: %d, B: %d\n", r, g, b);
-        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        // printf("R: %d, G: %d, B: %d, A: %d\n", r, g, b, lcd_brightness);
+        ((uint32_t *) d)[0] = rgb_to_pixel32(round((float)r * ((float)lcd_brightness / 255.0f)), round((float)g * ((float)lcd_brightness / 255.0f)), round((float)b * ((float)lcd_brightness / 255.0f)));
         s += 4;
         d += 4;
     } while (-- width != 0);
@@ -173,7 +181,7 @@ static void refresh_timer_tick(void *opaque)
     else if (s->render == 0xFF)
 	qemu_irq_lower(s->irq);
 
-    timer_mod(s->refresh_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 85);//LCD_REFRESH_RATE_FREQUENCY);
+    timer_mod(s->refresh_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);//LCD_REFRESH_RATE_FREQUENCY);
 }
 
 static void ipod_touch_lcd_realize(DeviceState *dev, Error **errp)
