@@ -96,7 +96,7 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
 
     // load the bootrom (vrom)
     uint8_t *file_data = NULL;
-    unsigned long fsize;
+    gsize fsize;
     if (g_file_get_contents(nms->bootrom_path, (char **)&file_data, &fsize, NULL)) {
         allocate_ram(sysmem, "vrom", 0x0, 0x20000);
         address_space_rw(nsas, VROM_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)file_data, fsize, 1);
