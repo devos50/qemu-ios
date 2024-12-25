@@ -2,7 +2,7 @@
 
 static void initialize_nor(IPodTouchNORSPIState *s)
 {
-    unsigned long fsize;
+    gsize fsize;
     if (g_file_get_contents(s->nor_path, (char **)&s->nor_data, &fsize, NULL)) {
         s->nor_initialized = true;
     }
