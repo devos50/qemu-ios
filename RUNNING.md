@@ -26,6 +26,9 @@ brew install glib ninja pixman pkg-config sdl2
 # On Linux (Ubuntu)
 sudo apt install make ninja-build pkg-config libssl-dev libsdl2-dev libpixman-1-dev libpixman-1-0 libglib2.0-dev
 
+# On Linux (Arch)
+sudo pacman -S --needed make ninja pkgconf openssl sdl2 pixman glib2
+
 # On Windows (MSYS2/mingw64)
 pacman -S base-devel mingw-w64-x86_64-toolchain git python ninja mingw-w64-x86_64-glib2 mingw-w64-x86_64-pixman python-setuptools mingw-w64-x86_64-SDL2
 
@@ -42,7 +45,7 @@ cd build
 # On Apple Silicon Macs
 ../configure --enable-sdl --target-list=arm-softmmu --disable-capstone --disable-pie --disable-slirp --extra-cflags=-I/opt/homebrew/opt/openssl@3/include --extra-ldflags='-L/opt/homebrew/opt/openssl@3/lib -lcrypto'
 
-# On Linux (Ubuntu)
+# On Linux
 ../configure --enable-sdl --disable-cocoa --target-list=arm-softmmu --disable-capstone --disable-slirp --extra-cflags=-I/usr/include/openssl --extra-ldflags='-lcrypto' --disable-werror --enable-pie
 
 # On Microsoft Windows (with MINGW64)
