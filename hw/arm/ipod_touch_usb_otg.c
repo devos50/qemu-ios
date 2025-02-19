@@ -95,7 +95,7 @@ static void synopsys_usb_update_in_ep(synopsys_usb_state *_state, uint8_t _ep)
 	synopsys_usb_update_ep(_state, eps);
 
 	if(eps->control & USB_EPCON_ENABLE)
-		;//printf("USB: IN transfer queued on %d.\n", _ep);
+		;printf("USB: IN transfer queued on %d.\n", _ep);
 }
 
 static void synopsys_usb_update_out_ep(synopsys_usb_state *_state, uint8_t _ep)
@@ -158,7 +158,7 @@ static int synopsys_usb_tcp_callback(tcp_usb_state_t *_state, void *_arg, tcp_us
 			if(txfs + txfz > sizeof(state->fifos))
 				hw_error("usb_synopsys: USB transfer would overflow FIFO buffer!\n");
 
-			//printf("USB: Starting IN transfer on EP %d (%d)...\n", ep, amtDone);
+			printf("USB: Starting IN transfer on EP %d (%d bytes)...\n", ep, amtDone);
 
 			if(amtDone > 0)
 			{
@@ -171,7 +171,7 @@ static int synopsys_usb_tcp_callback(tcp_usb_state_t *_state, void *_arg, tcp_us
 				memcpy(_buffer, (char*)&state->fifos[txfs], amtDone);
 			}
 
-			//printf("USB: IN transfer complete!\n");
+			printf("USB: IN transfer complete!\n");
 
 			eps->tx_size = (eps->tx_size &~ DEPTSIZ_XFERSIZ_MASK)
 							| ((sz-amtDone) & DEPTSIZ_XFERSIZ_MASK);
@@ -183,8 +183,10 @@ static int synopsys_usb_tcp_callback(tcp_usb_state_t *_state, void *_arg, tcp_us
 			ret = USB_RET_NAK;
 	}
 	else // OUT
-	{	
+	{
 		synopsys_usb_ep_state *eps = &state->out_eps[ep];
+
+		printf("EPS control: %d\n", eps->control);
 		
 		if(eps->control & USB_EPCON_STALL)
 		{
@@ -209,7 +211,7 @@ static int synopsys_usb_tcp_callback(tcp_usb_state_t *_state, void *_arg, tcp_us
 			if(rxfz > sizeof(state->fifos))
 				hw_error("usb_synopsys: USB transfer would overflow FIFO buffer!\n");
 
-			//printf("USB: Starting OUT transfer on EP %d (%d)...\n", ep, amtDone);
+			printf("USB: Starting OUT transfer on EP %d (%d)...\n", ep, amtDone);
 
 			if(amtDone > 0)
 			{
@@ -430,6 +432,10 @@ static void synopsys_usb_in_ep_write(synopsys_usb_state *_state, int _ep, hwaddr
 	{
 		hw_error("usb_synopsys: Wrote to disabled EP %d.\n", _ep);
 		return;
+	}
+
+	if (_addr == 0x10) {
+		printf("USB: Setting TX size of EP %d to %d.\n", _ep, _val);
 	}
 
     switch (_addr)

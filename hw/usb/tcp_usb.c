@@ -228,7 +228,7 @@ static void tcp_usb_callback(tcp_usb_state_t *state, int _can_read, int _can_wri
 			if(state->amount_done < sizeof(*state->header))
 				return;
 			
-			debug_hexdump("tcp_usb: Sent Header: ", state->header, sizeof(*state->header));
+			debug_hexdump("tcp_usb: Sent Header (write response): ", state->header, sizeof(*state->header));
 		}
 
 		if((state->header->ep & USB_DIR_IN) != 0 && state->header->length > 0) // IN
@@ -294,7 +294,7 @@ static void tcp_usb_callback(tcp_usb_state_t *state, int _can_read, int _can_wri
 			if(state->amount_done < sizeof(*state->header))
 				return;
 
-			debug_hexdump("tcp_usb: Sent Header: ", state->header, sizeof(*state->header));
+			debug_hexdump("tcp_usb: Sent Header (write request): ", state->header, sizeof(*state->header));
 		}
 
 		if((state->header->ep & USB_DIR_IN) == 0 && state->header->length > 0) // OUT
