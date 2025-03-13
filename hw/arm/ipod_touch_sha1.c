@@ -52,7 +52,7 @@ static uint64_t s5l8900_sha1_read(void *opaque, hwaddr offset, unsigned size)
 			//fprintf(stderr, "Hash out %08x\n",  *(uint32_t *)&s->hashout[offset - 0x20]);
             if(!s->hash_computed) {
                 // lazy compute the final hash by inspecting the last eight bytes of the buffer, which contains the length of the input data.
-                uint64_t data_length = swapLong(((uint64_t *)s->buffer)[s->buffer_ind / 8 - 1]) / 8;
+                uint64_t data_length = swapLong((void*)((((uint64_t *)s->buffer)[s->buffer_ind / 8 - 1]) / 8));
 
                 SHA_CTX ctx;
                 SHA1_Init(&ctx);

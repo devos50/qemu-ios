@@ -187,7 +187,7 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
 
     // load the bootrom (vrom)
     uint8_t *file_data = NULL;
-    unsigned long fsize;
+    gsize fsize;
     if (g_file_get_contents(nms->bootrom_path, (char **)&file_data, &fsize, NULL)) {
         allocate_ram(sysmem, "vrom", VROM_MEM_BASE, 0x10000);
         address_space_rw(nsas, VROM_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)file_data, fsize, 1);
@@ -502,7 +502,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     // init NAND flash
     dev = qdev_new("itnand");
     ITNandState *nand_state = ITNAND(dev);
-    nand_state->nand_path = &nms->nand_path;
+    nand_state->nand_path = nms->nand_path;
     nms->nand_state = nand_state;
     memory_region_add_subregion(sysmem, NAND_MEM_BASE, &nand_state->iomem);
 
