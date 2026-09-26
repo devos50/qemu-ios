@@ -3,11 +3,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
-#include "qemu/timer.h"
-#include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "hw/irq.h"
-#include "hw/clock.h"
 
 #define TYPE_IPOD_TOUCH_CLOCK                "ipodtouch.clock"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchClockState, IPOD_TOUCH_CLOCK)
@@ -36,33 +32,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchClockState, IPOD_TOUCH_CLOCK)
 #define CLOCK_PWRCON3 0x68
 #define CLOCK_PWRCON4 0x6C
 
+#define CLOCK_SIZE 0x1000
+
 typedef struct IPodTouchClockState
 {
     SysBusDevice busdev;
     MemoryRegion iomem;
-    uint32_t    config0;
-    uint32_t    config1;
-    uint32_t    config2;
-    uint32_t    config3;
-    uint32_t    config4;
-    uint32_t    config5;
-
-    uint32_t    pll0con;
-    uint32_t    pll1con;
-    uint32_t    pll2con;
-    uint32_t    pll3con;
-    uint32_t    pll0lcnt;
-    uint32_t    pll1lcnt;
-    uint32_t    pll2lcnt;
-    uint32_t    pll3lcnt;
-    uint32_t    pllmode;
-
-    uint32_t    pwrcon0;
-    uint32_t    pwrcon1;
-    uint32_t    pwrcon2;
-    uint32_t    pwrcon3;
-    uint32_t    pwrcon4;
-
+    /*
+     * The clkrstgen has a second register block (the kernel's _ccBusBaseAddress). Its layout is unknown, so it is
+     * modelled as plain storage without the PLL registers.
+     */
+    bool bus_block;
+    uint32_t regs[CLOCK_SIZE / 4];
 } IPodTouchClockState;
 
 #endif

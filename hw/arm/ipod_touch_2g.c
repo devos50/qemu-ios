@@ -9,6 +9,7 @@
 #include "hw/platform-bus.h"
 #include "hw/block/flash.h"
 #include "hw/qdev-clock.h"
+#include "hw/qdev-properties.h"
 #include "hw/arm/exynos4210.h"
 #include "hw/arm/ipod_touch_2g.h"
 #include "target/arm/cpregs.h"
@@ -109,14 +110,12 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
         { "mpvd",          MPVD_MEM_BASE,     0x70000 },
         { "prng",          PRNG_MEM_BASE,     0x1000 },
         { "spi0-page",     SPI0_MEM_BASE,     0x1000 },
-        { "clock0-page",   CLOCK0_MEM_BASE,   0x1000 },
         { "i2c0-page",     I2C0_MEM_BASE,     0x1000 },
         { "i2c1-page",     I2C1_MEM_BASE,     0x1000 },
         { "i2s0",          I2S0_MEM_BASE,     0x1000 },
         { "uart0-page",    UART0_MEM_BASE,    0x1000 },
         { "spi1-page",     SPI1_MEM_BASE,     0x1000 },
         { "uart1-page",    UART1_MEM_BASE,    0x1000 },
-        { "clock1-page",   CLOCK1_MEM_BASE,   0x1000 },
         { "spi4-page",     SPI4_MEM_BASE,     0x1000 },
     };
     for (int i = 0; i < ARRAY_SIZE(unimp_regions); i++) {
@@ -307,16 +306,17 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->vic1->daisy = nms->vic0;
 
     // init clock 0
-    dev = qdev_new("ipodtouch.clock");
-    IPodTouchClockState *clock0_state = IPOD_TOUCH_CLOCK(dev);
-    nms->clock0 = clock0_state;
-    memory_region_add_subregion(sysmem, CLOCK0_MEM_BASE, &clock0_state->iomem);
+    dev = qdev_new(TYPE_IPOD_TOUCH_CLOCK);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, CLOCK0_MEM_BASE);
+    nms->clock0 = IPOD_TOUCH_CLOCK(dev);
 
     // init clock 1
-    dev = qdev_new("ipodtouch.clock");
-    IPodTouchClockState *clock1_state = IPOD_TOUCH_CLOCK(dev);
-    nms->clock1 = clock1_state;
-    memory_region_add_subregion(sysmem, CLOCK1_MEM_BASE, &clock1_state->iomem);
+    dev = qdev_new(TYPE_IPOD_TOUCH_CLOCK);
+    qdev_prop_set_bit(dev, "bus-block", true);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, CLOCK1_MEM_BASE);
+    nms->clock1 = IPOD_TOUCH_CLOCK(dev);
 
     // init the timer
     dev = qdev_new("ipodtouch.timer");
