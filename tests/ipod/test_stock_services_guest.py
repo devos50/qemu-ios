@@ -61,7 +61,7 @@ else:
  server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
  threading.Thread(target=server.serve_forever,daemon=True).start()
  routing.write_text('upstream\n127.0.0.1\n%d\n'%server.server_port)
-cfg=SimpleNamespace(out=str(out),files=files,base_nand=files+'/nand-agent-v4',nor=files+'/ios3/nor_7E18.bin',overlay=str(out/'overlay'),qemu=str(root/'build-native14/qemu-build/qemu-system-arm'),usbmuxd=str(root/'build-native14/build/usbmuxd/src/usbmuxd'),usbmuxd_ok=True,usb_port=r.free_port(1520,1539),mux_port=r.free_port(27400,27419),qmp_port=r.free_port(28200,28219),wifi=True,cpu=None,mem='128M',kernel_console=True,install_timeout=420,proxy_lo=28460,proxy_hi=28479,web_proxy_config=str(routing))
+cfg=SimpleNamespace(out=str(out),files=files,base_nand=files+'/nand-current',nor=files+'/ios3/nor_7E18.bin',overlay=str(out/'overlay'),qemu=str(root/'build-native14/qemu-build/qemu-system-arm'),usbmuxd=str(root/'build-native14/build/usbmuxd/src/usbmuxd'),usbmuxd_ok=True,usb_port=r.free_port(1520,1539),mux_port=r.free_port(27400,27419),qmp_port=r.free_port(28200,28219),wifi=True,cpu=None,mem='128M',kernel_console=True,install_timeout=420,proxy_lo=28460,proxy_hi=28479,web_proxy_config=str(routing))
 p=r.Procs();d=r.Device(cfg,p,'device')
 try:
  d.start();ok,detail,_=d.wait_for_home(180);assert ok,detail

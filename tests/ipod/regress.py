@@ -1584,7 +1584,7 @@ def main():
     ap.add_argument("--files-dir",
                     default=os.path.expanduser("~/Developer/qemu-ios-files"))
     ap.add_argument("--base-nand", default=None,
-                    help="base NAND image dir (prefers the newest nand-agent image, then nand-ultimate)")
+                    help="base NAND image dir (default: <files-dir>/nand-current, the shipping image)")
     ap.add_argument("--cpu", default=None,
                     help="-cpu (default: the machine's own, arm1176). Do not "
                          "pass 'max': it NOPs the CP15 WFI XNU idles on, so "
@@ -1662,14 +1662,10 @@ def main():
     # while leaving the 2.1.1 NAND reports itself as a USB fault several
     # minutes later rather than as the image mismatch it is. Whichever
     # firmware boot_env() and the NOR default choose, the NAND matches it.
-    cfg.base_nand = cfg.base_nand or next(
-        (p for p in (os.path.join(cfg.files, "nand-agent-v4"),
-                     os.path.join(cfg.files, "nand-agent-v3"),
-                     os.path.join(cfg.files, "nand-agent-v2"),
-                     os.path.join(cfg.files, "nand-ultimate"),
-                     os.path.join(cfg.files, "nand-appsync3"),
-                     os.path.join(cfg.files, "nand-canonical"))
-         if os.path.exists(p)), os.path.join(cfg.files, "nand-canonical"))
+    # nand-current is the shipping image; no fallback, so a missing link is
+    # reported by the prerequisite check instead of silently testing another.
+    # Resolved so the run log names the real image.
+    cfg.base_nand = os.path.realpath(cfg.base_nand or os.path.join(cfg.files, "nand-current"))
     # The 3.1.3 NOR, if this checkout has one. 3.x iBoot unwraps the SHSH blob
     # in flash with a UID-derived key, and nor_n72ap.bin (the 2.1.1 NOR) has no
     # wrapped blob: iBoot then prints "load_macho_image: failed to load device

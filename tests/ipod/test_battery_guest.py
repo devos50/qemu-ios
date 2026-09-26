@@ -7,7 +7,7 @@ import regress as r
 root=Path(__file__).resolve().parents[2]
 files=str(root.parent/'qemu-ios-files')
 out=Path(tempfile.mkdtemp(prefix='it-battery-guest-'))
-cfg=SimpleNamespace(out=str(out),files=files,base_nand=files+'/nand-agent-v4',
+cfg=SimpleNamespace(out=str(out),files=files,base_nand=files+'/nand-current',
     nor=files+'/ios3/nor_7E18.bin',overlay=str(out/'overlay'),
     qemu=str(root/'build-native14/qemu-build/qemu-system-arm'),
     usbmuxd=str(root/'build-native14/build/usbmuxd/src/usbmuxd'),usbmuxd_ok=True,

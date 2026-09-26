@@ -22,7 +22,7 @@ args = parser.parse_args()
 os.environ['PATH'] = str(ROOT.parent/'qemu-ios-deps12/bin') + ':' + os.environ['PATH']
 out = Path(tempfile.mkdtemp(prefix='it-media-guest-'))
 cfg = SimpleNamespace(out=str(out), files=args.files,
-    base_nand=args.base_nand or args.files+'/nand-agent-v4',
+    base_nand=args.base_nand or args.files+'/nand-current',
     nor=args.files+'/ios3/nor_7E18.bin', overlay=str(out/'overlay'),
     qemu=str(ROOT/'build-native14/qemu-build/qemu-system-arm'),
     usbmuxd=str(ROOT/'build-native14/build/usbmuxd/src/usbmuxd'), usbmuxd_ok=True,

@@ -32,7 +32,7 @@ link6 -execute "$2/reboot" "$2/reboot.o"
 "${LDID:-ldid}" -S"$1/contrib/it-gles/sblaunch-entitlements.xml" "$2/reboot"
 ''', 'nor-test', str(ROOT), str(out)], env=env, check=True)
     files = str(args.files)
-    cfg = SimpleNamespace(out=str(out), files=files, base_nand=files+'/nand-agent-v4',
+    cfg = SimpleNamespace(out=str(out), files=files, base_nand=files+'/nand-current',
         nor=files+'/ios3/nor_7E18.bin', overlay=str(out/'overlay'), qemu=str(args.qemu),
         usbmuxd_ok=False, usb_port=r.free_port(1520,1539), qmp_port=r.free_port(28200,28219),
         wifi=False, cpu=None, mem='128M', kernel_console=True)
