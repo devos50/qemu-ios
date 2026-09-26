@@ -96,24 +96,14 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
                 aesop->gid_encryption_count++;
             }
             else {
-                AES_cbc_encrypt(inbuf, buf, aesop->insize, &aesop->decryptKey, (uint8_t *)aesop->ivec, AES_DECRYPT);
+                // The engine only processes whole blocks. IMG3 payloads leave the trailing partial block unencrypted,
+                // so it has to come out untouched rather than being decrypted as a zero-padded block.
+                uint32_t blocks_size = aesop->insize & ~(AES_BLOCK_SIZE - 1);
+                AES_cbc_encrypt(inbuf, buf, blocks_size, &aesop->decryptKey, (uint8_t *)aesop->ivec, AES_DECRYPT);
+                memcpy(buf + blocks_size, inbuf + blocks_size, aesop->insize - blocks_size);
             }
 
             if(aesop->outaddr != 0x220100ac && aesop->outaddr != 0x0bf08468 && aesop->outaddr != 0x0fb9bcdc) { // TODO very ugly hack - for the RSA key decryption, it seems that doing nothing results in the correct decryption key??
-                // BUG: after decrypting the kernel, we update the Adler CRC code and number of expected bytes.
-                if(aesop->outaddr == 0x0b000020) {
-                    uint32_t *cast_buf = (uint32_t *)buf;
-                    cast_buf[2] = 0xA7886041; // adler
-                    cast_buf[3] = 0xF5D37E00; // 8311797 in big endian
-                }
-
-                // BUG: after decrypting the device tree, the last few bytes are incorrect
-                if(aesop->outaddr == 0x0bf00020) {
-                    uint32_t *cast_buf = (uint32_t *)buf;
-                    cast_buf[8429] = 0x4; // setting the size of the AAPL,phandle property to 4
-                    cast_buf[8430] = 0x0011C4F0; // set the right handle
-                }
-
                 cpu_physical_memory_write((aesop->outaddr), buf, aesop->insize);
             }
 
