@@ -133,8 +133,13 @@ static void sha1_reset(IPodTouchSHA1State *s)
     sha1_clear_irq(s);
 }
 
-/* Run the blocks the guest has queued through the compression function. */
-static void sha1_run(IPodTouchSHA1State *s)
+/* Run the blocks the guest has queued through the compression function.
+ * Only a start with config bit 2 asks for the completion interrupt. 7E18's
+ * AppleS5L8900XSHA1 polls short jobs (start 0x2/0xa) with SHA_INTENABLE still
+ * set from an earlier interrupt-driven job, then completes them itself; an
+ * interrupt there runs its completion again with no request (NULL+0x28 kernel
+ * abort at 0xc06d81c8 while installing apps with many files). */
+static void sha1_run(IPodTouchSHA1State *s, bool notify)
 {
     if (s->hw_buffer_dirty) {
         sha1_compress(s->state, (const uint8_t *)s->hw_buffer);
@@ -174,7 +179,7 @@ static void sha1_run(IPodTouchSHA1State *s)
         fflush(stdout);
     }
 
-    if (s->int_enable) {
+    if (notify && s->int_enable) {
         s->int_status = 1;
         if (s->irq) {
             qemu_irq_raise(s->irq);
@@ -242,7 +247,7 @@ static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, u
                     fflush(stdout);
                 }
                 sha1_clear_irq(s);
-                sha1_run(s);
+                sha1_run(s, value & 0x4);
 			} else {
 				s->config = value;
 			}
