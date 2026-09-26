@@ -31,7 +31,7 @@ static uint64_t ipod_touch_lcd_read(void *opaque, hwaddr addr, unsigned size)
 	case 0x1b14:
 	    return 0x3;
         default:
-            printf("%s: read invalid location 0x%08x.\n", __func__, addr);
+            //printf("%s: read invalid location 0x%08x.\n", __func__, addr);
             break;
     }
     return 0;

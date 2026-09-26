@@ -12,7 +12,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
     uint32_t cmd_type = s->cmd & 0x3f;
     uint32_t addr = (s->arg >> 9) & 0x1ffff;
     uint32_t func = (s->arg >> 28) & 0x7;
-    printf("SDIO CMD: %d, ADDR: %d, FUNC: %d\n", cmd_type, addr, func);
+    //printf("SDIO CMD: %d, ADDR: %d, FUNC: %d\n", cmd_type, addr, func);
     if(cmd_type == 0x3) {
         // RCA request - ignore
     }
@@ -32,7 +32,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
             uint8_t data = s->arg & 0xFF;
             s->registers[addr] = data;
             if(addr == 0x2) { s->registers[0x3] = data; } // if we write to register 2, we also write the same result to register 3 (this is the enabled functions register)
-            printf("SDIO: Executing cmd52 by writing 0x%02x to register 0x%02x\n", data, addr);
+            //printf("SDIO: Executing cmd52 by writing 0x%02x to register 0x%02x\n", data, addr);
         } else {
             if(addr == 0x1000e) {
                 // misc register
@@ -43,7 +43,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
                 s->resp0 = (1 << 6);
             }
             else {
-                printf("SDIO: Executing cmd52 by reading from 0x%02x (value: 0x%02x)\n", addr, s->registers[addr]);
+                //printf("SDIO: Executing cmd52 by reading from 0x%02x (value: 0x%02x)\n", addr, s->registers[addr]);
                 s->resp0 = s->registers[addr];
             }
         }
@@ -52,7 +52,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
         // CMD53 - block transfer
         addr = addr & 0x7fff;
         bool is_write = (s->arg >> 31) != 0;
-        printf("SDIO: Executing cmd53 func %x with block size %d and %d blocks (reg address: 0x%08x, destination address: 0x%08x, write? %d)\n", func, s->blklen, s->numblk, addr, s->baddr, is_write);
+        //printf("SDIO: Executing cmd53 func %x with block size %d and %d blocks (reg address: 0x%08x, destination address: 0x%08x, write? %d)\n", func, s->blklen, s->numblk, addr, s->baddr, is_write);
         
         if(is_write) {
             if(func == 0x1) {
@@ -104,7 +104,7 @@ void sdio_exec_cmd(IPodTouchSDIOState *s)
 
 static void ipod_touch_sdio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
 {
-    printf("%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
+    //printf("%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
     
     IPodTouchSDIOState *s = (struct IPodTouchSDIOState *) opaque;
 
@@ -149,7 +149,7 @@ static void ipod_touch_sdio_write(void *opaque, hwaddr addr, uint64_t value, uns
 
 static uint64_t ipod_touch_sdio_read(void *opaque, hwaddr addr, unsigned size)
 {
-    printf("%s: offset = 0x%08x\n", __func__, addr);
+    //printf("%s: offset = 0x%08x\n", __func__, addr);
 
     IPodTouchSDIOState *s = (struct IPodTouchSDIOState *) opaque;
 

@@ -13,7 +13,7 @@ static void s5l8900_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsign
 
 static uint64_t s5l8900_gpio_read(void *opaque, hwaddr addr, unsigned size)
 {
-    printf("%s: read from location 0x%08x\n", __func__, addr);
+    //printf("%s: read from location 0x%08x\n", __func__, addr);
     IPodTouchGPIOState *s = (struct IPodTouchGPIOState *) opaque;
 
     switch(addr) {

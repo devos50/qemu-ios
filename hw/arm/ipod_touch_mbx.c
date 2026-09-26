@@ -10,8 +10,8 @@ static uint32_t reverse_byte_order(uint32_t value) {
 static uint64_t ipod_touch_mbx1_read(void *opaque, hwaddr addr, unsigned size)
 {
     IPodTouchMBXState *s = (IPodTouchMBXState *)opaque;
-    if (addr != 0x1020)
-    	printf("%s: read from location 0x%08x\n", __func__, addr);
+    //if (addr != 0x1020)
+    	//printf("%s: read from location 0x%08x\n", __func__, addr);
     switch(addr)
     {
         case 0x12c:
@@ -29,7 +29,7 @@ static uint64_t ipod_touch_mbx1_read(void *opaque, hwaddr addr, unsigned size)
 static void ipod_touch_mbx1_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     IPodTouchMBXState *s = (IPodTouchMBXState *)opaque;
-    fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, val, addr);
+    //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, val, addr);
 
     switch(addr)
     {
@@ -103,7 +103,7 @@ static void patch_kernel(bool alreadypatched)
 static uint64_t ipod_touch_mbx2_read(void *opaque, hwaddr addr, unsigned size)
 {
     IPodTouchMBXState *s = (IPodTouchMBXState *)opaque;
-    printf("%s: read from location 0x%08x\n", __func__, addr);
+    //printf("%s: read from location 0x%08x\n", __func__, addr);
     switch(addr)
     {
         case 0xC:
@@ -121,7 +121,7 @@ static uint64_t ipod_touch_mbx2_read(void *opaque, hwaddr addr, unsigned size)
 static void ipod_touch_mbx2_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     IPodTouchMBXState *s = (IPodTouchMBXState *)opaque;
-    fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, val, addr);
+    //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, val, addr);
 }
 
 static const MemoryRegionOps ipod_touch_mbx1_ops = {

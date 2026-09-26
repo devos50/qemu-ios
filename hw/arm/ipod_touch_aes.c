@@ -45,7 +45,7 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
             }
 
             buf = (uint8_t *) malloc(aesop->insize);
-            printf("In size: %d, out size: %d, in addr: 0x%08x, in buf: 0x%08x, out addr: 0x%08x, %d\n", aesop->insize, aesop->outsize, aesop->inaddr, ((uint32_t *)inbuf)[0], aesop->outaddr, aesop->gid_encryption_count);
+            //printf("In size: %d, out size: %d, in addr: 0x%08x, in buf: 0x%08x, out addr: 0x%08x, %d\n", aesop->insize, aesop->outsize, aesop->inaddr, ((uint32_t *)inbuf)[0], aesop->outaddr, aesop->gid_encryption_count);
 
             if(aesop->keytype == AESGID) {
                 // Unfortunately, we don't have access to the GID key.

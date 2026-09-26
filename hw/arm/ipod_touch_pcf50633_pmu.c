@@ -32,7 +32,7 @@ static int int_to_bcd(int value) {
 static uint8_t pcf50633_recv(I2CSlave *i2c)
 {
     Pcf50633State *s = PCF50633(i2c);
-    printf("Reading PMU register %d\n", s->cmd);
+    //printf("Reading PMU register %d\n", s->cmd);
 
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
@@ -94,7 +94,7 @@ static int pcf50633_send(I2CSlave *i2c, uint8_t data)
         s->cmd = data;
     }
 
-    printf("Writing PMU register cmd %d reg %d\n", s->cmd, s->curreg);
+    //printf("Writing PMU register cmd %d reg %d\n", s->cmd, s->curreg);
     switch(s->curreg) {
         case PMU_DSBL1:
             lcd_changebrightness(s->cmd);
