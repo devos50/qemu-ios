@@ -16,7 +16,7 @@ header = r'''
 #define LCD_FB_WIDTH 320
 #define LCD_FB_HEIGHT 480
 #define BASE 0x0f600000
-static uint8_t ram[4096];
+static uint8_t ram[1024*1024];
 static void cpu_physical_memory_read(uint64_t a,void *p,size_t n)
 { assert(a>=BASE && a+n<=BASE+sizeof(ram));memcpy(p,ram+(a-BASE),n); }
 '''
@@ -102,7 +102,37 @@ int main(void)
     r[0x11c/4]=BASE;r[0x134/4]=(4<<16);assert(!lcd_compose_planes(r,out));
     r[0x134/4]=(4<<16)|2;r[0x13c/4]=(3<<16)|4;assert(!lcd_compose_planes(r,out));
     r[0x13c/4]=(2<<16)|4;r[0x48/4]=0x40000002;assert(!lcd_compose_planes(r,out));
-    puts("PASS: LCD NV12 matrix, rotated scanout, premultiplied overlay, bounded DMA");
+    /* Exact RGB0 geometry observed on Diner's accepted landscape drawable:
+     * 426x320, 432-pixel stride, mode 3, at (0,27). No second plane is enabled.
+     * Unique X/Y channels detect row skew, transpose, mirroring and cropping. */
+    memset(r,0,sizeof(r));r[1]=0x10;r[0x20/4]=0x00e00700;
+    r[0x24/4]=BASE;r[0x28/4]=432;r[0x30/4]=(426<<16)|320;r[0x34/4]=27;
+    memset(ram,0xa5,sizeof(ram));
+    for(unsigned y=0;y<320;y++) for(unsigned x=0;x<426;x++) {
+        uint8_t *p=ram+(y*432+x)*4;
+        p[0]=x&255;p[1]=y&255;p[2]=x>>8;p[3]=255;
+    }
+    assert(lcd_needs_plane_composition(r));assert(lcd_compose_planes(r,out));
+    for(unsigned y=0;y<480;y++) for(unsigned x=0;x<320;x++) {
+        uint8_t expected[4]={0};
+        if(y>=27 && y<453) {
+            unsigned sx=y-27,sy=319-x;
+            expected[0]=sx&255;expected[1]=sy&255;expected[2]=sx>>8;expected[3]=255;
+        }
+        assert(!memcmp(out+(y*320+x)*4,expected,4));
+    }
+    /* Preserve the common dirty-tracked portrait path; route padded or
+     * positioned RGB0 through composition even without an overlay. */
+    r[0x20/4]=0x00200700;r[0x28/4]=320;r[0x30/4]=(320<<16)|480;r[0x34/4]=0;
+    assert(!lcd_needs_plane_composition(r));
+    r[0x28/4]=321;assert(lcd_needs_plane_composition(r));
+    r[0x28/4]=320;r[0x34/4]=1;assert(lcd_needs_plane_composition(r));
+    r[0x34/4]=0;r[1]=0;assert(!lcd_needs_plane_composition(r));
+    r[1]=0x10;r[0x20/4]=0x00600700;assert(!lcd_compose_planes(r,out));
+    r[0x20/4]=0x00e00f00;assert(!lcd_compose_planes(r,out));
+    r[0x20/4]=0x00e00700;r[0x24/4]=0x0fffffc0;assert(!lcd_compose_planes(r,out));
+    r[0x24/4]=BASE;r[0x28/4]=0x40000140;assert(!lcd_compose_planes(r,out));
+    puts("PASS: LCD RGB0 padded landscape scanout, NV12 rotation, overlays, bounded DMA");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='it-lcd-planes-') as tmp:

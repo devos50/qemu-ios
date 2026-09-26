@@ -507,14 +507,23 @@ static bool lcd_compose_planes(const uint32_t *r, uint8_t *out)
         const uint32_t *p = r + (0x20 + plane * 0x20) / 4;
         unsigned w = p[4] >> 16, h = p[4] & 0xffff, stride = p[2] * 4;
         unsigned x0 = p[5] >> 16, y0 = p[5] & 0xffff;
+        unsigned rotation = p[0] >> 22;
         if (!w || w > 2048 || !h || h > 2048 || p[2] > 8192 || p[3] ||
-            (p[0] & 0x700) != 0x700 || (p[0] >> 22) ||
+            (p[0] & 0xf00) != 0x700 || (rotation != 0 && rotation != 3) ||
             !lcd_plane_range(p[1], stride, h, w * 4)) return false;
-        g_autofree uint8_t *row = g_malloc(w * 4);
-        for (unsigned dy = 0; dy < h && dy + y0 < ph; dy++) {
-            cpu_physical_memory_read(p[1] + dy * stride, row, w * 4);
-            for (unsigned dx = 0; dx < w && dx + x0 < pw; dx++) {
-                const uint8_t *src = row + dx * 4;
+        /* RGB scanout can bypass CA composition too. Mode 3 rotates its
+         * padded landscape surface into the physical portrait panel, just
+         * like the video plane. Geometry and origin are guest registers. */
+        unsigned dw = rotation ? h : w, dh = rotation ? w : h;
+        g_autofree uint8_t *pixels = g_malloc((size_t)w * h * 4);
+        for (unsigned sy = 0; sy < h; sy++)
+            cpu_physical_memory_read(p[1] + sy * stride,
+                                     pixels + (size_t)sy * w * 4, w * 4);
+        for (unsigned dy = 0; dy < dh && dy + y0 < ph; dy++) {
+            for (unsigned dx = 0; dx < dw && dx + x0 < pw; dx++) {
+                unsigned sx = rotation ? dy : dx;
+                unsigned sy = rotation ? h - 1 - dx : dy;
+                const uint8_t *src = pixels + ((size_t)sy * w + sx) * 4;
                 uint8_t *dst = out + ((dy + y0) * pw + dx + x0) * 4;
                 unsigned alpha = plane ? src[3] : 255;
                 for (unsigned c = 0; c < 3; c++)
@@ -524,6 +533,18 @@ static bool lcd_compose_planes(const uint32_t *r, uint8_t *out)
         }
     }
     return true;
+}
+
+/* The linear full-panel RGB0 case keeps framebuffer dirty tracking. Every
+ * other enabled plane configuration must honor its programmed stride,
+ * dimensions, destination origin, and transform before host-window rotation. */
+static bool lcd_needs_plane_composition(const uint32_t *r)
+{
+    if (r[1] & 0x28) return true;
+    if (!(r[1] & 0x10)) return false;
+    const uint32_t *p = r + 0x20 / 4;
+    return (p[0] >> 22) || (p[0] & 0xf00) != 0x700 || p[3] ||
+        p[2] != LCD_FB_WIDTH || p[4] != ((LCD_FB_WIDTH << 16) | LCD_FB_HEIGHT) || p[5];
 }
 
 /*
@@ -674,7 +695,7 @@ static void lcd_refresh(void *opaque)
     }
 
     bool composed = false;
-    if (lcd->planes_enabled && (lcd->plane_scanout[1] & 0x28)) {
+    if (lcd->planes_enabled && lcd_needs_plane_composition(lcd->plane_scanout)) {
         if (!lcd->rotbuf) lcd->rotbuf = g_malloc(LCD_FB_WIDTH * LCD_FB_HEIGHT * 4);
         composed = lcd_compose_planes(lcd->plane_scanout, lcd->rotbuf);
         if (!composed) {
