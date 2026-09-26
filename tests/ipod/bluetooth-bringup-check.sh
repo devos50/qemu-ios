@@ -23,6 +23,8 @@
 #
 # Passing requires firmware download and the subsequent BCM sleep-mode setup.
 # It does not prove BluetoothManager readiness or app-launch animation.
+# Verbose DMA tracing changes timing and can hide the UART regression; use
+# quiet boots with a guest BluetoothManager probe for stack acceptance.
 set -u
 
 QEMU="${QEMU:-$(cd "$(dirname "$0")/../.." && pwd)/build/qemu-system-arm}"
@@ -91,7 +93,7 @@ fi
 # HCI_Reset, Update Baud Rate, Download Minidriver, the launch announcement,
 # every Write RAM chunk, then Launch RAM. Getting there exercises the entire
 # path both ways -- chardev -> Rx FIFO -> Rx DMA request -> DMAC -> guest memory
-# -> last request -> terminal count -> driver -> BlueTool -- so it is one grep
+# -> UART receive timeout -> partial-buffer driver path -> BlueTool -- one grep
 # for the firmware-download path. It does not establish stack readiness.
 if [ "$fail" = 0 ] && grep -q '0xfc4e' "$WORK/trace.log"; then
     echo "PASS: BCM firmware and controller setup observed on all $BOOTS boots"
@@ -103,7 +105,7 @@ echo "FAIL: Bluetooth firmware/controller setup/reset checks did not pass every 
 if ! grep -q '0xfc18' "$WORK/trace.log"; then
     echo "      The guest never got past HCI_Reset, so it never accepted a" >&2
     echo "      reply: check the rxdmareq wiring, the UCON[1:0] DMA-mode" >&2
-    echo "      decode, and pl080_set_dma_last_request()." >&2
+    echo "      decode, and the S5L UTRSTAT/UCON interrupt mapping." >&2
 else
     echo "      It accepted replies but stalled mid-script. If it stops after" >&2
     echo "      0xfc2e, the two-byte launch announcement is missing." >&2

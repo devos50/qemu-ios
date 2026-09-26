@@ -128,28 +128,20 @@ static const Exynos4210UartReg exynos4210_uart_regs[] = {
 #define UTRSTAT_Rx_BUFFER_DATA_READY    0x1
 
 /*
- * S5L8720 (iPod touch 2G) reflects the Tx/Rx interrupt-pending state in the
- * top bits of UTRSTAT and expects the handler to acknowledge by writing UTRSTAT
- * back -- unlike the exynos4210 UINTP register. 3.1.3's iBoot drives its serial
- * console with an interrupt-driven Tx path that reads these bits; without them
- * its ISR sees no Tx interrupt, never drains its output ring, and (because the
- * exynos UINTP line stays asserted) storms. Only meaningful under IT_DIRECT_IBOOT
- * (direct 7E18 boot); a normal 2.1.1 boot never reads them. */
-/*
- * NOTE (2026-08-01): the 3.1.3 kernel's S5L UART ISR (VA 0xc059aecc) reads
- * UTRSTAT, masks with 0x158 and dispatches: bit 8 (0x100)=Rx, bit 6 (0x40)=
- * error (reads UERSTAT), bit 3 (0x8)=Tx (drains its ring via vtable[0x38c]),
- * bit 4 (0x10)=a notify. So the real S5L bit map differs from the iBoot-tuned
- * 0x10/0x40 below, AND the storm is deeper than bit positions: TXD is level-
- * asserted (Tx-FIFO-empty is always true) and the driver masks Tx via a
- * control reg the model doesn't honor, so it never quiesces -> IRQ storm ->
- * WDT reset. Proper fix is a UART interrupt-model rework (map RXD/TXD/error/
- * timeout to the real S5L UTRSTAT bits and honor the driver's enable/disable);
- * left at the iBoot-validated values for now so iBoot serial keeps working.
+ * S5L8720 acknowledges interrupts through UTRSTAT (write-one-to-clear),
+ * with enables in UCON[14:11]. The 7E18 ISR at 0xc059aecc handles timeout
+ * (0x08), receive threshold (0x10), transmit (0x20), and error (0x40).
+ * Bit 0x100 is AUTOBAUD, not receive: its handler divides the clock by
+ * UABRCNT at offset 0x2c. Mapping RX there hid the receive-timeout callback
+ * and made the Bluetooth client block SpringBoard's launch animation.
  */
-#define UTRSTAT_S5L_Tx_INT              0x08
-#define UTRSTAT_S5L_Rx_INT              0x100
+#define UTRSTAT_S5L_Tx_INT              0x20
+#define UTRSTAT_S5L_Rx_INT              0x10
 #define UTRSTAT_S5L_Err_INT             0x40
+#define UCON_S5L_TIMEOUT_INT_ENABLE     (1 << 11)
+#define UCON_S5L_RX_INT_ENABLE          (1 << 12)
+#define UCON_S5L_TX_INT_ENABLE          (1 << 13)
+#define UCON_S5L_ERROR_INT_ENABLE       (1 << 14)
 
 /* UART Error Status */
 #define UERSTAT_OVERRUN  0x1
@@ -190,20 +182,7 @@ struct Exynos4210UartState {
      * hw/arm/ipod_touch_2g.c.
      */
     qemu_irq          rxdmareq;
-    /*
-     * DMACLSREQ/DMACLBREQ: pulsed on the Rx timeout, i.e. the line went idle
-     * after data, so the packet has ended. Without it a short receive into a
-     * big DMA descriptor never completes and the driver is never woken.
-     */
-    qemu_irq          rxdmalast;
-    /*
-     * Whether anything has actually arrived since the last Rx timeout. The
-     * timeout itself is NOT proof of that: it also fires on a completely idle
-     * line whenever UCON bit 11 is set, and pulsing the last request then ends
-     * a descriptor the guest has only just armed and never fed. That is a
-     * transient: it depends on whether the idle timeout beats the first byte,
-     * so Bluetooth would come up on one boot and not the next.
-     */
+    /* Retain receive activity across a DMA-mode change until its timeout. */
     bool              rx_since_timeout;
 
     uint32_t channel;
@@ -355,14 +334,7 @@ static void exynos4210_uart_update_irq(Exynos4210UartState *s)
 
         if (count <= exynos4210_uart_Tx_FIFO_trigger_level(s) &&
             !s->s5l8720_irq) {
-            /*
-             * S5L8720 Tx interrupt is edge-triggered on transmit, not level on
-             * empty-FIFO. The 3.1.3 kernel's ISR drains its Tx ring and stops
-             * writing UTXH when empty; a level Tx-empty source (always true when
-             * idle) that the driver never masks storms the CPU -> WDT reset.
-             * Under IT_DIRECT_IBOOT let only the UTXH-write path raise UINTSP_TXD
-             * (edge), so an idle UART raises no Tx interrupt.
-             */
+            /* S5L latches transmit completion on UTXH writes below. */
             s->reg[I_(UINTSP)] |= UINTSP_TXD;
         }
 
@@ -384,8 +356,7 @@ static void exynos4210_uart_update_irq(Exynos4210UartState *s)
 
     s->reg[I_(UINTP)] = s->reg[I_(UINTSP)] & ~s->reg[I_(UINTM)];
 
-    /* S5L8720: surface the pending Tx/Rx interrupt in UTRSTAT so 3.1.3 iBoot's
-     * UTRSTAT-based ISR can see and drain it. See UTRSTAT_S5L_* above. */
+    /* S5L pending bits remain readable while their UCON enable is clear. */
     if (s->s5l8720_irq) {
         if (s->reg[I_(UINTP)] & UINTSP_TXD) {
             s->reg[I_(UTRSTAT)] |= UTRSTAT_S5L_Tx_INT;
@@ -404,7 +375,24 @@ static void exynos4210_uart_update_irq(Exynos4210UartState *s)
         }
     }
 
-    if (s->reg[I_(UINTP)]) {
+    uint32_t pending = s->reg[I_(UINTP)];
+    if (s->s5l8720_irq) {
+        uint32_t enabled = s->reg[I_(UCON)];
+        if (!(enabled & UCON_S5L_TX_INT_ENABLE)) {
+            pending &= ~UINTSP_TXD;
+        }
+        if (!(enabled & UCON_S5L_RX_INT_ENABLE)) {
+            pending &= ~UINTSP_RXD;
+        }
+        if (!(enabled & UCON_S5L_ERROR_INT_ENABLE)) {
+            pending &= ~UINTSP_ERROR;
+        }
+        if ((enabled & UCON_S5L_TIMEOUT_INT_ENABLE) &&
+            (s->reg[I_(UTRSTAT)] & UTRSTAT_Rx_TIMEOUT)) {
+            pending |= UINTSP_RXD;
+        }
+    }
+    if (pending) {
         qemu_irq_raise(s->irq);
         trace_exynos_uart_irq_raised(s->channel, s->reg[I_(UINTP)]);
     } else {
@@ -427,14 +415,11 @@ static void exynos4210_uart_timeout_int(void *opaque)
         exynos4210_uart_update_dmabusy(s);
         exynos4210_uart_update_irq(s);
         /*
-         * Tell the DMAC the packet ended, AFTER the request line above has let
-         * it drain the FIFO. This is the "last request" a real UART asserts on
-         * an Rx timeout; it is what turns a 7-byte reply sitting in a
-         * 2048-byte descriptor into a completed transfer.
+         * The UART timeout wakes the driver's partial-buffer path. Do not
+         * synthesize a DMAC terminal count: UART1 uses controller flow with
+         * a 2048-byte LLI, and advancing it after a short HCI reply makes the
+         * guest consume the unfilled tail as Bluetooth packet data.
          */
-        if ((s->reg[I_(UCON)] & 0x03) >= 0x02 && s->rx_since_timeout) {
-            qemu_irq_pulse(s->rxdmalast);
-        }
         s->rx_since_timeout = false;
     }
 }
@@ -601,6 +586,7 @@ static void exynos4210_uart_write(void *opaque, hwaddr offset,
         } else if (s->rx_since_timeout) {
             exynos4210_uart_rx_timeout_set(s);
         }
+        exynos4210_uart_update_irq(s);
         break;
     case UMCON:
     default:
@@ -827,7 +813,6 @@ static void exynos4210_uart_init(Object *obj)
     sysbus_init_irq(dev, &s->irq);
     sysbus_init_irq(dev, &s->dmairq);
     sysbus_init_irq(dev, &s->rxdmareq);
-    sysbus_init_irq(dev, &s->rxdmalast);
 }
 
 static void exynos4210_uart_realize(DeviceState *dev, Error **errp)

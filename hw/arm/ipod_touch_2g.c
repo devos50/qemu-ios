@@ -3386,14 +3386,6 @@ static void it_uart_rx_dma_req(void *opaque, int n, int level)
     pl080_set_dma_request((PL080State *)opaque, n, level);
 }
 
-/* The same port's "last request": the Rx line went idle, so the packet ended. */
-static void it_uart_rx_dma_last(void *opaque, int n, int level)
-{
-    if (level) {
-        pl080_set_dma_last_request((PL080State *)opaque, n);
-    }
-}
-
 static void ipod_touch_machine_init(MachineState *machine)
 {
 	IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(machine);
@@ -3686,9 +3678,6 @@ static void ipod_touch_machine_init(MachineState *machine)
      */
     sysbus_connect_irq(SYS_BUS_DEVICE(uart1_dev), 2,
                        qemu_allocate_irq(it_uart_rx_dma_req, pl080_1,
-                                         UART1_RX_DMA_REQ_ID));
-    sysbus_connect_irq(SYS_BUS_DEVICE(uart1_dev), 3,
-                       qemu_allocate_irq(it_uart_rx_dma_last, pl080_1,
                                          UART1_RX_DMA_REQ_ID));
     /*
      * DMAC0's completion IRQ is VIC line 0x10, and DMAC1's is 0x11. They are

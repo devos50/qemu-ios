@@ -1270,3 +1270,13 @@ because diagnostic output changes the timing of this intermittent failure.
 Release Xcode build, emulator dylib rebuild, packaging, and strict signature
 verification pass. The updated package is `build-native14/Light Touch-dma-recovery.app`;
 Xcode's development dylib is updated too. Canceled media edits remain untouched.
+
+### 2026-09-19 — UART interrupt mapping restores app launch animations
+
+Reproduced the returning Settings/Contacts animation regression against the native library used by Light Touch's default Xcode build, with networking enabled and a clone of the affected NAND overlay. Quiet boots exposed BTServer malformed H4 replies and restart loops, with BluetoothManager attachment timing out around one second. Verbose DMA tracing masked the failure.
+
+Disassembling the running 7E18 UART ISR at `0xc059aecc` resolved the incorrect interrupt interpretation: UTRSTAT `0x08` is Rx timeout, `0x10` Rx threshold, `0x20` Tx, `0x40` error, and `0x100` automatic baud measurement (reads UABRCNT and divides the clock). The model had mapped Tx to the timeout bit and Rx to the autobaud bit, and did not honor UCON interrupt enables. Corrected the mapping and UCON[14:11] gating, and recompute IRQ state on UCON writes. Removed UART1's synthetic last-request/terminal-count wiring: the driver's timeout callback handles partial DMA buffers without advancing its 2,048-byte controller-counted LLI.
+
+Three independent quiet boots of cloned device data now attach BluetoothManager in 13.3, 11.7, and 13.2 ms, with one BTServer process per boot and no malformed replies. Native LCD frame captures show intermediate zoom surfaces for both Settings and Contacts on every boot. The installed default development library also passes three consecutive stack probes (13.9, 10.5, 10.9 ms). No NAND patch/reset was used. `build-native14/qemu-build/libqemu-arm.dylib` is rebuilt and signed; source changes remain uncommitted.
+
+`test_uart_rx_transitions.py` now exercises the production IRQ code, UCON enables and acknowledgments instead of stubbing update_irq, and rejects the old model. Added `bluetooth-stack-probe.c` and `check-bluetooth-stack.py` for quiet guest-side readiness checks. The firmware-only bring-up check explicitly documents that verbose tracing cannot prove client readiness or restored animation.
