@@ -23,13 +23,9 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
     uint8_t *buf;
 
     // fprintf(stderr, "%s: offset 0x%08x value 0x%08x\n", __FUNCTION__, offset, value);
-    uint32_t *data = malloc(sizeof(uint16_t) * 9);
 
     switch(offset) {
         case AES_GO:
-            // PATCH OUT
-            // in iBoot, we also patch the length check after LZSS compression since that can lead to issues
-
             inbuf = (uint8_t *)malloc(aesop->insize);
             cpu_physical_memory_read((aesop->inaddr), inbuf, aesop->insize);
 
@@ -67,11 +63,6 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
                     for(int i = 0; i < aesop->insize; i++) { buf[i] = key[i]; }
                 }
                 else if(aesop->gid_encryption_count == 2) { // apple logo
-
-                    // very ugly - we patch out here the LZSS check
-                    data[0] = 0x0; // NOP
-                    cpu_physical_memory_write(0x0ff119f0, (uint8_t *)data, 4);
-
                     char key[] = { 
                         0x64, 0x23, 0x8f, 0xb0, 0x32, 0x91, 0x42, 0x25, 0x22, 0xb5, 0xdd, 0x28, 0x3f, 0xc3, 0x89, 0x5c, // IV
                         0x85, 0x9f, 0xd4, 0xd3, 0x82, 0xb8, 0x38, 0x51, 0x56, 0xfc, 0x58, 0x1a, 0x7f, 0x1d, 0x97, 0x22, // key
