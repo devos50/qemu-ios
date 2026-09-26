@@ -28,6 +28,7 @@
 #include "hw/arm/ipod_touch_scaler_csc.h"
 #include "hw/arm/ipod_touch_sdio.h"
 #include "hw/arm/ipod_touch_tvout.h"
+#include "hw/arm/ipod_touch_wdt.h"
 
 #define TYPE_IPOD_TOUCH "iPod-Touch"
 
@@ -49,6 +50,7 @@
 #define S5L8720_SDIO_IRQ 0x2A
 #define S5L8720_FMSS_IRQ 0x36
 #define S5L8720_SPI4_IRQ 0x37
+#define S5L8720_WDT_IRQ 0x33
 
 // GPIO interrupts
 #define S5L8900_GPIO_G0_IRQ 0x21

@@ -111,7 +111,6 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
         { "spi0-page",     SPI0_MEM_BASE,     0x1000 },
         { "clock0-page",   CLOCK0_MEM_BASE,   0x1000 },
         { "i2c0-page",     I2C0_MEM_BASE,     0x1000 },
-        { "wdt",           WDT_MEM_BASE,      0x1000 },
         { "i2c1-page",     I2C1_MEM_BASE,     0x1000 },
         { "i2s0",          I2S0_MEM_BASE,     0x1000 },
         { "uart0-page",    UART0_MEM_BASE,    0x1000 },
@@ -328,6 +327,9 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ));
     //sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ - 1));
     timer_state->sysclk = nms->sysclk;
+
+    // init the watchdog timer
+    sysbus_create_simple(TYPE_IPOD_TOUCH_WDT, WDT_MEM_BASE, s5l8900_get_irq(nms, S5L8720_WDT_IRQ));
 
     // init sysic
     dev = qdev_new("ipodtouch.sysic");
@@ -546,6 +548,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchAESState *aes_state = IPOD_TOUCH_AES(dev);
     nms->aes_state = aes_state;
     memory_region_add_subregion(sysmem, AES_MEM_BASE, &aes_state->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init PKE engine
     dev = qdev_new("ipodtouch.pke");
