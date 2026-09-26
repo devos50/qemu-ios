@@ -175,16 +175,23 @@ static void ipod_touch_aes_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &aes_ops, s, "aes", 0x100);
     sysbus_init_mmio(sbd, &s->iomem);
+}
+
+static void ipod_touch_aes_reset(DeviceState *dev)
+{
+    IPodTouchAESState *s = IPOD_TOUCH_AES(dev);
 
     memset(&s->custkey, 0, 8 * sizeof(uint32_t));
     memset(&s->ivec, 0, 4 * sizeof(uint32_t));
 
+    // the GID keys are handed out in boot order (LLB first), so start over when the system restarts
     s->gid_encryption_count = 0;
 }
 
 static void ipod_touch_aes_class_init(ObjectClass *klass, void *data)
 {
-
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->reset = ipod_touch_aes_reset;
 }
 
 static const TypeInfo ipod_touch_aes_info = {
