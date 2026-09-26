@@ -460,7 +460,10 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_I2C1_IRQ));
     
     // Init the light sensor
-    I2CSlave *isl29003dl = i2c_slave_create_simple(i2c_state->bus, "isl29003dl", 0x44);
+    I2CSlave *isl29003dl = i2c_slave_new("isl29003dl", 0x44);
+    object_property_add_child(OBJECT(machine), "lightsensor", OBJECT(isl29003dl));
+    i2c_slave_realize_and_unref(isl29003dl, i2c_state->bus, &error_fatal);
+    qdev_connect_gpio_out(DEVICE(isl29003dl), 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_LIGHTSENSOR_IRQ));
 
     // init the Mikey
     I2CSlave *cd327mikey = i2c_slave_create_simple(i2c_state->bus, "cd3272mikey", 0x39);
