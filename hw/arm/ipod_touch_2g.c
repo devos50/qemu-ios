@@ -8,7 +8,6 @@
 #include "sysemu/reset.h"
 #include "hw/platform-bus.h"
 #include "hw/block/flash.h"
-#include "hw/qdev-clock.h"
 #include "hw/qdev-properties.h"
 #include "hw/arm/exynos4210.h"
 #include "hw/arm/ipod_touch_2g.h"
@@ -279,10 +278,6 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     ipod_touch_cpu_setup(machine, &sysmem, &cpu, &nsas);
 
-    // setup clock
-    nms->sysclk = clock_new(OBJECT(machine), "SYSCLK");
-    clock_set_hz(nms->sysclk, 12000000ULL);
-
     nms->cpu = cpu;
     nms->nsas = nsas;
 
@@ -319,14 +314,8 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->clock1 = IPOD_TOUCH_CLOCK(dev);
 
     // init the timer
-    dev = qdev_new("ipodtouch.timer");
-    IPodTouchTimerState *timer_state = IPOD_TOUCH_TIMER(dev);
-    nms->timer1 = timer_state;
-    memory_region_add_subregion(sysmem, TIMER1_MEM_BASE, &timer_state->iomem);
-    SysBusDevice *busdev = SYS_BUS_DEVICE(dev);
-    sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ));
-    //sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ - 1));
-    timer_state->sysclk = nms->sysclk;
+    dev = sysbus_create_simple(TYPE_IPOD_TOUCH_TIMER, TIMER1_MEM_BASE, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ));
+    nms->timer1 = IPOD_TOUCH_TIMER(dev);
 
     // init the watchdog timer
     sysbus_create_simple(TYPE_IPOD_TOUCH_WDT, WDT_MEM_BASE, s5l8900_get_irq(nms, S5L8720_WDT_IRQ));
@@ -336,7 +325,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchSYSICState *sysic_state = IPOD_TOUCH_SYSIC(dev);
     nms->sysic = (IPodTouchSYSICState *) g_malloc0(sizeof(struct IPodTouchSYSICState));
     memory_region_add_subregion(sysmem, SYSIC_MEM_BASE, &sysic_state->iomem);
-    busdev = SYS_BUS_DEVICE(dev);
+    SysBusDevice *busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize(busdev, &error_fatal);
     for(int grp = 0; grp < ARRAY_SIZE(S5L8900_GPIO_IRQS); grp++) {
         sysbus_connect_irq(busdev, grp, s5l8900_get_irq(nms, S5L8900_GPIO_IRQS[grp]));

@@ -175,7 +175,6 @@ typedef struct {
 	IPodTouchScalerCSCState *scaler_csc_state;
 	IPodTouchSDIOState *sdio_state;
 	IPodTouchTVOutState *tvout_state;
-	Clock *sysclk;
 	char bootrom_path[1024];
 	char nor_path[1024];
 	char nand_path[1024];
