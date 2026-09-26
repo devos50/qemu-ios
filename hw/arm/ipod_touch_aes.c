@@ -103,9 +103,7 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
                 memcpy(buf + blocks_size, inbuf + blocks_size, aesop->insize - blocks_size);
             }
 
-            if(aesop->outaddr != 0x220100ac && aesop->outaddr != 0x0bf08468 && aesop->outaddr != 0x0fb9bcdc) { // TODO very ugly hack - for the RSA key decryption, it seems that doing nothing results in the correct decryption key??
-                cpu_physical_memory_write((aesop->outaddr), buf, aesop->insize);
-            }
+            cpu_physical_memory_write((aesop->outaddr), buf, aesop->insize);
 
             memset(aesop->custkey, 0, 0x20);
             memset(aesop->ivec, 0, 0x10);
