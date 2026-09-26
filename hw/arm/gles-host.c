@@ -153,8 +153,8 @@ void gles_eagl_iosurface_unlock(void);
 
 #endif
 
-/* The panel. iOS keeps its framebuffer in portrait and rotates inside it, so
- * these are the framebuffer's dimensions, not the UI's. */
+/* The physical LCD remains portrait. Individual CA drawables can be landscape
+ * or smaller layers; their storage is tracked separately per graphics context. */
 #define GLES_FB_WIDTH  320
 #define GLES_FB_HEIGHT 480
 
@@ -255,6 +255,10 @@ typedef struct {
     CGLContextObj cgl;
 #endif
     GLuint fbo, tex, depth;
+    uint32_t drawable_width, drawable_height;
+    /* Set once the guest shim reports its CA layer size. Shims that predate
+     * GLES_OP_DRAWABLE_STORAGE keep the legacy panel-sized crop. */
+    bool drawable_announced;
 
     /*
      * True when the colour attachment is an IOSurface and the present can read
@@ -307,7 +311,7 @@ typedef struct {
     GLESBuffer *array_buffer;
     GLESBuffer *element_buffer;
 
-    uint8_t *readback;  /* GLES_FB_WIDTH * GLES_FB_HEIGHT * 4 */
+    uint8_t *readback;  /* drawable_width * drawable_height * 4 */
 
     /*
      * Framebuffer objects, wired to real host FBOs -- with ONE exception.
@@ -855,6 +859,8 @@ static bool gles_host_init(void)
     /* glNormalPointer takes no size; the array is always 3 components. */
     gh.normal.size = 3;
 
+    gh.drawable_width = GLES_FB_WIDTH;
+    gh.drawable_height = GLES_FB_HEIGHT;
     gh.readback = g_malloc0((size_t)GLES_FB_WIDTH * GLES_FB_HEIGHT * 4);
     gh.inited = true;
     if (getenv("IT_GLES_CONTEXT_TRACE")) fprintf(stderr, "[gles-context] initialized %p legacy=%d\n", (void *)gh_current, gh_current == &gh_legacy);
@@ -2535,6 +2541,10 @@ static void gles_present_to_panel(void)
     const uint8_t *frame;
     size_t fstride = 0;
     int y;
+    /* Direct panel presentation has no CA transform. A resized drawable must
+     * use its CA surface; reading it as a portrait panel would overrun or crop. */
+    if (gh.drawable_width != GLES_FB_WIDTH ||
+        gh.drawable_height != GLES_FB_HEIGHT) return;
 
     nms = IPOD_TOUCH_MACHINE(qdev_get_machine());
     if (!nms || !nms->lcd_state) {
@@ -2917,7 +2927,7 @@ static void gles_report_progress(void)
          * the clear colour" from "we drew a scene and lost it on the way to
          * the panel" -- which no counter can. */
         uint64_t r = 0, g = 0, b = 0;
-        unsigned i, n = GLES_FB_WIDTH * GLES_FB_HEIGHT;
+        unsigned i, n = gh.drawable_width * gh.drawable_height;
 
         if (gh.readback) {
             for (i = 0; i < n; i += 7) {
@@ -3046,8 +3056,10 @@ static int gles_present_to_surface(CPUState *cpu, uint32_t base, uint32_t stride
                 "base=0x%08x %ux%u stride=%u\n", base, width, height, stride);
         return -1;
     }
-    if (width > GLES_FB_WIDTH * 4 || height > GLES_FB_HEIGHT * 4) {
-        fprintf(stderr, "[gles] present-surface: implausible size %ux%u\n",
+    if (gh.drawable_announced ?
+        (width != gh.drawable_width || height != gh.drawable_height) :
+        (width > GLES_FB_WIDTH * 4 || height > GLES_FB_HEIGHT * 4)) {
+        fprintf(stderr, "[gles] present-surface: storage does not match %ux%u\n",
                 width, height);
         return -1;
     }
@@ -3095,10 +3107,10 @@ static int gles_present_to_surface(CPUState *cpu, uint32_t base, uint32_t stride
         }
     }
 
-    /* The FBO is GLES_FB_WIDTH x GLES_FB_HEIGHT; take only what fits. */
+    /* Every accepted drawable pixel is copied, including landscape edges. */
     {
-        uint32_t rw = width < GLES_FB_WIDTH ? width : GLES_FB_WIDTH;
-        uint32_t rh = height < GLES_FB_HEIGHT ? height : GLES_FB_HEIGHT;
+        uint32_t rw = MIN(width, gh.drawable_width);
+        uint32_t rh = MIN(height, gh.drawable_height);
         const uint8_t *frame = NULL;
         size_t fstride = 0;
 
@@ -3185,6 +3197,9 @@ static int gles_present_to_surface(CPUState *cpu, uint32_t base, uint32_t stride
          * row copy below becomes a memcpy. The swizzle loop was the largest
          * single item in the frame's host time.
          */
+        GLint pack_alignment;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
         if (bpp == 2) {
             /* GL packs 565 itself, so there is no conversion loop here: the
              * result already matches CA's little-endian 'L565' layout. */
@@ -3196,6 +3211,7 @@ static int gles_present_to_surface(CPUState *cpu, uint32_t base, uint32_t stride
         } else {
             glReadPixels(0, 0, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, gh.readback);
         }
+        glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
         /*
          * The old path, kept switchable so the two can be compared inside one
          * run. This machine never goes quiet -- eight emulators at once while
@@ -3527,6 +3543,75 @@ static int64_t gles_pvrtc_upload(CPUState *cpu, uint32_t target, uint32_t level,
 
 /* IOSurface-backed textures are aliases of guest memory. Upload on bind;
  * publish rendering before an FBO switch or flush makes it visible to CA. */
+/* CA can replace a portrait layer with a landscape layer during layout.
+ * Allocate all drawable attachments together and publish them only after the
+ * replacement is complete. A failed resize leaves the old storage usable.
+ * Guest texture/renderbuffer/framebuffer bindings and viewport stay intact. */
+static int64_t gles_drawable_storage(uint32_t width, uint32_t height)
+{
+    GLint texture, renderbuffer, framebuffer;
+    GLuint color = 0, depth = 0, fbo = 0;
+    GLenum error, status;
+    uint8_t *readback;
+
+    if (!width || !height || width > 2048 || height > 2048)
+        return gles_reject(GL_INVALID_VALUE);
+    gh.drawable_announced = true;
+    if (width == gh.drawable_width && height == gh.drawable_height) return 0;
+    readback = g_try_malloc0_n((size_t)width * height, 4);
+    if (!readback) return gles_reject(GL_OUT_OF_MEMORY);
+
+    gles_texture_begin();
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING_EXT, &renderbuffer);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
+    glGenTextures(1, &color);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenRenderbuffersEXT(1, &depth);
+    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, depth);
+    glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT16, width, height);
+    glGenFramebuffersEXT(1, &fbo);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fbo);
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
+                              GL_TEXTURE_2D, color, 0);
+    glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT,
+                                 GL_RENDERBUFFER_EXT, depth);
+    status = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+    error = glGetError();
+    if (error == GL_NO_ERROR && status != GL_FRAMEBUFFER_COMPLETE_EXT)
+        error = GL_OUT_OF_MEMORY;
+    if (error == GL_NO_ERROR) {
+        if ((GLuint)texture == gh.tex) texture = color;
+        if ((GLuint)renderbuffer == gh.depth) renderbuffer = depth;
+        if ((GLuint)framebuffer == gh.fbo) framebuffer = fbo;
+        glDeleteTextures(1, &gh.tex);
+        glDeleteRenderbuffersEXT(1, &gh.depth);
+        glDeleteFramebuffersEXT(1, &gh.fbo);
+        g_free(gh.readback);
+        gh.tex = color; gh.depth = depth; gh.fbo = fbo;
+        gh.readback = readback;
+        gh.drawable_width = width; gh.drawable_height = height;
+        /* The portable readback path handles resized layers on both hosts.
+         * The platform's original IOSurface remains owned by its context. */
+        gh.iosurface = false;
+        gh.fb_dirty = true;
+        gh.depth_cleared_this_frame = false;
+    } else {
+        glDeleteTextures(1, &color);
+        glDeleteRenderbuffersEXT(1, &depth);
+        glDeleteFramebuffersEXT(1, &fbo);
+        g_free(readback);
+    }
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, renderbuffer);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, framebuffer);
+    return error == GL_NO_ERROR ? 0 : gles_reject(error);
+}
+
 static bool gles_surface_range(uint32_t base, uint32_t stride, unsigned rows,
                                unsigned rowbytes)
 {
@@ -3741,6 +3826,8 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
     /* ---- engine-level operations (not framework dispatch slots) ---- */
     case GLES_OP_BIND_SURFACE:
         return argc == 8 ? gles_bind_surface(cpu, a) : -1;
+    case GLES_OP_DRAWABLE_STORAGE:
+        return argc == 2 ? gles_drawable_storage(a[0], a[1]) : -1;
 
     case GLES_OP_PRESENT: {
         uint64_t t0 = gles_t();
@@ -5267,10 +5354,10 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
             glGetRenderbufferParameterivEXT(GL_RENDERBUFFER_EXT, a[1], &v);
         } else {
             /* The drawable: CA owns its storage, so the host renderbuffer has
-             * none to report and the answer is the panel's own geometry. */
+             * none to report. Report the accepted layer's geometry. */
             switch (a[1]) {
-            case 0x8D42: v = GLES_FB_WIDTH;  break; /* RENDERBUFFER_WIDTH_OES  */
-            case 0x8D43: v = GLES_FB_HEIGHT; break; /* RENDERBUFFER_HEIGHT_OES */
+            case 0x8D42: v = gh.drawable_width;  break; /* RENDERBUFFER_WIDTH_OES  */
+            case 0x8D43: v = gh.drawable_height; break; /* RENDERBUFFER_HEIGHT_OES */
             case 0x8D44: v = 0x8058;         break; /* INTERNAL_FORMAT -> RGBA8 */
             default:     v = 0;              break;
             }

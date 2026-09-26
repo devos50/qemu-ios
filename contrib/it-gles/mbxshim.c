@@ -73,6 +73,7 @@ typedef struct __attribute__((packed)) {
 
 #define GLES_OP_PRESENT         0x1000
 #define GLES_OP_PRESENT_SURFACE 0x1001
+#define GLES_OP_DRAWABLE_STORAGE 0x1008
 
 /* The two drawable formats CA hands the engine. Declared up here because the
  * surface plausibility check needs the pixel size before the drawable code
@@ -837,10 +838,11 @@ static ca_view_t *ca_view_for_block(void *blk)
     return 0;
 }
 
+static void ca_detach_view(ca_view_t *v);
+
 static int GLESDestroyGC(void *gc)
 {
-    ca_view_t *v = ca_view_for_gc(gc, 0);
-    if (v) { ca_view_t empty = {0}; *v = empty; }
+    ca_detach_view(ca_view_for_gc(gc, 0));
     if (gc && ((GuestGC *)gc)->host) qc(GLES_OP_DELETE_CONTEXT, gc, 0, A(0));
     free(gc);
     return 0;
@@ -992,12 +994,11 @@ static int surface_capture(ca_view_t *v, void *s)
  *
  * THE REST OF THE TABLE, and the one that actually delivers a frame:
  *
- *   +0x08 unbind(drawable)          -- ONLY on the failure path. GLESBindView
- *                                      reaches it at 0xd864 exclusively when
- *                                      _ViewTextureBeginIfNeeded returned 0,
- *                                      and falls straight into SetError after.
- *                                      Calling it on success releases the
- *                                      drawable CA just handed over.
+ *   +0x08 unbind(drawable)          -- releases a binding on teardown/rebind,
+ *                                      or if acquiring its first buffer fails.
+ *                                      GLESBindView calls _DetachTexture first
+ *                                      (7E18 armv6 0xd7dc); _DetachTexture
+ *                                      calls unbind at 0x1bee4.
  *   +0x0c nextBuffer(drawable)      -- returns the IOSurfaceRef to render into
  *                                      for THIS frame.
  *   +0x10 present(drawable, 1)      -- the frame in that surface is finished.
@@ -1107,6 +1108,24 @@ static int ca_destroy_buffer(void *ctx, void *surface)
     return 1;
 }
 
+/* Match 7E18 _DetachTexture: return an acquired buffer before unbinding.
+ * CA refuses a second bind while the layer still belongs to the first one.
+ * Keep the callback block registered until unbind finishes: CA can synchronously
+ * destroy its surfaces through that block during teardown. */
+static void ca_detach_view(ca_view_t *v)
+{
+    ca_view_t empty = {0};
+    if (!v) return;
+    if (v->drawable) {
+        void **vt = v->drawable;
+        if (!v->need_buffer && v->ref && vt[4]) {
+            ((ca_present_fn)vt[4])(v->drawable, 1);
+        }
+        if (vt[2]) ((ca_unbind_fn)vt[2])(v->drawable);
+    }
+    *v = empty;
+}
+
 /* A mapped IOSurface can still contain demand-paged memory. The host's debug
  * memory reader cannot fault guest pages in as the real GPU's pinning does. */
 static int surface_fault_read(unsigned long base, unsigned stride, unsigned rows,
@@ -1187,7 +1206,6 @@ static int GLESBindView(void *gc, void *drawable, void *ifmt, void *flags)
 {
     void **vt = drawable;
     ca_view_t *v;
-    int had_drawable;
     unsigned f = (unsigned)(unsigned long)ifmt;
     /*
      * ALWAYS ask CoreAnimation for a 32-bit surface, even when the app asked
@@ -1215,45 +1233,15 @@ static int GLESBindView(void *gc, void *drawable, void *ifmt, void *flags)
     w(" internalformat="); wx(f); w("\n");
 
     iosurface_init();
-    if (!drawable) {
-        return 0;
-    }
-
-    /*
-     * DO NOT install this drawable as the active one until CA has accepted it.
-     *
-     * This assignment used to happen here, before the bind, and the failure
-     * path below zeroed that single global -- so a bind CA REFUSED destroyed
-     * the pointer to the drawable that was working. Measured on Cube Runner:
-     * the first view binds, presents and composites happily for 24 seconds;
-     * the moment a game starts the app binds a SECOND view, CA returns 0 for
-     * it, and from that instant there was no drawable at all, so GLESPresentView stopped
-     * calling CA's present callback entirely. The app carries on rendering at
-     * a full 60 fps and the pixels keep landing in CA's surfaces -- nothing
-     * anywhere reports an error -- but CA is never told a frame is ready, so
-     * the panel keeps showing whatever it last composited. That is the frozen
-     * GL world behind the menus, and it is why the frame counter stays honest
-     * while the screen is a photograph.
-     *
-     * A refused bind now costs the caller its own view and nothing else.
-     */
-    v = ca_view_for_gc(gc, 1);
+    v = ca_view_for_gc(gc, drawable != 0);
+    if (v) ca_detach_view(v);
+    /* A NULL drawable releases storage, as in the original engine. */
+    if (!drawable) return 1;
     if (!v) {
         w("[mbxshim] GLESBindView: no free view slot\n");
         return 0;
     }
-    /*
-     * Is this GC already holding a working drawable?
-     *
-     * ca_view_for_gc returns the EXISTING slot when one GC binds twice, which
-     * this app does: it binds successfully, and later binds again for a
-     * drawable CA refuses. Freeing the slot on that failure threw away the
-     * working view -- the same "a failure clears state the caller does not own"
-     * bug as the global ca_drawable, reintroduced one layer down and costing
-     * 4164 of 5220 presents, which fell through to the invisible panel blit.
-     * A failed re-bind must leave a GC exactly as it found it.
-     */
-    had_drawable = (v->drawable != 0);
+    v->gc = gc;
     v->block[0] = v->block;      /* handed back to us as createBuffer's arg0 */
     v->block[1] = (void *)ca_create_buffer;
     v->block[2] = (void *)ca_destroy_buffer;
@@ -1267,12 +1255,8 @@ static int GLESBindView(void *gc, void *drawable, void *ifmt, void *flags)
     w("[mbxshim]   drawable->bind(fourcc="); wx(fourcc); w(") -> "); wd((unsigned)r);
     w("\n");
     if (!r) {
-        /* Leave every other view alone -- and leave THIS one alone too if it
-         * already had a drawable. Only release a slot this call created, so a
-         * GC that never bound does not hold one forever. */
-        if (!had_drawable) {
-            v->gc = 0;
-        }
+        ca_view_t empty = {0};
+        *v = empty;
         return 0;
     }
     v->drawable = drawable;
@@ -1282,14 +1266,15 @@ static int GLESBindView(void *gc, void *drawable, void *ifmt, void *flags)
      * surfaces, and until it happens there is nowhere to render. */
     v->need_buffer = 1;
     if (!ca_next_buffer(v)) {
-        /* The one case where the unbind callback is correct -- see the
-         * contract above; the stock engine takes exactly this path. */
-        if (vt[2]) {
-            ((ca_unbind_fn)vt[2])(drawable);
-        }
-        v->drawable = 0;
-        v->gc = 0;
+        ca_detach_view(v);
         w("[mbxshim]   bind failed: no buffer from the drawable\n");
+        return 0;
+    }
+    /* Storage follows the accepted CA layer, not the physical panel. Tell the
+     * host before the app queries its renderbuffer size or draws into it.
+     * Older hosts ignore this new operation and retain their legacy size. */
+    if (qc(GLES_OP_DRAWABLE_STORAGE, gc, 2, A(v->width, v->height)) < 0) {
+        ca_detach_view(v);
         return 0;
     }
     return 1;

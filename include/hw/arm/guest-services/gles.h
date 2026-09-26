@@ -314,6 +314,9 @@ typedef struct __attribute__((packed)) {
 #define GLES_OP_DELETE_SHAREGROUP       (GLES_OP_BASE + 5)
 #define GLES_OP_NEW_CONTEXT             (GLES_OP_BASE + 6)
 #define GLES_OP_DELETE_CONTEXT          (GLES_OP_BASE + 7)
+/* Accepted CA drawable width and height, before GL size queries/draws.
+ * Old shims retain the panel-sized default. The request ABI is unchanged. */
+#define GLES_OP_DRAWABLE_STORAGE        (GLES_OP_BASE + 8)
 
 /* Surface pixel formats, as IOSurfaceGetPixelFormat reports them (FourCC). */
 #define GLES_SURFACE_BGRA32             0x42475241  /* 'BGRA' */
