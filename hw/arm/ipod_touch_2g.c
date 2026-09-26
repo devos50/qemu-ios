@@ -376,13 +376,19 @@ static void ipod_touch_machine_init(MachineState *machine)
     set_spi_base(0);
     dev = sysbus_create_simple("ipodtouch.spi", SPI0_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI0_IRQ));
     IPodTouchSPIState *spi0_state = IPOD_TOUCH_SPI(dev);
-    spi0_state->nor->nor_path = nms->nor_path;
     nms->spi0_state = spi0_state;
 
     set_spi_base(1);
     dev = sysbus_create_simple("ipodtouch.spi", SPI1_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI1_IRQ));
     IPodTouchSPIState *spi1_state = IPOD_TOUCH_SPI(dev);
     nms->spi1_state = spi1_state;
+
+    // both SPI buses are connected to the same NOR, selected through GPIOs
+    IPodTouchNORImage *nor_image = ipod_touch_nor_image_load(nms->nor_path);
+    spi0_state->nor->image = nor_image;
+    spi1_state->nor->image = nor_image;
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI0), qdev_get_gpio_in_named(DEVICE(spi0_state->nor), SSI_GPIO_CS, 0));
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI1), qdev_get_gpio_in_named(DEVICE(spi1_state->nor), SSI_GPIO_CS, 0));
 
     set_spi_base(2);
     sysbus_create_simple("ipodtouch.spi", SPI2_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI2_IRQ));

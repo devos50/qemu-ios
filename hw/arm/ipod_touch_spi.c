@@ -288,14 +288,14 @@ static void ipod_touch_spi_realize(DeviceState *dev, struct Error **errp)
     // create the peripheral
     switch(s->base) {
         case 0:
+        case 1:
         {
+            // the bootrom and iBoot access the NOR through SPI0, the kernel through SPI1
             DeviceState *dev = ssi_create_peripheral(s->spi, TYPE_IPOD_TOUCH_NOR_SPI);
             IPodTouchNORSPIState *nor = IPOD_TOUCH_NOR_SPI(dev);
             s->nor = nor;
             break;
         }
-        case 1:
-            break;
         case 4:
         {
             DeviceState *dev = ssi_create_peripheral(s->spi, TYPE_IPOD_TOUCH_MULTITOUCH);

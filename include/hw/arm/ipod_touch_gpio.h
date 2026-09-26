@@ -25,6 +25,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchGPIOState, IPOD_TOUCH_GPIO)
 #define NUM_GPIO_PADS 0xC
 #define NUM_GPIO_PINS 0x20
 
+// Output lines, indexed by (pad << 3) | pin, driven through the pin configuration register
+#define GPIO_FSEL           0x1E0
+#define NUM_GPIO_OUT_PADS   0x10
+#define GPIO_OUT_INDEX(gpio) ((GPIO2PAD(gpio) << 3) | GPIO2PIN(gpio))
+
+#define GPIO_NOR_CS_SPI0    0x000
+#define GPIO_NOR_CS_SPI1    0x406
+
 #define GPIO2PIN(gpio)       ((gpio) & 7)
 #define GPIO2PAD(gpio)       (((gpio) >> 8) & 0xFF)
 #define GPIOADDR2PAD(addr)   (addr - 0x4) / 0x20
@@ -34,6 +42,7 @@ typedef struct IPodTouchGPIOState
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     uint32_t gpio_state[NUM_GPIO_PADS];
+    qemu_irq outputs[NUM_GPIO_OUT_PADS * 8];
 } IPodTouchGPIOState;
 
 bool gpio_is_on(uint32_t *state, uint32_t gpio);

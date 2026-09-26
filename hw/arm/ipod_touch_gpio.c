@@ -1,4 +1,5 @@
 #include "hw/arm/ipod_touch_gpio.h"
+#include "hw/irq.h"
 
 static void s5l8900_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
 {
@@ -6,6 +7,16 @@ static void s5l8900_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsign
     IPodTouchGPIOState *s = (struct IPodTouchGPIOState *) opaque;
 
     switch(addr) {
+      case GPIO_FSEL: {
+        // bits 16-23: pad, bits 8-10: pin, bits 0-3: function, where 0xE/0xF configure the pin as an output driving 0/1
+        uint32_t pad = (value >> 16) & 0xFF;
+        uint32_t pin = (value >> 8) & 7;
+        uint32_t function = value & 0xF;
+        if (pad < NUM_GPIO_OUT_PADS && (function == 0xE || function == 0xF)) {
+            qemu_set_irq(s->outputs[(pad << 3) | pin], function & 1);
+        }
+        break;
+      }
       default:
         break;
     }
@@ -61,6 +72,7 @@ static void s5l8900_gpio_init(Object *obj)
     IPodTouchGPIOState *s = IPOD_TOUCH_GPIO(dev);
 
     memory_region_init_io(&s->iomem, obj, &gpio_ops, s, "gpio", 0x1000);
+    qdev_init_gpio_out(dev, s->outputs, ARRAY_SIZE(s->outputs));
 }
 
 static void s5l8900_gpio_class_init(ObjectClass *klass, void *data)
