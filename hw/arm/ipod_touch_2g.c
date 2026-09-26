@@ -441,7 +441,9 @@ static void ipod_touch_machine_init(MachineState *machine)
     I2CSlave * pmu = i2c_slave_create_simple(i2c_state->bus, "pcf50633", 0x73);
 
     // init the accelerometer
-    I2CSlave *accelerometer = i2c_slave_create_simple(i2c_state->bus, "lis302dl", 0x1D);
+    I2CSlave *accelerometer = i2c_slave_new("lis302dl", 0x1D);
+    object_property_add_child(OBJECT(machine), "accelerometer", OBJECT(accelerometer));
+    i2c_slave_realize_and_unref(accelerometer, i2c_state->bus, &error_fatal);
 
     // init the audio codec (disabled because unused)
     // I2CSlave *audio_codec = i2c_slave_create_simple(i2c_state->bus, "cs42l58", 0x4A);
