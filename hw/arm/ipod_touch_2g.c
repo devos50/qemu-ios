@@ -94,6 +94,9 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
     allocate_ram(sysmem, "swi", SWI_MEM_BASE, 0x1000);
     allocate_ram(sysmem, "h264", H264_MEM_BASE, 0x4000);
 
+    // AppleMPVDDriver (video decoder) pokes these registers when it powers down
+    create_unimplemented_device("mpvd", MPVD_MEM_BASE, 0x70000);
+
     // load the bootrom (vrom)
     uint8_t *file_data = NULL;
     gsize fsize;
