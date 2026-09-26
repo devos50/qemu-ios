@@ -94,8 +94,35 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
     allocate_ram(sysmem, "swi", SWI_MEM_BASE, 0x1000);
     allocate_ram(sysmem, "h264", H264_MEM_BASE, 0x4000);
 
-    // AppleMPVDDriver (video decoder) pokes these registers when it powers down
-    create_unimplemented_device("mpvd", MPVD_MEM_BASE, 0x70000);
+    /*
+     * Back every register range from the device tree ("reg" of the arm-io
+     * children) so a stray driver access is logged with -d unimp instead of
+     * raising an external abort. These sit below the real models, so they only
+     * catch devices we don't model and the parts of a page a model doesn't cover.
+     */
+    static const struct { const char *name; hwaddr base; uint64_t size; } unimp_regions[] = {
+        { "sha1-page",     SHA1_MEM_BASE,     0x1000 },
+        { "usb-otg-page",  USBOTG_MEM_BASE,   0x10000 },
+        { "amc",           AMC_MEM_BASE,      0x3000 },
+        { "fmss-page",     FMSS_MEM_BASE,     0x1000 },
+        { "aes-page",      AES_MEM_BASE,      0x1000 },
+        { "mpvd",          MPVD_MEM_BASE,     0x70000 },
+        { "prng",          PRNG_MEM_BASE,     0x1000 },
+        { "spi0-page",     SPI0_MEM_BASE,     0x1000 },
+        { "clock0-page",   CLOCK0_MEM_BASE,   0x1000 },
+        { "i2c0-page",     I2C0_MEM_BASE,     0x1000 },
+        { "wdt",           WDT_MEM_BASE,      0x1000 },
+        { "i2c1-page",     I2C1_MEM_BASE,     0x1000 },
+        { "i2s0",          I2S0_MEM_BASE,     0x1000 },
+        { "uart0-page",    UART0_MEM_BASE,    0x1000 },
+        { "spi1-page",     SPI1_MEM_BASE,     0x1000 },
+        { "uart1-page",    UART1_MEM_BASE,    0x1000 },
+        { "clock1-page",   CLOCK1_MEM_BASE,   0x1000 },
+        { "spi4-page",     SPI4_MEM_BASE,     0x1000 },
+    };
+    for (int i = 0; i < ARRAY_SIZE(unimp_regions); i++) {
+        create_unimplemented_device(unimp_regions[i].name, unimp_regions[i].base, unimp_regions[i].size);
+    }
 
     // load the bootrom (vrom)
     uint8_t *file_data = NULL;
