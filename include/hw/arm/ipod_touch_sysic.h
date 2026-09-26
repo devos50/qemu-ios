@@ -25,6 +25,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSYSICState, IPOD_TOUCH_SYSIC)
 #define GPIO_INTTYPE  0xE0
 
 #define GPIO_NUMINTGROUPS 7
+#define GPIO_NUMINTSPERGROUP 32
 
 typedef struct IPodTouchSYSICState {
     SysBusDevice parent_obj;
@@ -37,7 +38,8 @@ typedef struct IPodTouchSYSICState {
     uint32_t gpio_int_level[GPIO_NUMINTGROUPS];
     uint32_t gpio_int_status[GPIO_NUMINTGROUPS];
     uint32_t gpio_int_enabled[GPIO_NUMINTGROUPS];
-    uint32_t gpio_int_type[GPIO_NUMINTGROUPS];
+    uint32_t gpio_int_type[GPIO_NUMINTGROUPS]; // 1 = level-triggered
+    uint32_t gpio_int_line[GPIO_NUMINTGROUPS]; // current level of the interrupt input lines
 } IPodTouchSYSICState;
 
 #endif

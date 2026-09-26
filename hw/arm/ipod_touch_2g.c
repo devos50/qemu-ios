@@ -305,6 +305,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->sysic = (IPodTouchSYSICState *) g_malloc0(sizeof(struct IPodTouchSYSICState));
     memory_region_add_subregion(sysmem, SYSIC_MEM_BASE, &sysic_state->iomem);
     busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize(busdev, &error_fatal);
     for(int grp = 0; grp < GPIO_NUMINTGROUPS; grp++) {
         sysbus_connect_irq(busdev, grp, s5l8900_get_irq(nms, S5L8900_GPIO_IRQS[grp]));
     }
