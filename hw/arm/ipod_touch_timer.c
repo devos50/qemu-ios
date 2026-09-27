@@ -84,9 +84,16 @@ static void ipod_touch_timer_update_irq(IPodTouchTimerState *s)
 static void ipod_touch_timer_expired(IPodTouchTimerState *s, int n)
 {
     IPodTouchTimerChannel *ch = &s->channels[n];
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
+    // start the next period where this one ended, unless the timer is a whole
+    // period behind: catching up one period per callback would then starve
+    // the main loop, so drop the missed periods instead
     ch->start_ns = ipod_touch_timer_expiry_ns(ch);
     ch->base_count = 0;
+    if (ipod_touch_timer_expiry_ns(ch) <= now) {
+        ch->start_ns = now;
+    }
     ipod_touch_timer_schedule(ch);
 
     if (n >= 4) {
