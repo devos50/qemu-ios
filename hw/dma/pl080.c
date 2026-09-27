@@ -185,6 +185,9 @@ again:
             ch->ctrl = (ch->ctrl & 0xfffff000) | size;
             if (size == 0) {
                 /* Transfer complete.  */
+                if (ch->ctrl & PL080_CCTRL_I) {
+                    s->tc_int |= 1 << c;
+                }
                 if (ch->lli) {
                     ch->src = address_space_ldl_le(&s->downstream_as,
                                                    ch->lli,
@@ -204,10 +207,6 @@ again:
                                                    NULL);
                 } else {
                     ch->conf &= ~PL080_CCONF_E;
-                }
-                if (ch->ctrl & PL080_CCTRL_I) {
-                    //printf("Setting interrupt status of channel %d\n", c);
-                    s->tc_int |= 1 << c;
                 }
             }
             goto again;
