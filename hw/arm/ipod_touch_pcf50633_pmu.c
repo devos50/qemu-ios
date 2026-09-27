@@ -1,42 +1,24 @@
 #include "hw/arm/ipod_touch_pcf50633_pmu.h"
 #include "hw/arm/ipod_touch_lcd.h"
+#include "trace.h"
 
+// The first byte of a write sets the register pointer, further bytes write to
+// the register it points at. Reads start at the register pointer. Both
+// advance the pointer.
 static int pcf50633_event(I2CSlave *i2c, enum i2c_event event)
 {
     Pcf50633State *s = PCF50633(i2c);
-    // printf("%s Event %d\n", __func__, s->cmd);
+    trace_ipod_touch_pmu_event(event, s->cmd);
 
     if (event == I2C_START_SEND)
-    {
-        // printf("%s start send %d\n", __func__, s->cmd);
-    }
-    else if (event == I2C_FINISH)
-    {
-	s->ready = 1;
-	// printf("%s end send %d\n", __func__, s->cmd);
-    }
+        s->pointer_set = false;
 
     return 0;
-}
-
-static int int_to_bcd(int value) {
-    int shift = 0;
-    int res = 0;
-    while (value > 0) {
-      res |= (value % 10) << (shift++ << 2);
-      value /= 10;
-   }
-   return res;
 }
 
 static uint8_t pcf50633_recv(I2CSlave *i2c)
 {
     Pcf50633State *s = PCF50633(i2c);
-    //printf("Reading PMU register %d\n", s->cmd);
-
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-
     int res = 0;
 
     switch(s->cmd) {
@@ -46,26 +28,14 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
         case PMU_ADCC1:
             res = 3; // battery charge voltage
             break;
-        case PMU_RTCSC:  // seconds
-            res = int_to_bcd(tm.tm_sec);
+        case PMU_RTC_COUNT ... PMU_RTC_COUNT + 3:
+            // The kernel reads the counter as one 4-byte block.
+            if (s->cmd == PMU_RTC_COUNT)
+                s->rtc_count = time(NULL);
+            res = (s->rtc_count >> (8 * (s->cmd - PMU_RTC_COUNT))) & 0xff;
             break;
-        case PMU_RTCMN:  // minutes
-            res = int_to_bcd(tm.tm_min);
-            break;
-        case PMU_RTCHR:  // hours
-            res = int_to_bcd(tm.tm_hour);
-            break;
-        case PMU_RTCDT:  // days
-            res = int_to_bcd(tm.tm_mday);
-            break;
-        case PMU_RTCMT:  // month
-            res = int_to_bcd(tm.tm_mon + 1);
-            break;
-        case PMU_RTCYR:  // year
-            res = int_to_bcd(tm.tm_year - 100); // the year counts from 1900
-            break;
-        case 0x67:
-            res = 1; // whether we should enable debug UARTS
+        case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
+            res = s->rtc_offset[s->cmd - PMU_RTC_OFFSET];
             break;
         case 0x69:
             res = 0; // boot count error/panic
@@ -77,6 +47,7 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
             res = 0;
     }
 
+    trace_ipod_touch_pmu_recv(s->cmd, res);
     s->cmd += 1;
     return res;
 }
@@ -84,22 +55,25 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
 static int pcf50633_send(I2CSlave *i2c, uint8_t data)
 {
     Pcf50633State *s = PCF50633(i2c);
-    if (s->ready)
-    {
-        s->curreg = data;
-	s->ready = 0;
-    }
-    else
+    trace_ipod_touch_pmu_send(data, s->cmd);
+
+    if (!s->pointer_set)
     {
         s->cmd = data;
+        s->pointer_set = true;
+        return 0;
     }
 
-    //printf("Writing PMU register cmd %d reg %d\n", s->cmd, s->curreg);
-    switch(s->curreg) {
+    switch(s->cmd) {
         case PMU_DSBL1:
-            lcd_changebrightness(s->cmd);
-	    break;
+            lcd_changebrightness(data);
+            break;
+        case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
+            s->rtc_offset[s->cmd - PMU_RTC_OFFSET] = data;
+            break;
     }
+
+    s->cmd += 1;
     return 0;
 }
 

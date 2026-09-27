@@ -62,3 +62,8 @@ ipod_touch_usb_write(uint64_t addr, uint64_t val) "0x%03" PRIx64 " <- 0x%08" PRI
 ipod_touch_usb_link_request(uint8_t type, uint8_t ep, uint32_t tag, uint32_t length) "type %u ep 0x%02x tag %u length %u"
 ipod_touch_usb_link_reply(uint8_t type, uint8_t ep, uint32_t tag, uint8_t status, uint32_t length) "type %u ep 0x%02x tag %u status %u length %u"
 ipod_touch_usb_ep_enable(const char *dir, uint8_t ep, uint32_t tx_size, uint64_t dma) "%s ep %u tsiz 0x%08x dma 0x%08" PRIx64
+
+# ipod_touch_pcf50633_pmu.c
+ipod_touch_pmu_event(int event, uint32_t reg) "event %d reg 0x%02x"
+ipod_touch_pmu_recv(uint32_t reg, int val) "reg 0x%02x -> 0x%02x"
+ipod_touch_pmu_send(uint8_t data, uint32_t reg) "0x%02x (reg 0x%02x)"

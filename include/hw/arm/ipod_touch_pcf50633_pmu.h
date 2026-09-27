@@ -16,20 +16,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(Pcf50633State, PCF50633)
 #define PMU_MBCS1 0x4B
 #define PMU_ADCC1 0x57
 
-// RTC registers
-#define PMU_RTCSC 0x59
-#define PMU_RTCMN 0x5A
-#define PMU_RTCHR 0x5B
-#define PMU_RTCWD 0x5C
-#define PMU_RTCDT 0x5D
-#define PMU_RTCMT 0x5E
-#define PMU_RTCYR 0x5F
+// RTC of the D1759 the kernel drives: the time is a little endian seconds
+// counter plus an offset that the kernel keeps in scratch registers.
+#define PMU_RTC_COUNT 0x5C
+#define PMU_RTC_OFFSET 0x64
 
 typedef struct Pcf50633State {
 	I2CSlave i2c;
-	uint32_t cmd;
-	uint32_t ready;
-	uint32_t curreg;
+	uint32_t cmd; // register pointer
+	bool pointer_set;
+	uint32_t rtc_count;
+	uint8_t rtc_offset[4];
 } Pcf50633State;
 
 #endif
