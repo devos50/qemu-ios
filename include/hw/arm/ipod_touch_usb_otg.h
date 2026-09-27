@@ -4,7 +4,8 @@
 #include "hw/irq.h"
 #include "hw/usb.h"
 #include "hw/sysbus.h"
-#include "chardev/char-fe.h"
+#include "hw/arm/ipod_touch_usb_link.h"
+#include "qemu/timer.h"
 
 #define DEVICE_NAME		"usb_synopsys"
 
@@ -150,7 +151,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(synopsys_usb_state, S5L8900USBOTG)
 #define DIEPTSIZ_MC_SHIFT 29
 #define DEPTSIZ_PKTCNT_MASK 0x3FF
 #define DEPTSIZ_PKTCNT_SHIFT 19
-#define DEPTSIZ_XFERSIZ_MASK 0x1FFFF
+#define DEPTSIZ_XFERSIZ_MASK 0x7FFFF
 
 // ENDPOINT_DIRECTIONS register has two bits per endpoint. 0, 1 for endpoint 0. 1, 2 for end point 1, etc.
 #define USB_EP_DIRECTION(ep) (USBDirection)(2-((GET_REG(USB + GHWCFG1) >> ((ep) * 2)) & 0x3))
@@ -217,33 +218,15 @@ typedef struct _synopsys_usb_ep_state
 
 } synopsys_usb_ep_state;
 
-// Every message on the USB link starts with this header (little endian).
-// The host sends requests; the device answers each one, in order, with a
-// header that echoes type and ep.
 enum
 {
-	USB_LINK_SETUP = 1,
-	USB_LINK_OUT = 2,
-	USB_LINK_IN = 3,
-	USB_LINK_RESET = 4,
+	USB_LINK_RESET_IDLE,
+	USB_LINK_RESET_SIGNALLED,
+	USB_LINK_RESET_ENUMERATED,
+	USB_LINK_RESET_RECOVERY,
 };
 
-enum
-{
-	USB_LINK_OK = 0,
-	USB_LINK_STALL = 1,
-};
-
-#define USB_LINK_MAX_LENGTH (1 << 20)
-
-typedef struct QEMU_PACKED usb_link_header
-{
-	uint8_t type;
-	uint8_t ep;
-	uint8_t status;
-	uint8_t reserved;
-	uint32_t length;
-} usb_link_header;
+#define USB_LINK_RESET_RECOVERY_MS 50
 
 typedef struct synopsys_usb_state
 {
@@ -251,14 +234,10 @@ typedef struct synopsys_usb_state
 	MemoryRegion iomem;
 	qemu_irq irq;
 
-	// Host side of the USB link, see ipod_touch_usb_otg.c for the protocol
-	CharBackend chr;
-	usb_link_header link_hdr;
-	uint32_t link_hdr_done;
-	uint8_t *link_data;
-	uint32_t link_data_done;
-	uint32_t link_xfer_done;
-	bool link_request_ready;
+	// Link to the USB host, see ipod_touch_usb_link.c
+	USBLink link;
+	uint32_t link_reset_phase;
+	QEMUTimer *link_reset_timer;
 
 	uint32_t pcgcctl;
 
