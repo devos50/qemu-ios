@@ -21,6 +21,12 @@
 #include "qapi/error.h"
 #include "hw/hw.h"
 #include "hw/arm/ipod_touch_usb_otg.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "exec/cpu-common.h"
+#include "qemu/error-report.h"
+#include "qemu/log.h"
+#include "trace.h"
 
 static inline size_t synopsys_usb_tx_fifo_start(synopsys_usb_state *_state, uint32_t _fifo)
 {
@@ -89,13 +95,266 @@ static void synopsys_usb_update_ep(synopsys_usb_state *_state, synopsys_usb_ep_s
 	}
 }
 
+/*
+ * USB link to the host.
+ *
+ * The host (e.g. a Python script) talks to this controller over a chardev.
+ * It sends one request at a time as a usb_link_header, followed by the payload
+ * for SETUP and OUT requests. SETUP carries the 8-byte setup packet, OUT the
+ * data of a whole transfer, IN the maximum number of bytes the host accepts
+ * and RESET signals a bus reset. Each request is answered with a header that
+ * echoes type and ep, carries a status and, for IN, is followed by the data.
+ *
+ * A request waits until the guest arms the endpoint, and the controller stops
+ * reading from the chardev until the request is answered. The host can
+ * therefore send requests back to back without any delays.
+ */
+static uint32_t synopsys_usb_ep_mps(synopsys_usb_ep_state *_eps, uint8_t _ep)
+{
+	if(_ep == 0)
+		return 64 >> (_eps->control & 3);
+
+	uint32_t mps = _eps->control & USB_EPCON_MPS_MASK;
+	return mps ? mps : 64;
+}
+
+static void synopsys_usb_ep_dma(synopsys_usb_state *_state, synopsys_usb_ep_state *_eps,
+		uint8_t *_buf, uint32_t _len, bool _is_write)
+{
+	if(!(_state->gahbcfg & GAHBCFG_DMAEN))
+	{
+		qemu_log_mask(LOG_UNIMP, "usb_synopsys: transfers without DMA are not supported\n");
+		return;
+	}
+
+	cpu_physical_memory_rw(_eps->dma_address, _buf, _len, _is_write);
+	_eps->dma_address += _len;
+}
+
+static void synopsys_usb_link_reset(synopsys_usb_state *_state)
+{
+	g_free(_state->link_data);
+	_state->link_data = NULL;
+	_state->link_hdr_done = 0;
+	_state->link_data_done = 0;
+	_state->link_xfer_done = 0;
+	_state->link_request_ready = false;
+}
+
+static void synopsys_usb_link_reply(synopsys_usb_state *_state, uint8_t _status, uint32_t _length, bool _with_data)
+{
+	usb_link_header hdr = _state->link_hdr;
+
+	trace_ipod_touch_usb_link_reply(hdr.type, hdr.ep, _status, _length);
+
+	hdr.status = _status;
+	hdr.length = cpu_to_le32(_length);
+	qemu_chr_fe_write_all(&_state->chr, (uint8_t *)&hdr, sizeof(hdr));
+	if(_with_data && _length)
+		qemu_chr_fe_write_all(&_state->chr, _state->link_data, _length);
+
+	synopsys_usb_link_reset(_state);
+	qemu_chr_fe_accept_input(&_state->chr);
+}
+
+static void synopsys_usb_ep_update_tsiz(synopsys_usb_ep_state *_eps, uint32_t _xfersize, uint32_t _pktcnt)
+{
+	_eps->tx_size = (_eps->tx_size & ~(DEPTSIZ_XFERSIZ_MASK | (DEPTSIZ_PKTCNT_MASK << DEPTSIZ_PKTCNT_SHIFT)))
+		| (_xfersize & DEPTSIZ_XFERSIZ_MASK) | ((_pktcnt & DEPTSIZ_PKTCNT_MASK) << DEPTSIZ_PKTCNT_SHIFT);
+}
+
+// Moves packets between the pending request and an armed endpoint, like a
+// host controller would. Returns true when the host side transfer is done.
+static bool synopsys_usb_link_transfer(synopsys_usb_state *_state, synopsys_usb_ep_state *_eps,
+		uint8_t _ep, bool _is_in)
+{
+	uint32_t length = _state->link_hdr.length;
+	uint32_t mps = synopsys_usb_ep_mps(_eps, _ep);
+	uint32_t xfersize = _eps->tx_size & DEPTSIZ_XFERSIZ_MASK;
+	uint32_t pktcnt = (_eps->tx_size >> DEPTSIZ_PKTCNT_SHIFT) & DEPTSIZ_PKTCNT_MASK;
+	bool pktcnt_limited = pktcnt != 0;
+	bool host_done, guest_done;
+
+	do
+	{
+		uint32_t pkt = MIN(MIN(mps, xfersize), length - _state->link_xfer_done);
+		synopsys_usb_ep_dma(_state, _eps, _state->link_data + _state->link_xfer_done, pkt, !_is_in);
+
+		_state->link_xfer_done += pkt;
+		xfersize -= pkt;
+		if(pktcnt_limited)
+			pktcnt--;
+
+		bool short_pkt = pkt < mps;
+		guest_done = short_pkt || xfersize == 0 || (pktcnt_limited && pktcnt == 0);
+		host_done = _state->link_xfer_done == length || (_is_in && short_pkt);
+	} while(!guest_done && !host_done);
+
+	synopsys_usb_ep_update_tsiz(_eps, xfersize, pktcnt);
+
+	if(guest_done)
+	{
+		_eps->control &= ~USB_EPCON_ENABLE;
+		_eps->interrupt_status |= USB_EPINT_XferCompl;
+		synopsys_usb_update_irq(_state);
+	}
+
+	return host_done;
+}
+
+static void synopsys_usb_link_process(synopsys_usb_state *_state)
+{
+	if(!_state->link_request_ready)
+		return;
+
+	usb_link_header *hdr = &_state->link_hdr;
+	uint8_t ep = hdr->ep & 0x7f;
+	synopsys_usb_ep_state *eps;
+
+	switch(hdr->type)
+	{
+	case USB_LINK_RESET:
+		_state->gintsts |= GINTMSK_RESET | GINTMSK_ENUMDONE;
+		synopsys_usb_update_irq(_state);
+		synopsys_usb_link_reply(_state, USB_LINK_OK, 0, false);
+		return;
+
+	case USB_LINK_SETUP:
+		eps = &_state->out_eps[ep];
+		if(!(eps->control & USB_EPCON_ENABLE))
+			return;
+
+		// A SETUP packet clears a stalled control endpoint.
+		eps->control &= ~(USB_EPCON_ENABLE | USB_EPCON_STALL);
+		_state->in_eps[ep].control &= ~USB_EPCON_STALL;
+
+		synopsys_usb_ep_dma(_state, eps, _state->link_data, 8, true);
+		eps->interrupt_status |= USB_EPINT_SetUp;
+		synopsys_usb_update_irq(_state);
+		synopsys_usb_link_reply(_state, USB_LINK_OK, 8, false);
+		return;
+
+	case USB_LINK_OUT:
+	case USB_LINK_IN:
+	{
+		bool is_in = hdr->type == USB_LINK_IN;
+		eps = is_in ? &_state->in_eps[ep] : &_state->out_eps[ep];
+
+		if(eps->control & USB_EPCON_STALL)
+		{
+			synopsys_usb_link_reply(_state, USB_LINK_STALL, 0, false);
+			return;
+		}
+
+		if(!(eps->control & USB_EPCON_ENABLE))
+			return;
+
+		if(synopsys_usb_link_transfer(_state, eps, ep, is_in))
+			synopsys_usb_link_reply(_state, USB_LINK_OK, _state->link_xfer_done, is_in);
+		return;
+	}
+	}
+}
+
+static int synopsys_usb_link_can_read(void *_opaque)
+{
+	synopsys_usb_state *state = _opaque;
+
+	if(state->link_request_ready)
+		return 0;
+
+	if(state->link_hdr_done < sizeof(state->link_hdr))
+		return sizeof(state->link_hdr) - state->link_hdr_done;
+
+	return state->link_hdr.length - state->link_data_done;
+}
+
+static bool synopsys_usb_link_header_valid(usb_link_header *_hdr)
+{
+	if((_hdr->ep & 0x7f) >= USB_NUM_ENDPOINTS || _hdr->length > USB_LINK_MAX_LENGTH)
+		return false;
+
+	switch(_hdr->type)
+	{
+	case USB_LINK_SETUP:
+		return _hdr->length == 8;
+	case USB_LINK_RESET:
+		return _hdr->length == 0;
+	case USB_LINK_OUT:
+	case USB_LINK_IN:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void synopsys_usb_link_read(void *_opaque, const uint8_t *_buf, int _size)
+{
+	synopsys_usb_state *state = _opaque;
+
+	while(_size > 0)
+	{
+		if(state->link_hdr_done < sizeof(state->link_hdr))
+		{
+			uint32_t amt = MIN(_size, sizeof(state->link_hdr) - state->link_hdr_done);
+			memcpy((uint8_t *)&state->link_hdr + state->link_hdr_done, _buf, amt);
+			state->link_hdr_done += amt;
+			_buf += amt;
+			_size -= amt;
+
+			if(state->link_hdr_done < sizeof(state->link_hdr))
+				return;
+
+			state->link_hdr.length = le32_to_cpu(state->link_hdr.length);
+			if(!synopsys_usb_link_header_valid(&state->link_hdr))
+			{
+				error_report("usb_synopsys: invalid USB link request (type %u, ep %u, length %u), disconnecting",
+						state->link_hdr.type, state->link_hdr.ep, state->link_hdr.length);
+				synopsys_usb_link_reset(state);
+				qemu_chr_fe_disconnect(&state->chr);
+				return;
+			}
+
+			state->link_data = g_malloc(MAX(state->link_hdr.length, 1));
+		}
+		else
+		{
+			uint32_t amt = MIN(_size, state->link_hdr.length - state->link_data_done);
+			memcpy(state->link_data + state->link_data_done, _buf, amt);
+			state->link_data_done += amt;
+			_buf += amt;
+			_size -= amt;
+		}
+
+		// IN and RESET requests carry no payload.
+		bool has_payload = state->link_hdr.type == USB_LINK_SETUP || state->link_hdr.type == USB_LINK_OUT;
+		if(!has_payload || state->link_data_done == state->link_hdr.length)
+		{
+			trace_ipod_touch_usb_link_request(state->link_hdr.type, state->link_hdr.ep, state->link_hdr.length);
+			state->link_request_ready = true;
+			synopsys_usb_link_process(state);
+			return;
+		}
+	}
+}
+
+static void synopsys_usb_link_event(void *_opaque, QEMUChrEvent _event)
+{
+	synopsys_usb_state *state = _opaque;
+
+	if(_event == CHR_EVENT_CLOSED)
+		synopsys_usb_link_reset(state);
+}
+
 static void synopsys_usb_update_in_ep(synopsys_usb_state *_state, uint8_t _ep)
 {
 	synopsys_usb_ep_state *eps = &_state->in_eps[_ep];
 	synopsys_usb_update_ep(_state, eps);
 
 	if(eps->control & USB_EPCON_ENABLE)
-		;//printf("USB: IN transfer queued on %d.\n", _ep);
+		trace_ipod_touch_usb_ep_enable("in", _ep, eps->tx_size, eps->dma_address);
+
+	synopsys_usb_link_process(_state);
 }
 
 static void synopsys_usb_update_out_ep(synopsys_usb_state *_state, uint8_t _ep)
@@ -104,7 +363,9 @@ static void synopsys_usb_update_out_ep(synopsys_usb_state *_state, uint8_t _ep)
 	synopsys_usb_update_ep(_state, eps);
 
 	if(eps->control & USB_EPCON_ENABLE)
-		;//printf("USB: OUT transfer queued on %d.\n", _ep);
+		trace_ipod_touch_usb_ep_enable("out", _ep, eps->tx_size, eps->dma_address);
+
+	synopsys_usb_link_process(_state);
 }
 
 static uint32_t synopsys_usb_in_ep_read(synopsys_usb_state *_state, uint8_t _ep, hwaddr _addr)
@@ -376,26 +637,7 @@ static void synopsys_usb_write(void *opaque, hwaddr _addr, uint64_t _val, unsign
 	case GRSTCTL:
 		if(_val & GRSTCTL_CORESOFTRESET)
 		{
-			state->grstctl = GRSTCTL_CORESOFTRESET;
-
-			// Do reset stuff
-			// if(state->server_host)
-			// {
-			// 	tcp_usb_cleanup(&state->tcp_state);
-			// 	tcp_usb_init(&state->tcp_state, synopsys_usb_tcp_callback, NULL, state);
-
-			// 	printf("Connecting to USB server at %s:%d...\n",
-			// 			state->server_host, state->server_port);
-
-			// 	int ret = tcp_usb_connect(&state->tcp_state, state->server_host, state->server_port);
-			// 	if(ret < 0)
-			// 		hw_error("Failed to connect to USB server (%d).\n", ret);
-
-			// 	printf("Connected to USB server.\n");
-			// }
-
-			state->grstctl &= ~GRSTCTL_CORESOFTRESET;
-			state->grstctl |= GRSTCTL_AHBIDLE;
+			state->grstctl = GRSTCTL_AHBIDLE;
 			state->gintsts |= GINTMSK_RESET;
 			synopsys_usb_update_irq(state);
 		}
@@ -510,13 +752,8 @@ static void s5l8900_usb_otg_reset(DeviceState *d)
 {
 	synopsys_usb_state *state = S5L8900USBOTG(d);
 
-	printf("USB: cfg = 0x%08x, 0x%08x, 0x%08x, 0x%08x.\n",
-			state->ghwcfg1,
-			state->ghwcfg2,
-			state->ghwcfg3,
-			state->ghwcfg4);
-
 	state->pcgcctl = 3;
+	state->grstctl = GRSTCTL_AHBIDLE;
 
 	state->gahbcfg = 0;
 	state->gusbcfg = 0;
@@ -563,12 +800,26 @@ static void s5l8900_usb_otg_reset(DeviceState *d)
 		out->tx_size = 0;
 	}
 
+	synopsys_usb_link_reset(state);
+
 	synopsys_usb_update_irq(state);
 }
 
+static void s5l8900_usb_otg_realize(DeviceState *dev, Error **errp)
+{
+	synopsys_usb_state *s = S5L8900USBOTG(dev);
+
+	qemu_chr_fe_set_handlers(&s->chr, synopsys_usb_link_can_read, synopsys_usb_link_read,
+			synopsys_usb_link_event, NULL, s, NULL, true);
+}
+
+static Property s5l8900_usb_otg_properties[] = {
+	DEFINE_PROP_CHR("chardev", synopsys_usb_state, chr),
+	DEFINE_PROP_END_OF_LIST(),
+};
+
 static void s5l8900_usb_otg_init1(Object *obj)
 {
-	DeviceState *dev = DEVICE(obj);
     synopsys_usb_state *s = S5L8900USBOTG(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
@@ -598,6 +849,8 @@ static void s5l8900_usb_otg_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->reset = s5l8900_usb_otg_reset;
+    dc->realize = s5l8900_usb_otg_realize;
+    device_class_set_props(dc, s5l8900_usb_otg_properties);
 }
 
 static const TypeInfo s5l8900_usb_otg_info = {

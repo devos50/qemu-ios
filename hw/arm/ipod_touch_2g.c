@@ -13,6 +13,8 @@
 #include "hw/arm/ipod_touch_2g.h"
 #include "target/arm/cpregs.h"
 #include "qemu/error-report.h"
+#include "chardev/char.h"
+#include "hw/qdev-properties-system.h"
 
 #define VMSTATE_IT2G_CPREG(name) \
         VMSTATE_UINT64(IT2G_CPREG_VAR_NAME(name), IPodTouchMachineState)
@@ -184,6 +186,31 @@ static void ipod_touch_set_nand_path(Object *obj, const char *value, Error **err
     g_strlcpy(nms->nand_path, value, sizeof(nms->nand_path));
 }
 
+static char *ipod_touch_get_usb_chardev(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return g_strdup(nms->usb_chardev);
+}
+
+static void ipod_touch_set_usb_chardev(Object *obj, const char *value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    g_free(nms->usb_chardev);
+    nms->usb_chardev = g_strdup(value);
+}
+
+static bool ipod_touch_get_force_dfu(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return nms->force_dfu;
+}
+
+static void ipod_touch_set_force_dfu(Object *obj, bool value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    nms->force_dfu = value;
+}
+
 static void ipod_touch_instance_init(Object *obj)
 {
     object_property_add_str(obj, "bootrom", ipod_touch_get_bootrom_path, ipod_touch_set_bootrom_path);
@@ -194,6 +221,12 @@ static void ipod_touch_instance_init(Object *obj)
 
     object_property_add_str(obj, "nand", ipod_touch_get_nand_path, ipod_touch_set_nand_path);
     object_property_set_description(obj, "nand", "Path to the NAND files");
+
+    object_property_add_str(obj, "usb-chardev", ipod_touch_get_usb_chardev, ipod_touch_set_usb_chardev);
+    object_property_set_description(obj, "usb-chardev", "ID of the chardev that carries the USB link to the host");
+
+    object_property_add_bool(obj, "dfu", ipod_touch_get_force_dfu, ipod_touch_set_force_dfu);
+    object_property_set_description(obj, "dfu", "Hold the force-DFU GPIO so the bootrom enters DFU mode");
 }
 
 static inline qemu_irq s5l8900_get_irq(IPodTouchMachineState *s, int n)
@@ -429,7 +462,16 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8720_USB_OTG_IRQ), s5l8720_usb_hwcfg);
     synopsys_usb_state *usb_otg = S5L8900USBOTG(dev);
     nms->usb_otg = usb_otg;
+    if (nms->usb_chardev) {
+        Chardev *usb_chr = qemu_chr_find(nms->usb_chardev);
+        if (!usb_chr) {
+            error_report("USB chardev '%s' not found", nms->usb_chardev);
+            exit(1);
+        }
+        qdev_prop_set_chr(dev, "chardev", usb_chr);
+    }
     memory_region_add_subregion(sysmem, USBOTG_MEM_BASE, &nms->usb_otg->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init two pl080 DMAC0 devices
     dev = qdev_new("pl080");
@@ -503,6 +545,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = qdev_new("ipodtouch.usbphys");
     IPodTouchUSBPhysState *usb_phys_state = IPOD_TOUCH_USB_PHYS(dev);
     nms->usb_phys_state = usb_phys_state;
+    usb_phys_state->cable_connected = nms->usb_chardev != NULL;
     memory_region_add_subregion(sysmem, USBPHYS_MEM_BASE, &usb_phys_state->iomem);
 
     ipod_touch_memory_setup(machine, sysmem, nsas);
@@ -561,6 +604,10 @@ static void ipod_touch_machine_init(MachineState *machine)
     qemu_register_reset(ipod_touch_cpu_reset, nms);
 
     qemu_add_kbd_event_handler(ipod_touch_key_event, spi4_state->mt);
+
+    if (nms->force_dfu) {
+        gpio_set_on(nms->gpio_state->gpio_state, GPIO_FORCE_DFU);
+    }
 }
 
 static void ipod_touch_machine_class_init(ObjectClass *klass, void *data)

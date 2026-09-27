@@ -13,6 +13,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchUSBPhysState, IPOD_TOUCH_USB_PHYS)
 #define REG_ORSTCON 0x8
 #define REG_UNKNOWN1 0x1C
 #define REG_OPHYTUNE 0x20
+#define REG_CABLE    0x28
 
 typedef struct IPodTouchUSBPhysState {
     SysBusDevice busdev;
@@ -23,6 +24,7 @@ typedef struct IPodTouchUSBPhysState {
     uint32_t usb_orstcon;
     uint32_t usb_unknown1;
     uint32_t usb_ophytune;
+    bool cable_connected;
 } IPodTouchUSBPhysState;
 
 #endif
