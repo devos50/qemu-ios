@@ -65,9 +65,12 @@ typedef struct IPodTouchI2SState {
     uint32_t out_fill;
     int16_t frame[2];      // frame being assembled from the TX FIFO
     int32_t gain[2];       // output level per channel set by the codec, 16.16 fixed point (0 mutes)
+    bool host_mute;        // muted on the host side, invisible to the guest
 } IPodTouchI2SState;
 
 void ipod_touch_i2s_set_sample_rate(IPodTouchI2SState *s, uint32_t rate);
+// Toggles muting the host audio output; returns whether it is now muted.
+bool ipod_touch_i2s_toggle_host_mute(IPodTouchI2SState *s);
 // Sets the output level per channel in dB; INT_MIN mutes the channel.
 void ipod_touch_i2s_set_output_gain(IPodTouchI2SState *s, int left_db, int right_db);
 

@@ -50,8 +50,17 @@ void ipod_touch_i2s_set_output_gain(IPodTouchI2SState *s, int left_db, int right
     }
 }
 
+bool ipod_touch_i2s_toggle_host_mute(IPodTouchI2SState *s)
+{
+    s->host_mute = !s->host_mute;
+    return s->host_mute;
+}
+
 static int16_t ipod_touch_i2s_scale(IPodTouchI2SState *s, int channel, int16_t sample)
 {
+    if (s->host_mute) {
+        return 0;
+    }
     int64_t v = ((int64_t)sample * s->gain[channel]) >> 16;
     return MIN(MAX(v, INT16_MIN), INT16_MAX);
 }

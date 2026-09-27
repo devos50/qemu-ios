@@ -297,6 +297,13 @@ static void ipod_touch_key_event(void *opaque, int keycode)
             gpio_set_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP);
         }
     }
+    else if(keycode == KEY_M_DOWN) {
+        // the iPod Touch 2G has no mute switch: mute the host audio output instead
+        IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(qdev_get_machine());
+        bool muted = ipod_touch_i2s_toggle_host_mute(nms->i2s_state);
+        info_report("iPod Touch: host audio %s", muted ? "muted" : "unmuted");
+        return;
+    }
     else return;
     
     s->sysic->gpio_int_status[gpio_group] |= (1 << gpio_selector);
