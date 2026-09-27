@@ -114,7 +114,6 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
         { "spi0-page",     SPI0_MEM_BASE,     0x1000 },
         { "i2c0-page",     I2C0_MEM_BASE,     0x1000 },
         { "i2c1-page",     I2C1_MEM_BASE,     0x1000 },
-        { "i2s0",          I2S0_MEM_BASE,     0x1000 },
         { "uart0-page",    UART0_MEM_BASE,    0x1000 },
         { "spi1-page",     SPI1_MEM_BASE,     0x1000 },
         { "uart1-page",    UART1_MEM_BASE,    0x1000 },
@@ -478,6 +477,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = qdev_new("pl080");
     PL080State *pl080_1 = PL080(dev);
     object_property_set_link(OBJECT(dev), "downstream", OBJECT(sysmem), &error_fatal);
+    qdev_prop_set_uint32(dev, "dreq-mask", (1 << DMAC0_I2S0_TX_DREQ) | (1 << DMAC0_I2S0_RX_DREQ));
     memory_region_add_subregion(sysmem, DMAC0_MEM_BASE, &pl080_1->iomem1);
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize(busdev, &error_fatal);
@@ -491,6 +491,18 @@ static void ipod_touch_machine_init(MachineState *machine)
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_DMAC1_IRQ));
+
+    // init the I2S controller, which feeds the audio codec
+    dev = qdev_new(TYPE_IPOD_TOUCH_I2S);
+    if (machine->audiodev) {
+        qdev_prop_set_string(dev, "audiodev", machine->audiodev);
+    }
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_mmio_map(busdev, 0, I2S0_MEM_BASE);
+    qdev_connect_gpio_out_named(dev, "sync", 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_I2S0_IRQ));
+    qdev_connect_gpio_out_named(dev, "dma-tx", 0, qdev_get_gpio_in_named(DEVICE(pl080_1), "dreq", DMAC0_I2S0_TX_DREQ));
+    qdev_connect_gpio_out_named(dev, "dma-rx", 0, qdev_get_gpio_in_named(DEVICE(pl080_1), "dreq", DMAC0_I2S0_RX_DREQ));
 
     // Init I2C0
     dev = qdev_new("ipodtouch.i2c");
@@ -619,6 +631,7 @@ static void ipod_touch_machine_class_init(ObjectClass *klass, void *data)
     mc->init = ipod_touch_machine_init;
     mc->max_cpus = 1;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm1176");
+    machine_add_audiodev_property(mc);
 }
 
 static const TypeInfo ipod_touch_machine_info = {

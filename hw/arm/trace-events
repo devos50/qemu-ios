@@ -67,3 +67,10 @@ ipod_touch_usb_ep_enable(const char *dir, uint8_t ep, uint32_t tx_size, uint64_t
 ipod_touch_pmu_event(int event, uint32_t reg) "event %d reg 0x%02x"
 ipod_touch_pmu_recv(uint32_t reg, int val) "reg 0x%02x -> 0x%02x"
 ipod_touch_pmu_send(uint8_t data, uint32_t reg) "0x%02x (reg 0x%02x)"
+
+# ipod_touch_i2s.c
+ipod_touch_i2s_read(uint64_t addr, uint64_t val) "0x%02" PRIx64 " -> 0x%08" PRIx64
+ipod_touch_i2s_write(uint64_t addr, uint64_t val) "0x%02" PRIx64 " <- 0x%08" PRIx64
+ipod_touch_i2s_tx_underrun(uint32_t frames, uint32_t missing) "%u frames due, %u samples missing"
+ipod_touch_i2s_out_overrun(void) "host audio output behind, dropping a frame"
+ipod_touch_i2s_tx_stop(uint64_t frames, int64_t ns) "transmitted %" PRIu64 " frames in %" PRId64 " ns"
