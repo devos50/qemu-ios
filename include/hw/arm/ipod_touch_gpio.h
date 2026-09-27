@@ -23,7 +23,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchGPIOState, IPOD_TOUCH_GPIO)
 #define GPIO_LIGHTSENSOR_IRQ    0x25
 #define GPIO_I2S0_IRQ           0x2C // i2s0 frame sync
 
-#define NUM_GPIO_PADS 0xC
+#define NUM_GPIO_PADS 0xD // pads 0-12, read at 0x24 + 0x20 * pad
 #define NUM_GPIO_PINS 0x20
 
 // Output lines, indexed by (pad << 3) | pin, driven through the pin configuration register
