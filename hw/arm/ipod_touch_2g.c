@@ -575,11 +575,11 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     ipod_touch_memory_setup(machine, sysmem, nsas);
 
-    // init the MIPI SDI controller
+    // init the MIPI DSI controller
     dev = qdev_new("ipodtouch.mipidsi");
-    IPodTouchMIPIDSIState *mipi_dsi_state = IPOD_TOUCH_MIPI_DSI(dev);
-    nms->mipi_dsi_state = mipi_dsi_state;
-    memory_region_add_subregion(sysmem, MIPI_DSI_MEM_BASE, &mipi_dsi_state->iomem);
+    nms->mipi_dsi_state = IPOD_TOUCH_MIPI_DSI(dev);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, MIPI_DSI_MEM_BASE);
 
     // init LCD
     dev = qdev_new("ipodtouch.lcd");
