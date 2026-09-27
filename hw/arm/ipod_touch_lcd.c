@@ -154,13 +154,11 @@ static void ipod_touch_lcd_mouse_event(void *opaque, int x, int y, int z, int bu
 {
     // printf("x %d y %d z %d state %d\n", x, y, z, buttons_state);
 
-    // convert x and y to fractional numbers
-    float fx = x / pow(2, 15);
-    float fy = 1 - y / pow(2, 15);
+    // convert x and y to fractional numbers. The multitouch Y axis points up.
+    float fx = (float)x / INPUT_EVENT_ABS_MAX;
+    float fy = 1 - (float)y / INPUT_EVENT_ABS_MAX;
 
     IPodTouchLCDState *lcd = (IPodTouchLCDState *) opaque;
-    lcd->mt->prev_touch_x = lcd->mt->touch_x;
-    lcd->mt->prev_touch_y = lcd->mt->touch_y;
     lcd->mt->touch_x = fx;
     lcd->mt->touch_y = fy;
 
