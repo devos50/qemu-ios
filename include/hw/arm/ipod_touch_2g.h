@@ -30,6 +30,7 @@
 #include "hw/arm/ipod_touch_tvout.h"
 #include "hw/arm/ipod_touch_wdt.h"
 #include "hw/arm/ipod_touch_i2s.h"
+#include "hw/arm/ipod_touch_cs42l58.h"
 
 #define TYPE_IPOD_TOUCH "iPod-Touch"
 
@@ -176,6 +177,7 @@ typedef struct {
 	IPodTouchLCDState *lcd_state;
 	IPodTouchMIPIDSIState *mipi_dsi_state;
 	IPodTouchFMSSState *fmss_state;
+	IPodTouchI2SState *i2s_state;
 	IPodTouchMBXState *mbx_state;
 	IPodTouchScalerCSCState *scaler_csc_state;
 	IPodTouchSDIOState *sdio_state;

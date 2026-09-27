@@ -494,6 +494,7 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     // init the I2S controller, which feeds the audio codec
     dev = qdev_new(TYPE_IPOD_TOUCH_I2S);
+    nms->i2s_state = IPOD_TOUCH_I2S(dev);
     if (machine->audiodev) {
         qdev_prop_set_string(dev, "audiodev", machine->audiodev);
     }
@@ -523,8 +524,10 @@ static void ipod_touch_machine_init(MachineState *machine)
     object_property_add_child(OBJECT(machine), "accelerometer", OBJECT(accelerometer));
     i2c_slave_realize_and_unref(accelerometer, i2c_state->bus, &error_fatal);
 
-    // init the audio codec (disabled because unused)
-    // I2CSlave *audio_codec = i2c_slave_create_simple(i2c_state->bus, "cs42l58", 0x4A);
+    // init the audio codec, which plays what the I2S controller sends
+    I2CSlave *codec = i2c_slave_new(TYPE_CS42L58, 0x4A);
+    object_property_set_link(OBJECT(codec), "i2s", OBJECT(nms->i2s_state), &error_fatal);
+    i2c_slave_realize_and_unref(codec, i2c_state->bus, &error_fatal);
 
     // Init I2C1
     dev = qdev_new("ipodtouch.i2c");

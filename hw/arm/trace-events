@@ -74,3 +74,8 @@ ipod_touch_i2s_write(uint64_t addr, uint64_t val) "0x%02" PRIx64 " <- 0x%08" PRI
 ipod_touch_i2s_tx_underrun(uint32_t frames, uint32_t missing) "%u frames due, %u samples missing"
 ipod_touch_i2s_out_overrun(void) "host audio output behind, dropping a frame"
 ipod_touch_i2s_tx_stop(uint64_t frames, int64_t ns) "transmitted %" PRIu64 " frames in %" PRId64 " ns"
+
+# ipod_touch_cs42l58.c
+cs42l58_read(uint8_t reg, uint8_t val) "0x%02x -> 0x%02x"
+cs42l58_write(uint8_t reg, uint8_t val) "0x%02x <- 0x%02x"
+cs42l58_output(int db, int mute) "output %d dB (-999: off), mute 0x%x"

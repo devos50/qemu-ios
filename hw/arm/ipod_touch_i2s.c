@@ -10,12 +10,14 @@
  *
  * The transmitter consumes samples at the sample rate in virtual time: every tick, it requests the frames that are
  * due from the DMA and fills frames the DMA did not provide with silence. The frames go to a ring that the host audio
- * output drains. The receiver provides silence, as no microphone is modelled.
+ * output drains, scaled by the output level the codec sets. The receiver provides silence, as no microphone is
+ * modelled.
  */
 #include "hw/arm/ipod_touch_i2s.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
+#include <math.h>
 #include "trace.h"
 
 static bool ipod_touch_i2s_tx_running(IPodTouchI2SState *s)
@@ -37,6 +39,21 @@ static void ipod_touch_i2s_update_timer(IPodTouchI2SState *s)
     } else {
         timer_del(s->timer);
     }
+}
+
+void ipod_touch_i2s_set_output_gain(IPodTouchI2SState *s, int left_db, int right_db)
+{
+    int db[2] = { left_db, right_db };
+
+    for (int i = 0; i < 2; i++) {
+        s->gain[i] = db[i] == INT_MIN ? 0 : lrint(pow(10.0, db[i] / 20.0) * 65536);
+    }
+}
+
+static int16_t ipod_touch_i2s_scale(IPodTouchI2SState *s, int channel, int16_t sample)
+{
+    int64_t v = ((int64_t)sample * s->gain[channel]) >> 16;
+    return MIN(MAX(v, INT16_MIN), INT16_MAX);
 }
 
 static void ipod_touch_i2s_push_frame(IPodTouchI2SState *s, int16_t left, int16_t right)
@@ -169,7 +186,7 @@ static void ipod_touch_i2s_tx_sample(IPodTouchI2SState *s, uint16_t sample)
     }
     s->frame[s->tx_sample++] = sample;
     if (s->tx_sample == 2) {
-        ipod_touch_i2s_push_frame(s, s->frame[0], s->frame[1]);
+        ipod_touch_i2s_push_frame(s, ipod_touch_i2s_scale(s, 0, s->frame[0]), ipod_touch_i2s_scale(s, 1, s->frame[1]));
         s->tx_sample = 0;
     }
     if (--s->tx_room == 0) {
@@ -317,6 +334,8 @@ static void ipod_touch_i2s_init(Object *obj)
     qdev_init_gpio_out_named(DEVICE(obj), &s->tx_dreq, "dma-tx", 1);
     qdev_init_gpio_out_named(DEVICE(obj), &s->rx_dreq, "dma-rx", 1);
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipod_touch_i2s_tick, s);
+    // unity gain until a codec sets the level (the codec keeps it across resets)
+    s->gain[0] = s->gain[1] = 65536;
 }
 
 static void ipod_touch_i2s_realize(DeviceState *dev, Error **errp)
@@ -362,6 +381,7 @@ static const VMStateDescription vmstate_ipod_touch_i2s = {
         VMSTATE_UINT32(tx_sample, IPodTouchI2SState),
         VMSTATE_INT64(rx_start_ns, IPodTouchI2SState),
         VMSTATE_UINT64(rx_frames, IPodTouchI2SState),
+        VMSTATE_INT32_ARRAY(gain, IPodTouchI2SState, 2),
         VMSTATE_TIMER_PTR(timer, IPodTouchI2SState),
         VMSTATE_END_OF_LIST()
     }

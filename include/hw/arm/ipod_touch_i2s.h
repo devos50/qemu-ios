@@ -64,8 +64,11 @@ typedef struct IPodTouchI2SState {
     uint32_t out_head;     // next frame to write
     uint32_t out_fill;
     int16_t frame[2];      // frame being assembled from the TX FIFO
+    int32_t gain[2];       // output level per channel set by the codec, 16.16 fixed point (0 mutes)
 } IPodTouchI2SState;
 
 void ipod_touch_i2s_set_sample_rate(IPodTouchI2SState *s, uint32_t rate);
+// Sets the output level per channel in dB; INT_MIN mutes the channel.
+void ipod_touch_i2s_set_output_gain(IPodTouchI2SState *s, int left_db, int right_db);
 
 #endif
