@@ -99,6 +99,29 @@ typedef struct __attribute__((packed)) {
 #define GLES_SLOT_TRANSLATEX                801
 #define GLES_SLOT_MULTI_TEX_COORD4X         802
 #define GLES_SLOT_POINT_SIZE_POINTER_OES    806
+/* One-to-one forwards added 2026-09-27; each was a silent stub before. */
+#define GLES_SLOT_COPY_TEX_SUB_IMAGE_2D     56
+#define GLES_SLOT_IS_ENABLED                143
+#define GLES_SLOT_IS_TEXTURE                145
+#define GLES_SLOT_LIGHT_MODELF              146
+#define GLES_SLOT_LIGHT_MODELFV             147
+#define GLES_SLOT_LIGHTF                    150
+#define GLES_SLOT_LOGIC_OP                  161
+#define GLES_SLOT_BLEND_FUNC_SEPARATE       336
+#define GLES_SLOT_BLEND_EQUATION            338
+#define GLES_SLOT_BLEND_EQUATION_SEPARATE   458
+#define GLES_SLOT_POINT_PARAMETERF          540
+#define GLES_SLOT_POINT_PARAMETERFV         541
+#define GLES_SLOT_CLIP_PLANEF               765
+/* OES_draw_texture: s/i/x/sv/iv/xv/f/fv, in that order. */
+#define GLES_SLOT_DRAW_TEXS_OES             811
+#define GLES_SLOT_DRAW_TEXI_OES             812
+#define GLES_SLOT_DRAW_TEXX_OES             813
+#define GLES_SLOT_DRAW_TEXSV_OES            814
+#define GLES_SLOT_DRAW_TEXIV_OES            815
+#define GLES_SLOT_DRAW_TEXXV_OES            816
+#define GLES_SLOT_DRAW_TEXF_OES             817
+#define GLES_SLOT_DRAW_TEXFV_OES            818
 #define GLES_SLOT_SAMPLE_COVERAGEX          803
 #define GLES_SLOT_GET_BOOLEANV              99
 #define GLES_SLOT_GET_POINTERV              115

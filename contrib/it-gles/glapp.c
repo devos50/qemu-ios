@@ -160,6 +160,22 @@ static void (*p_glBindFramebufferOES)(unsigned, unsigned);
 static void (*p_glFramebufferRenderbufferOES)(unsigned, unsigned, unsigned, unsigned);
 static unsigned (*p_glCheckFramebufferStatusOES)(unsigned);
 static void (*p_glGetRenderbufferParameterivOES)(unsigned, unsigned, int *);
+static void (*p_glGenTextures)(int, unsigned *);
+static void (*p_glBindTexture)(unsigned, unsigned);
+static void (*p_glTexImage2D)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+static void (*p_glTexParameteri)(unsigned, unsigned, int);
+static void (*p_glTexParameteriv)(unsigned, unsigned, const int *);
+static void (*p_glEnable)(unsigned);
+static void (*p_glDisable)(unsigned);
+static void (*p_glDrawTexfOES)(float, float, float, float, float);
+#define GL_TEXTURE_2D            0x0DE1
+#define GL_RGBA                  0x1908
+#define GL_UNSIGNED_BYTE         0x1401
+#define GL_NEAREST               0x2600
+#define GL_TEXTURE_MIN_FILTER    0x2801
+#define GL_TEXTURE_MAG_FILTER    0x2800
+#define GL_TEXTURE_CROP_RECT_OES 0x8B9D
+static unsigned g_tex;
 
 /* ---------------------------------------------------------------- state --- */
 
@@ -203,6 +219,19 @@ static void draw_frame(void)
     p_glEnableClientState(GL_VERTEX_ARRAY);
     p_glVertexPointer(2, GL_FLOAT, 0, quad);
     p_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    /* A yellow texture over the lower right quarter, via OES_draw_texture --
+     * the third colour the regression check counts. A yellow field with no
+     * DrawTex support reads as plain magenta there. */
+    if (p_glDrawTexfOES && g_tex) {
+        static const int crop[4] = { 0, 0, 4, 4 };
+        p_glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        p_glEnable(GL_TEXTURE_2D);
+        p_glBindTexture(GL_TEXTURE_2D, g_tex);
+        p_glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_CROP_RECT_OES, crop);
+        p_glDrawTexfOES(VIEW_W / 2.0f, 0.0f, 0.0f, VIEW_W / 2.0f, VIEW_H / 2.0f);
+        p_glDisable(GL_TEXTURE_2D);
+    }
 }
 
 static void present_frame(void)
@@ -294,6 +323,19 @@ static void gl_setup(void)
         w("\n");
     }
 
+    if (p_glGenTextures && p_glTexImage2D) {
+        static unsigned char yellow[4 * 4 * 4];
+        unsigned i;
+        for (i = 0; i < sizeof yellow; i += 4) {
+            yellow[i] = 255; yellow[i + 1] = 255; yellow[i + 2] = 0; yellow[i + 3] = 255;
+        }
+        p_glGenTextures(1, &g_tex);
+        p_glBindTexture(GL_TEXTURE_2D, g_tex);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, yellow);
+        w("[glapp] texture="); wd(g_tex); w("\n");
+    }
     g_gl_ready = 1;
     nslog("glapp: GL is set up");
 }
@@ -386,6 +428,14 @@ static void *resolve_gl(void)
     p_glCheckFramebufferStatusOES  = dlsym(h, "glCheckFramebufferStatusOES");
     p_glGetRenderbufferParameterivOES =
         dlsym(h, "glGetRenderbufferParameterivOES");
+    p_glGenTextures       = dlsym(h, "glGenTextures");
+    p_glBindTexture       = dlsym(h, "glBindTexture");
+    p_glTexImage2D        = dlsym(h, "glTexImage2D");
+    p_glTexParameteri     = dlsym(h, "glTexParameteri");
+    p_glTexParameteriv    = dlsym(h, "glTexParameteriv");
+    p_glEnable            = dlsym(h, "glEnable");
+    p_glDisable           = dlsym(h, "glDisable");
+    p_glDrawTexfOES       = dlsym(h, "glDrawTexfOES");
 
     if (!p_glClear || !p_glDrawArrays || !p_glBindFramebufferOES ||
         !p_glBindRenderbufferOES) {

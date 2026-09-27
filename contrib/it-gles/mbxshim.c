@@ -168,7 +168,9 @@ __attribute__((visibility("hidden"))) int gles_unimpl(unsigned slot)
 {
     if (slot < GLES_N_SLOTS && !unimpl_seen[slot]) {
         unimpl_seen[slot] = 1;
-        w("[mbxshim] unimplemented slot "); wd(slot); w("\n");
+        w("[mbxshim] unimplemented slot "); wd(slot);
+        if (gles_slot_names[slot][0]) { w(" ("); w(gles_slot_names[slot]); w(")"); }
+        w(" -- the app will render wrong\n");
     }
     return 0;
 }
@@ -393,6 +395,45 @@ static int s_translatex(void *gc, unsigned a0, unsigned a1, unsigned a2)
     { return (int)qc(801, gc, 3, A(a0, a1, a2)); }
 static int s_multiTexCoord4x(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned a4)
     { return (int)qc(802, gc, 5, A(a0, a1, a2, a3, a4)); }
+static int s_copyTexSubImage2D(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3,
+                               unsigned a4, unsigned a5, unsigned a6, unsigned a7)
+    { return (int)qc(56, gc, 8, A(a0, a1, a2, a3, a4, a5, a6, a7)); }
+static int s_isEnabled(void *gc, unsigned a0)
+    { return (int)qc(143, gc, 1, A(a0)); }
+static int s_isTexture(void *gc, unsigned a0)
+    { return (int)qc(145, gc, 1, A(a0)); }
+static int s_lightModelf(void *gc, unsigned a0, unsigned a1)
+    { return (int)qc(146, gc, 2, A(a0, a1)); }
+static int s_lightModelfv(void *gc, unsigned a0, unsigned a1)
+    { return (int)qc(147, gc, 2, A(a0, a1)); }
+static int s_lightf(void *gc, unsigned a0, unsigned a1, unsigned a2)
+    { return (int)qc(150, gc, 3, A(a0, a1, a2)); }
+static int s_logicOp(void *gc, unsigned a0)
+    { return (int)qc(161, gc, 1, A(a0)); }
+static int s_blendFuncSeparate(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3)
+    { return (int)qc(336, gc, 4, A(a0, a1, a2, a3)); }
+static int s_blendEquation(void *gc, unsigned a0)
+    { return (int)qc(338, gc, 1, A(a0)); }
+static int s_blendEquationSeparate(void *gc, unsigned a0, unsigned a1)
+    { return (int)qc(458, gc, 2, A(a0, a1)); }
+static int s_pointParameterf(void *gc, unsigned a0, unsigned a1)
+    { return (int)qc(540, gc, 2, A(a0, a1)); }
+static int s_pointParameterfv(void *gc, unsigned a0, unsigned a1)
+    { return (int)qc(541, gc, 2, A(a0, a1)); }
+static int s_clipPlanef(void *gc, unsigned a0, unsigned a1)
+    { return (int)qc(765, gc, 2, A(a0, a1)); }
+static int s_drawTexs(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned a4)
+    { return (int)qc(811, gc, 5, A(a0, a1, a2, a3, a4)); }
+static int s_drawTexi(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned a4)
+    { return (int)qc(812, gc, 5, A(a0, a1, a2, a3, a4)); }
+static int s_drawTexx(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned a4)
+    { return (int)qc(813, gc, 5, A(a0, a1, a2, a3, a4)); }
+static int s_drawTexsv(void *gc, unsigned a0) { return (int)qc(814, gc, 1, A(a0)); }
+static int s_drawTexiv(void *gc, unsigned a0) { return (int)qc(815, gc, 1, A(a0)); }
+static int s_drawTexxv(void *gc, unsigned a0) { return (int)qc(816, gc, 1, A(a0)); }
+static int s_drawTexf(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned a4)
+    { return (int)qc(817, gc, 5, A(a0, a1, a2, a3, a4)); }
+static int s_drawTexfv(void *gc, unsigned a0) { return (int)qc(818, gc, 1, A(a0)); }
 static int s_pointSizePointerOES(void *gc, unsigned type, unsigned stride, unsigned ptr)
     { return (int)qc(806, gc, 3, A(type, stride, ptr)); }
 static int s_sampleCoveragex(void *gc, unsigned a0, unsigned a1)
@@ -657,6 +698,27 @@ static int GLESCreateGC(void *sharegroup, void **table, void *x_ce8,
         table[802] = (void *)s_multiTexCoord4x;
         table[803] = (void *)s_sampleCoveragex;
         table[806] = (void *)s_pointSizePointerOES;
+        table[56]  = (void *)s_copyTexSubImage2D;
+        table[143] = (void *)s_isEnabled;
+        table[145] = (void *)s_isTexture;
+        table[146] = (void *)s_lightModelf;
+        table[147] = (void *)s_lightModelfv;
+        table[150] = (void *)s_lightf;
+        table[161] = (void *)s_logicOp;
+        table[336] = (void *)s_blendFuncSeparate;
+        table[338] = (void *)s_blendEquation;
+        table[458] = (void *)s_blendEquationSeparate;
+        table[540] = (void *)s_pointParameterf;
+        table[541] = (void *)s_pointParameterfv;
+        table[765] = (void *)s_clipPlanef;
+        table[811] = (void *)s_drawTexs;
+        table[812] = (void *)s_drawTexi;
+        table[813] = (void *)s_drawTexx;
+        table[814] = (void *)s_drawTexsv;
+        table[815] = (void *)s_drawTexiv;
+        table[816] = (void *)s_drawTexxv;
+        table[817] = (void *)s_drawTexf;
+        table[818] = (void *)s_drawTexfv;
         table[99] = (void *)s_getBooleanv;
         table[115] = (void *)s_getPointerv;
         table[786] = (void *)s_loadMatrixx;

@@ -1022,7 +1022,7 @@ def check_applaunch(cfg, procs, dev, r):
 
 
 def quad_signature(path):
-    """(magenta fraction, cyan fraction) of a frame.
+    """(magenta, cyan, yellow) fractions of a frame.
 
     Classified relative to the frame's own maximum sample rather than against
     absolute RGB, because the panel backlight scales every pixel: without
@@ -1032,20 +1032,22 @@ def quad_signature(path):
     try:
         _w, _h, px = read_ppm(path)
     except Exception:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     if not px:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     hi = max(px) or 1
     lo, up = 0.3 * hi, 0.7 * hi
-    m = c = 0
+    m = c = y = 0
     for i in range(0, len(px), 3):
         r, g, b = px[i], px[i + 1], px[i + 2]
         if r >= up and b >= up and g <= lo:
             m += 1
         elif g >= up and b >= up and r <= lo:
             c += 1
+        elif r >= up and g >= up and b <= lo:
+            y += 1
     n = len(px) / 3.0
-    return m / n, c / n
+    return m / n, c / n, y / n
 
 
 def install_gles_app(cfg, r):
@@ -1336,8 +1338,8 @@ def check_gles(cfg, procs, dev, r):
     b = dev.qmp.shot(os.path.join(dev.dir, "gles-b.ppm"))
     to_png(a, os.path.join(dev.dir, "gles-a.png"))
     to_png(b, os.path.join(dev.dir, "gles-b.png"))
-    ma, ca = quad_signature(a)
-    mb, cb = quad_signature(b)
+    ma, ca, ya = quad_signature(a)
+    mb, cb, yb = quad_signature(b)
     _hi, lit = lit_count(b)
 
     # Slot scan. The shim writes to fd 2, which for a SpringBoard-launched app
@@ -1373,14 +1375,18 @@ def check_gles(cfg, procs, dev, r):
                      % (ma, ca, GLES_QUAD_MIN, lit,
                         "showing something else - SpringBoard, most likely"
                         if lit > 20000 else "dark"))
+    if not harness and min(ya, yb) < GLES_QUAD_MIN:
+        return r.set(False, "GLES fixture's glDrawTexfOES quad is missing: yellow=%.3f/%.3f "
+                            "of the frame, need >=%.3f (magenta=%.3f cyan=%.3f)"
+                     % (ya, yb, GLES_QUAD_MIN, mb, cb))
     if min(mb, cb) < GLES_QUAD_MIN:
         return r.set(False, "the scene rendered and then vanished within %ds "
                             "(magenta %.3f->%.3f, cyan %.3f->%.3f): the "
                             "renderer wedged after its first present"
                      % (GLES_HOLD_S, ma, mb, ca, cb))
     return r.set(True, "GLES fixture rendering through the HLE layer: magenta=%.3f "
-                       "cyan=%.3f, held for %ds, lit=%d%s"
-                 % (mb, cb, GLES_HOLD_S, lit,
+                       "cyan=%.3f yellow=%.3f, held for %ds, lit=%d%s"
+                 % (mb, cb, yb, GLES_HOLD_S, lit,
                     "" if "unimplemented slot" in text
                     else " (no log source carried the slot trace)"))
 
