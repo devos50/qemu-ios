@@ -277,23 +277,24 @@ static void ipod_touch_key_event(void *opaque, int keycode)
         gpio_group = GPIO_BUTTON_VOLDOWN_IRQ / NUM_GPIO_PINS;
         gpio_selector = GPIO_BUTTON_VOLDOWN_IRQ % NUM_GPIO_PINS;
 
-        if(keycode == KEY_MIN_DOWN && gpio_is_off(s->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN)) {
-            gpio_set_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN);
+        // the volume buttons are active low
+        if(keycode == KEY_MIN_DOWN && gpio_is_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN)) {
+            gpio_set_off(s->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN);
         }
         else if(keycode == KEY_MIN_UP) {
-            gpio_set_off(s->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN);
+            gpio_set_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN);
         }
     }
     else if(keycode == KEY_PLUS_DOWN || keycode == KEY_PLUS_UP) {
-        // volume down button
+        // volume up button, active low
         gpio_group = GPIO_BUTTON_VOLUP_IRQ / NUM_GPIO_PINS;
         gpio_selector = GPIO_BUTTON_VOLUP_IRQ % NUM_GPIO_PINS;
 
-        if(keycode == KEY_PLUS_DOWN && gpio_is_off(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP)) {
-            gpio_set_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP);
+        if(keycode == KEY_PLUS_DOWN && gpio_is_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP)) {
+            gpio_set_off(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP);
         }
         else if(keycode == KEY_PLUS_UP) {
-            gpio_set_off(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP);
+            gpio_set_on(s->gpio_state->gpio_state, GPIO_BUTTON_VOLUP);
         }
     }
     else return;
@@ -625,6 +626,11 @@ static void ipod_touch_machine_init(MachineState *machine)
     if (nms->force_dfu) {
         gpio_set_on(nms->gpio_state->gpio_state, GPIO_FORCE_DFU);
     }
+
+    // The volume buttons are active low (their device tree GPIO functions lack the 0x100 flag of the home and power
+    // buttons): released, they read high.
+    gpio_set_on(nms->gpio_state->gpio_state, GPIO_BUTTON_VOLUP);
+    gpio_set_on(nms->gpio_state->gpio_state, GPIO_BUTTON_VOLDOWN);
 }
 
 static void ipod_touch_machine_class_init(ObjectClass *klass, void *data)
