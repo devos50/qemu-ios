@@ -21,6 +21,7 @@
  */
 
 #include "hw/i2c/ipod_touch_i2c.h"
+#include "trace.h"
 
 static void s5l8900_i2c_update(IPodTouchI2CState *s)
 {
@@ -38,6 +39,7 @@ static int s5l8900_i2c_receive(IPodTouchI2CState *s)
 {
     int r;
     r = i2c_recv(s->bus);
+    trace_ipod_touch_i2c_recv(s->base, r);
     s5l8900_i2c_update(s);
     return r;
 }
@@ -48,7 +50,12 @@ static int s5l8900_i2c_send(IPodTouchI2CState *s, uint8_t data)
         s->status |= S5L8900_IICCON_ACKEN;
         s->data = data;
         s->iicreg20 |= 0x100;
-        i2c_send(s->bus, s->data);
+        // the last received bit is set when the device does not acknowledge the byte
+        bool nack = i2c_send(s->bus, s->data) != 0;
+        if (nack) {
+            s->status |= S5L8900_IICSTAT_LASTBIT;
+        }
+        trace_ipod_touch_i2c_send(s->base, data, nack);
     }
     s5l8900_i2c_update(s);
     return 1;
@@ -142,7 +149,13 @@ static void ipod_touch_i2c_write(void *opaque, hwaddr offset, uint64_t value, un
 
                     s->iicreg20 |= 0x100;
                     s->active = 1;
-                    i2c_start_transfer(s->bus, s->data >> 1, 1);
+                    // no device acknowledges the address: the driver sees the last received bit set
+                    if (i2c_start_transfer(s->bus, s->data >> 1, 1)) {
+                        s->status |= S5L8900_IICSTAT_LASTBIT;
+                        trace_ipod_touch_i2c_start(s->base, s->data >> 1, 1, true);
+                    } else {
+                        trace_ipod_touch_i2c_start(s->base, s->data >> 1, 1, false);
+                    }
                 } else {
                     i2c_end_transfer(s->bus);
                     s->active = 0;
@@ -156,7 +169,13 @@ static void ipod_touch_i2c_write(void *opaque, hwaddr offset, uint64_t value, un
                         
                     s->iicreg20 |= 0x100;
                     s->active = 1;
-                    i2c_start_transfer(s->bus, s->data >> 1, 0);
+                    // no device acknowledges the address: the driver sees the last received bit set
+                    if (i2c_start_transfer(s->bus, s->data >> 1, 0)) {
+                        s->status |= S5L8900_IICSTAT_LASTBIT;
+                        trace_ipod_touch_i2c_start(s->base, s->data >> 1, 0, true);
+                    } else {
+                        trace_ipod_touch_i2c_start(s->base, s->data >> 1, 0, false);
+                    }
                 } else {
                     i2c_end_transfer(s->bus);
                     s->active = 0;

@@ -51,3 +51,8 @@ npcm7xx_smbus_recv_fifo(const char *id, uint8_t received, uint8_t expected) "%s 
 
 pca954x_write_bytes(uint8_t value) "PCA954X write data: 0x%02x"
 pca954x_read_data(uint8_t value) "PCA954X read data: 0x%02x"
+
+# ipod_touch_i2c.c
+ipod_touch_i2c_start(uint8_t bus, uint8_t addr, int recv, bool nack) "bus %u addr 0x%02x recv %d nack %d"
+ipod_touch_i2c_send(uint8_t bus, uint8_t data, bool nack) "bus %u send 0x%02x nack %d"
+ipod_touch_i2c_recv(uint8_t bus, int data) "bus %u recv 0x%02x"
