@@ -467,6 +467,11 @@ static uint64_t synopsys_usb_read_reg(synopsys_usb_state *state, hwaddr _addr)
 	case GNPTXFSTS:
 		return 0xFFFFFFFF;
 
+	case HPRT0:
+		// Host mode only. The kernel reads the line state (bits 10-11) in
+		// device mode to detect a charger, which has D+ and D- both high.
+		return 0;
+
 	case GRXFSIZ:
 		return state->grxfsiz;
 

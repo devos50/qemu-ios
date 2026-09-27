@@ -11,6 +11,7 @@
 #include "hw/qdev-properties.h"
 #include "hw/arm/exynos4210.h"
 #include "hw/arm/ipod_touch_2g.h"
+#include "hw/arm/ipod_touch_pcf50633_pmu.h"
 #include "target/arm/cpregs.h"
 #include "qemu/error-report.h"
 #include "chardev/char.h"
@@ -503,6 +504,7 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     // init the PMU
     I2CSlave * pmu = i2c_slave_create_simple(i2c_state->bus, "pcf50633", 0x73);
+    PCF50633(pmu)->usb_present = nms->usb_chardev != NULL;
 
     // init the accelerometer
     I2CSlave *accelerometer = i2c_slave_new("lis302dl", 0x1D);

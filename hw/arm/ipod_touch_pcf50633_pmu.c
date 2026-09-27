@@ -22,6 +22,9 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
     int res = 0;
 
     switch(s->cmd) {
+        case PMU_STATUS_A:
+            res = s->usb_present ? PMU_STATUS_A_USB_PRESENT : 0;
+            break;
         case PMU_MBCS1:
             res = 1; // battery power source
             break;

@@ -40,6 +40,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(synopsys_usb_state, S5L8900USBOTG)
 #define GHWCFG3		0x4C
 #define GHWCFG4		0x50
 #define DIEPTXF(x)	(0x100 + (4*(x)))
+#define HPRT0		0x440
 #define DCFG		0x800
 #define DCTL		0x804
 #define DSTS		0x808
