@@ -461,10 +461,10 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_realize(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_TVOUT_SDO_IRQ));
 
-    // init the unknown1 module
-    dev = qdev_new("ipodtouch.unknown1");
-    IPodTouchUnknown1State *unknown1_state = IPOD_TOUCH_UNKNOWN1(dev);
-    memory_region_add_subregion(sysmem, UNKNOWN1_MEM_BASE, &unknown1_state->iomem);
+    // init the MIU (SDRAM controller)
+    dev = qdev_new(TYPE_IPOD_TOUCH_MIU);
+    IPodTouchMIUState *miu_state = IPOD_TOUCH_MIU(dev);
+    memory_region_add_subregion(sysmem, MIU_MEM_BASE, &miu_state->iomem);
 
     // init USB OTG
     dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8720_USB_OTG_IRQ), s5l8720_usb_hwcfg);

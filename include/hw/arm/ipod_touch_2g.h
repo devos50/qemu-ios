@@ -20,7 +20,7 @@
 #include "hw/arm/ipod_touch_sha1.h"
 #include "hw/arm/ipod_touch_aes.h"
 #include "hw/arm/ipod_touch_pke.h"
-#include "hw/arm/ipod_touch_unknown1.h"
+#include "hw/arm/ipod_touch_miu.h"
 #include "hw/arm/ipod_touch_lcd.h"
 #include "hw/arm/ipod_touch_mipi_dsi.h"
 #include "hw/arm/ipod_touch_fmss.h"
@@ -140,7 +140,7 @@ const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L
 #define PKE_MEM_BASE          0x3D000000
 #define CHIPID_MEM_BASE       0x3D100000
 #define SPI2_MEM_BASE         0x3D200000
-#define UNKNOWN1_MEM_BASE     0x3D700000
+#define MIU_MEM_BASE          0x3D700000
 #define MIPI_DSI_MEM_BASE     0x3D800000
 #define SPI3_MEM_BASE         0x3DA00000
 #define UART1_MEM_BASE        0x3DB00000
