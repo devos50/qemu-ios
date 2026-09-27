@@ -1,5 +1,7 @@
 # QEMU-iOS
 
+Built with use from agentic coding products.
+
 This is a fork of [devos50/qemu-ios](https://github.com/devos50/qemu-ios),
 targeting an emulated **iPod touch 2G (n72ap) running iOS 3.1.3**. It boots to
 an interactive home screen, runs real 2008-era App Store apps (including
