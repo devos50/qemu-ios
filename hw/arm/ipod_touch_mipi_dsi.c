@@ -8,8 +8,14 @@ static uint64_t ipod_touch_mipi_dsi_read(void *opaque, hwaddr addr, unsigned siz
     IPodTouchMIPIDSIState *s = (IPodTouchMIPIDSIState *)opaque;
     switch(addr)
     {
-        case 0x0:
-            return 0x103 | rDSIM_STATUS_TxReadyHsClk;
+        case REG_STATUS:
+            // The HS clock is ready while it is requested. The kernel waits
+            // for this to follow the request when it turns the display off.
+            if (s->clkctrl_reg & rDSIM_CLKCTRL_TxRequestHsClk)
+                return 0x103 | rDSIM_STATUS_TxReadyHsClk;
+            return 0x103;
+        case REG_CLKCTRL:
+            return s->clkctrl_reg;
         case REG_INTSRC:
             return rDSIM_INTSRC_RxDatDone;
         case REG_RXFIFO:
@@ -41,9 +47,11 @@ static void ipod_touch_mipi_dsi_write(void *opaque, hwaddr addr, uint64_t val, u
         case REG_PKTHDR:
             s->pkthdr_reg = val;
             break;
-	case 0x00000008:
+	case REG_CLKCTRL:
 	    if (val == 0)
 		printf("turning off screen\n");
+	    s->clkctrl_reg = val;
+	    break;
         default:
             break;
     }
@@ -71,6 +79,7 @@ static void ipod_touch_mipi_dsi_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 
     s->return_panel_id = 0;
+    s->clkctrl_reg = rDSIM_CLKCTRL_TxRequestHsClk;
 }
 
 static void ipod_touch_mipi_dsi_class_init(ObjectClass *klass, void *data)

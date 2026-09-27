@@ -11,6 +11,8 @@
 #define TYPE_IPOD_TOUCH_MIPI_DSI                "ipodtouch.mipidsi"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMIPIDSIState, IPOD_TOUCH_MIPI_DSI)
 
+#define REG_STATUS   0x00
+#define REG_CLKCTRL  0x08
 #define REG_INTSRC   0x2C
 #define REG_PKTHDR   0x34
 #define REG_RXFIFO   0x3C
@@ -19,6 +21,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMIPIDSIState, IPOD_TOUCH_MIPI_DSI)
 #define DSIM_RSP_LONG_READ 0x1A
 #define rDSIM_FIFOCTRL_EmptyHSfr 0x400000
 #define rDSIM_STATUS_TxReadyHsClk 0x400
+#define rDSIM_CLKCTRL_TxRequestHsClk 0x80000000
 #define rDSIM_INTSRC_RxDatDone    0x00040000
 
 typedef struct IPodTouchMIPIDSIState
@@ -27,6 +30,7 @@ typedef struct IPodTouchMIPIDSIState
     MemoryRegion iomem;
     qemu_irq irq;
     uint32_t pkthdr_reg;
+    uint32_t clkctrl_reg;
     bool return_panel_id;
 } IPodTouchMIPIDSIState;
 
