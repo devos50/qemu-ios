@@ -176,6 +176,12 @@ void gles_eagl_iosurface_unlock(void);
  * 0..2, then one bit per texture unit. */
 #define GLES_TEXCOORD_BIT  3u
 
+#ifndef GL_POINT_SIZE_ARRAY_OES
+#define GL_POINT_SIZE_ARRAY_OES       0x8B9C
+#endif
+static float gles_f(uint32_t bits);
+static float gles_x(uint32_t value);
+
 /* Guest vertex/texcoord array state. The guest hands us a pointer into its own
  * address space; nothing is read from it until a draw call, exactly as GL
  * specifies, so the guest is free to refill the buffer between calls. */
@@ -284,6 +290,9 @@ typedef struct {
     unsigned client_active_unit;    /* glClientActiveTexture, as an index */
     GLESArray color;
     GLESArray normal;
+    /* GL_POINT_SIZE_ARRAY_OES: per-point sizes for point sprites. Desktop GL
+     * has no such array, so the draw path emulates it (see GLES_SLOT_DRAW_ARRAYS). */
+    GLESArray pointsize;
 
     /* Scratch for glDrawElements' index list. */
     uint8_t *ibuf;
@@ -858,6 +867,8 @@ static bool gles_host_init(void)
     gh.normal.client_state   = GL_NORMAL_ARRAY;
     /* glNormalPointer takes no size; the array is always 3 components. */
     gh.normal.size = 3;
+    gh.pointsize.client_state = GL_POINT_SIZE_ARRAY_OES;
+    gh.pointsize.size = 1;
 
     gh.drawable_width = GLES_FB_WIDTH;
     gh.drawable_height = GLES_FB_HEIGHT;
@@ -1182,6 +1193,58 @@ static unsigned gles_texcoord_mask(void)
         }
     }
     return m;
+}
+
+/*
+ * GL_POINT_SIZE_ARRAY_OES has no desktop counterpart, so a GL_POINTS draw with
+ * it enabled becomes one glPointSize + one-point glDrawArrays per point. The
+ * other arrays are already bound from element 0 for this draw, so the host
+ * index is i, not first + i. Particle systems are the only users and they are
+ * a few hundred points at most.
+ * ponytail: per-point draws; batch runs of equal size if a profile says so.
+ */
+static void gles_draw_sized_points(CPUState *cpu, uint32_t first,
+                                   uint32_t count)
+{
+    GLESArray *a = &gh.pointsize;
+    uint32_t stride = a->stride ? a->stride : 4;
+    size_t off = (size_t)stride * first, need = (size_t)stride * count;
+    const uint8_t *base;
+    GLfloat saved = 1.0f;
+    uint32_t i;
+
+    if ((!a->ptr && !a->vbo) || (a->type != GL_FLOAT && a->type != 0x140C)) {
+        glDrawArrays(GL_POINTS, 0, count);
+        return;
+    }
+    if (a->vbo) {
+        if (a->ptr + off + need > a->vbo->size) {
+            glDrawArrays(GL_POINTS, 0, count);
+            return;
+        }
+        base = a->vbo->data + a->ptr + off;
+    } else {
+        if (need > a->buf_size) {
+            a->buf = g_realloc(a->buf, need);
+            a->buf_size = need;
+        }
+        if (cpu_memory_rw_debug(cpu, a->ptr + (hwaddr)off, a->buf, need, 0)) {
+            glDrawArrays(GL_POINTS, 0, count);
+            return;
+        }
+        base = a->buf;
+    }
+    glGetFloatv(GL_POINT_SIZE, &saved);
+    for (i = 0; i < count; i++) {
+        uint32_t raw;
+        float s;
+
+        memcpy(&raw, base + (size_t)stride * i, 4);
+        s = a->type == GL_FLOAT ? gles_f(raw) : gles_x(raw);
+        glPointSize(s > 0 ? s : 1.0f);
+        glDrawArrays(GL_POINTS, i, 1);
+    }
+    glPointSize(saved);
 }
 
 static uint32_t gles_bind_all_arrays(CPUState *cpu, uint32_t first,
@@ -3960,6 +4023,7 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
             break;
         case GL_COLOR_ARRAY:         gh.color.enabled = on;    break;
         case GL_NORMAL_ARRAY:        gh.normal.enabled = on;   break;
+        case GL_POINT_SIZE_ARRAY_OES: gh.pointsize.enabled = on; break;
         default: break;
         }
         return 0;
@@ -3978,6 +4042,13 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
         gh.vertex.stride = a[2];
         gh.vertex.ptr = a[3];
         gles_buffer_bind(&gh.vertex.vbo, gh.array_buffer);
+        return 0;
+
+    case GLES_SLOT_POINT_SIZE_POINTER_OES:      /* type,stride,ptr */
+        gh.pointsize.type = a[0];
+        gh.pointsize.stride = a[1];
+        gh.pointsize.ptr = a[2];
+        gles_buffer_bind(&gh.pointsize.vbo, gh.array_buffer);
         return 0;
 
     case GLES_SLOT_TEXCOORD_POINTER:
@@ -4023,7 +4094,11 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
             return -1;
         }
         /* We already applied `first` when fetching, so draw from 0. */
-        glDrawArrays(mode, 0, count);
+        if (mode == GL_POINTS && gh.pointsize.enabled) {
+            gles_draw_sized_points(cpu, first, count);
+        } else {
+            glDrawArrays(mode, 0, count);
+        }
         gles_check_draw("glDrawArrays", mode, count);
         gles_trace_draw("glDrawArrays", mode, count);
         gles_unbind_arrays(bound);
@@ -5613,8 +5688,10 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
                     if (n_seen < ARRAY_SIZE(seen)) {
                         seen[n_seen++] = (uint16_t)slot;
                     }
-                    fprintf(stderr, "[gles] slot %u raised GL error 0x%x\n",
-                            slot, e);
+                    fprintf(stderr, "[gles] slot %u raised GL error 0x%x "
+                            "(args 0x%x 0x%x 0x%x)\n", slot, e,
+                            argc > 0 ? a[0] : 0, argc > 1 ? a[1] : 0,
+                            argc > 2 ? a[2] : 0);
                 }
             }
         }

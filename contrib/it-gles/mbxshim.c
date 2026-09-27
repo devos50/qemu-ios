@@ -393,6 +393,8 @@ static int s_translatex(void *gc, unsigned a0, unsigned a1, unsigned a2)
     { return (int)qc(801, gc, 3, A(a0, a1, a2)); }
 static int s_multiTexCoord4x(void *gc, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned a4)
     { return (int)qc(802, gc, 5, A(a0, a1, a2, a3, a4)); }
+static int s_pointSizePointerOES(void *gc, unsigned type, unsigned stride, unsigned ptr)
+    { return (int)qc(806, gc, 3, A(type, stride, ptr)); }
 static int s_sampleCoveragex(void *gc, unsigned a0, unsigned a1)
     { return (int)qc(803, gc, 2, A(a0, a1)); }
 static int s_getBooleanv(void *gc, unsigned a0, unsigned a1)
@@ -654,6 +656,7 @@ static int GLESCreateGC(void *sharegroup, void **table, void *x_ce8,
         table[801] = (void *)s_translatex;
         table[802] = (void *)s_multiTexCoord4x;
         table[803] = (void *)s_sampleCoveragex;
+        table[806] = (void *)s_pointSizePointerOES;
         table[99] = (void *)s_getBooleanv;
         table[115] = (void *)s_getPointerv;
         table[786] = (void *)s_loadMatrixx;

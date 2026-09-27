@@ -98,6 +98,7 @@ typedef struct __attribute__((packed)) {
 #define GLES_SLOT_ROTATEX                   795
 #define GLES_SLOT_TRANSLATEX                801
 #define GLES_SLOT_MULTI_TEX_COORD4X         802
+#define GLES_SLOT_POINT_SIZE_POINTER_OES    806
 #define GLES_SLOT_SAMPLE_COVERAGEX          803
 #define GLES_SLOT_GET_BOOLEANV              99
 #define GLES_SLOT_GET_POINTERV              115
