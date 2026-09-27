@@ -16,8 +16,10 @@ static uint64_t ipod_touch_lcd_read(void *opaque, hwaddr addr, unsigned size)
             return 2;
         case 0x4:
             return s->lcd_con;
-        case 0xC:
-            return 0x1; //s->unknown1;
+        case LCD_REG_INT_ENABLE:
+            return s->int_enable;
+        case LCD_REG_INT_STATUS:
+            return s->int_status;
         case 0x20:
             return s->w1_display_depth_info;
         case 0x24:
@@ -37,6 +39,11 @@ static uint64_t ipod_touch_lcd_read(void *opaque, hwaddr addr, unsigned size)
     return 0;
 }
 
+static void ipod_touch_lcd_update_irq(IPodTouchLCDState *s)
+{
+    qemu_set_irq(s->irq, !!(s->int_status & s->int_enable));
+}
+
 static void ipod_touch_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     IPodTouchLCDState *s = (IPodTouchLCDState *)opaque;
@@ -46,10 +53,13 @@ static void ipod_touch_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsign
         case 0x4:
             s->lcd_con = val;
             break;
-        case 0xC:
-            s->render = val;
-            qemu_irq_lower(s->irq);
-	    // qemu_irq_raise(s->irq);
+        case LCD_REG_INT_ENABLE:
+            s->int_enable = val;
+            ipod_touch_lcd_update_irq(s);
+            break;
+        case LCD_REG_INT_STATUS:
+            s->int_status &= ~val;
+            ipod_touch_lcd_update_irq(s);
             break;
         case 0x20:
             s->w1_display_depth_info = val;
@@ -174,10 +184,9 @@ static void refresh_timer_tick(void *opaque)
 {
     IPodTouchLCDState *s = (IPodTouchLCDState *)opaque;
 
-    if (s->render == 0x1)
-	qemu_irq_raise(s->irq);
-    else if (s->render == 0xFF)
-	qemu_irq_lower(s->irq);
+    // The kernel only enables the vsync interrupt while it has a swap or vsync callbacks pending
+    s->int_status |= LCD_INT_VSYNC;
+    ipod_touch_lcd_update_irq(s);
 
     timer_mod(s->refresh_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);//LCD_REFRESH_RATE_FREQUENCY);
 }

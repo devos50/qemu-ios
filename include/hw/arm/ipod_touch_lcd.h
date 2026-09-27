@@ -14,6 +14,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchLCDState, IPOD_TOUCH_LCD)
 
 #define LCD_REFRESH_RATE_FREQUENCY 10
 
+#define LCD_REG_INT_ENABLE 0x8
+#define LCD_REG_INT_STATUS 0xC  // write 1 to clear
+
+#define LCD_INT_VSYNC      0x1
+
 typedef struct IPodTouchLCDState
 {
     SysBusDevice parent_obj;
@@ -32,7 +37,8 @@ typedef struct IPodTouchLCDState
     uint32_t w1_hspan;
     uint32_t w1_display_depth_info;
 
-    uint32_t render;
+    uint32_t int_enable;
+    uint32_t int_status;
 
     QEMUTimer *refresh_timer;
 } IPodTouchLCDState;
