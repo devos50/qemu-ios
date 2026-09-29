@@ -18,17 +18,30 @@ cd "$BUILD"
 # Compile the app-facing pieces with the same include set the emulator uses.
 # glib/pixman come from Homebrew, exactly as the meson build found them.
 DEP_CFLAGS="$(pkg-config --cflags glib-2.0 pixman-1)"
+# Use the build's own compiler and host CPU, so a cross-compiled x86_64 build
+# (the Intel slice of a universal app) compiles these for the same target.
+read -r HOST_CPU CC_LINE < <(python3 -c '
+import json, shlex
+info = "meson-info/intro-"
+cpu = json.load(open(info + "machines.json"))["host"]["cpu_family"]
+print(cpu, shlex.join(json.load(open(info + "compilers.json"))["host"]["c"]["exelist"]))')
+eval "CC_ARGV=($CC_LINE)"
+case "$HOST_CPU" in
+    aarch64) TCG_HOST=aarch64 ;;
+    x86_64) TCG_HOST=i386 ;;
+    *) echo "unsupported host CPU: $HOST_CPU" >&2; exit 1 ;;
+esac
 for f in "$SRC/contrib/ios-app/qemu-ios-entry.c" \
          "$SRC/contrib/ios-app/qemu-ios-ui.c" \
          "$SRC/contrib/macos-app/qemu-macos-extras.c"; do
 o="$(basename "${f%.c}").o"
-clang -c "$f" -o "$o" \
+"${CC_ARGV[@]}" -c "$f" -o "$o" \
     -I. -I.. -Iqapi -Itrace -Iui \
     -I"$SRC/contrib/ios-app" -I"$SRC/contrib/macos-app" \
     $DEP_CFLAGS \
     -iquote . -iquote "$SRC" -iquote "$SRC/include" \
-    -iquote "$SRC/host/include/aarch64" -iquote "$SRC/host/include/generic" \
-    -iquote "$SRC/tcg/aarch64" \
+    -iquote "$SRC/host/include/$HOST_CPU" -iquote "$SRC/host/include/generic" \
+    -iquote "$SRC/tcg/$TCG_HOST" \
     -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -std=gnu11 -O2 \
     -mmacosx-version-min=12.0
 done
