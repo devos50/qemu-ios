@@ -68,6 +68,11 @@ ipod_touch_pmu_event(int event, uint32_t reg) "event %d reg 0x%02x"
 ipod_touch_pmu_recv(uint32_t reg, int val) "reg 0x%02x -> 0x%02x"
 ipod_touch_pmu_send(uint8_t data, uint32_t reg) "0x%02x (reg 0x%02x)"
 
+# ipod_touch_amc.c
+ipod_touch_amc_read(uint64_t addr, uint64_t val) "0x%04" PRIx64 " -> 0x%08" PRIx64
+ipod_touch_amc_write(uint64_t addr, uint64_t val) "0x%04" PRIx64 " <- 0x%08" PRIx64
+ipod_touch_amc_boot_done(void) "DSP booted"
+
 # ipod_touch_i2s.c
 ipod_touch_i2s_read(uint64_t addr, uint64_t val) "0x%02" PRIx64 " -> 0x%08" PRIx64
 ipod_touch_i2s_write(uint64_t addr, uint64_t val) "0x%02" PRIx64 " <- 0x%08" PRIx64

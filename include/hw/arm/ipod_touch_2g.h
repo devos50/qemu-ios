@@ -31,6 +31,7 @@
 #include "hw/arm/ipod_touch_wdt.h"
 #include "hw/arm/ipod_touch_i2s.h"
 #include "hw/arm/ipod_touch_cs42l58.h"
+#include "hw/arm/ipod_touch_amc.h"
 
 #define TYPE_IPOD_TOUCH "iPod-Touch"
 
@@ -45,6 +46,7 @@
 #define S5L8720_LCD_IRQ 0xD
 #define S5L8720_DMAC0_IRQ 0x10
 #define S5L8720_DMAC1_IRQ 0x11
+#define S5L8720_AMC_IRQ 0x12
 #define S5L8720_I2C0_IRQ 0x15
 #define S5L8720_SPI3_IRQ 0x1C
 #define S5L8720_I2C1_IRQ 0x16
@@ -181,6 +183,7 @@ typedef struct {
 	IPodTouchMIPIDSIState *mipi_dsi_state;
 	IPodTouchFMSSState *fmss_state;
 	IPodTouchI2SState *i2s_state;
+	IPodTouchAMCState *amc_state;
 	IPodTouchMBXState *mbx_state;
 	IPodTouchScalerCSCState *scaler_csc_state;
 	IPodTouchSDIOState *sdio_state;

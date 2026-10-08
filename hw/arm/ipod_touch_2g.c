@@ -106,7 +106,6 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
     static const struct { const char *name; hwaddr base; uint64_t size; } unimp_regions[] = {
         { "sha1-page",     SHA1_MEM_BASE,     0x1000 },
         { "usb-otg-page",  USBOTG_MEM_BASE,   0x10000 },
-        { "amc",           AMC_MEM_BASE,      0x3000 },
         { "fmss-page",     FMSS_MEM_BASE,     0x1000 },
         { "aes-page",      AES_MEM_BASE,      0x1000 },
         { "mpvd",          MPVD_MEM_BASE,     0x70000 },
@@ -512,6 +511,14 @@ static void ipod_touch_machine_init(MachineState *machine)
     qdev_connect_gpio_out_named(dev, "sync", 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_I2S0_IRQ));
     qdev_connect_gpio_out_named(dev, "dma-tx", 0, qdev_get_gpio_in_named(DEVICE(pl080_1), "dreq", DMAC0_I2S0_TX_DREQ));
     qdev_connect_gpio_out_named(dev, "dma-rx", 0, qdev_get_gpio_in_named(DEVICE(pl080_1), "dreq", DMAC0_I2S0_RX_DREQ));
+
+    // init the AMC audio decoder, whose SRAM is the start of the "llb" RAM
+    dev = qdev_new(TYPE_IPOD_TOUCH_AMC);
+    nms->amc_state = IPOD_TOUCH_AMC(dev);
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_mmio_map(busdev, 0, AMC_MEM_BASE);
+    sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_AMC_IRQ));
 
     // Init I2C0
     dev = qdev_new("ipodtouch.i2c");
