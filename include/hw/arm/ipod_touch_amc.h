@@ -38,6 +38,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchAMCState, IPOD_TOUCH_AMC)
 
 // Time a channel 4 transfer takes before it reports completion
 #define AMC_DMA_DELAY_NS  (50 * SCALE_US)
+// Time the DSP takes to fill an output buffer after the driver asked for one
+#define AMC_FILL_DELAY_NS (100 * SCALE_US)
 
 // Read FIFOs of channels 4 and 5, drained by the driver after halting them
 #define AMC_CH4_FIFO_DATA  0x15c
@@ -80,6 +82,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchAMCState, IPOD_TOUCH_AMC)
 // Output buffer descriptor fields (byte offsets of u16 values)
 #define AMC_OUT_NBUF       0x2 // number of output buffers, 1 or 2
 #define AMC_OUT_LEN        0x4 // capacity of each buffer in 16-bit samples
+#define AMC_OUT_STATE(i)   (0xa + (i) * 4) // 1 when the DSP filled the buffer, the host clears it on returning it
+#define AMC_OUT_COUNT(i)   (0xc + (i) * 4) // 16-bit samples in the buffer
+
+// Host control block fields (u16), written by the driver with the first input (c02aff8c): flags (OR-ed into the
+// image's defaults) and, for AAC, the sample rate code (the MPEG-4 frequency index)
+#define AMC_CONTROL_FLAGS  0x0
+#define AMC_CONTROL_RATE   0x6
+#define AMC_CONTROL_AAC    0x6 // flag bits the driver sets for AAC
+#define AMC_CONTROL_ALAC   0x8 // only set for ALAC (0x1e), which shares the AAC bits
 
 // Output buffers the HLE reports: two buffers that hold one MP3 frame (1152 stereo frames), the largest of AAC/MP3
 #define AMC_OUT_BUFFERS    2
@@ -94,6 +105,7 @@ typedef struct IPodTouchAMCState {
     qemu_irq irq;
     QEMUTimer *boot_timer;
     QEMUTimer *dma_timer;
+    QEMUTimer *fill_timer;
     AddressSpace *sram_as;
     uint64_t sram_base;
 
@@ -103,10 +115,19 @@ typedef struct IPodTouchAMCState {
     uint32_t irq_status[2];
     uint32_t irq_enabled[2];
 
-    // Compressed data the driver sent through channel 4 since the DSP last booted
+    // Compressed data the driver sent through channel 4 and the decoder has not consumed yet. Positions count bytes
+    // since the DSP last booted.
     GByteArray *input;
-    bool dma_irq;      // the running channel 4 transfer interrupts when done
-    char *input_dump;  // debugging: append everything channel 4 transfers to this file
+    uint64_t in_received;
+    uint64_t in_consumed;
+    bool dma_irq;        // the running channel 4 transfer interrupts when done
+    char *input_dump;    // debugging: append everything channel 4 transfers to this file
+
+    // Output: the driver rings the doorbell to ask for the next buffer, which the DSP fills in turn
+    bool fill_requested;
+    uint32_t out_buf;
+    void *decoder;
+    bool decoder_failed;
 } IPodTouchAMCState;
 
 #endif
