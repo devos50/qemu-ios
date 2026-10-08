@@ -28,9 +28,11 @@
  * AMC_IRQ_OUTPUT. The handler treats AMC_IRQ_OUTPUT for a buffer that is not full as an error, so the model fills one
  * buffer per doorbell.
  *
- * The model decodes AAC with faad2 when QEMU is built with it; the stream's sample rate comes from the host control
- * block and its channel count from the first syntax element. The output has the stream's channels: userland plays a
- * mono stream's output as mono.
+ * The driver loads one codec image per stream; the model tells them apart by the memory windows the driver sets up
+ * for it. It decodes AAC with faad2 (the sample rate comes from the host control block, the channel count from the
+ * first syntax element), MP3 with mpg123, when QEMU is built with them, and ALAC with its own decoder. The output has
+ * the stream's channels: userland plays a mono stream's output as mono. ALAC frames hold 4096 samples per channel, so
+ * the model publishes a single output buffer for it.
  */
 #include "hw/arm/ipod_touch_amc.h"
 #include "hw/qdev-properties.h"
@@ -40,6 +42,9 @@
 #include "trace.h"
 #ifdef CONFIG_FAAD2
 #include <neaacdec.h>
+#endif
+#ifdef CONFIG_MPG123
+#include <mpg123.h>
 #endif
 
 #define AAC_ID_SCE 0 // single channel element: the stream is mono
@@ -91,14 +96,36 @@ static void ipod_touch_amc_boot_done(void *opaque)
     ipod_touch_amc_raise(s, AMC_IRQ_OUTPUT);
 }
 
+static const struct {
+    uint32_t window;
+    AMCCodec codec;
+} amc_codec_windows[] = {
+    { 0xc6005c00, AMC_CODEC_MP3 },
+    { 0xc600b800, AMC_CODEC_AAC },
+    { 0xc6008800, AMC_CODEC_ALAC },
+    { 0xc6005600, AMC_CODEC_SPEECH },
+};
+
 static void ipod_touch_amc_decoder_close(IPodTouchAMCState *s)
 {
+    if (s->decoder_open) {
+        switch (s->codec) {
 #ifdef CONFIG_FAAD2
-    if (s->decoder) {
-        NeAACDecClose(s->decoder);
-    }
+        case AMC_CODEC_AAC:
+            NeAACDecClose(s->decoder);
+            break;
 #endif
+#ifdef CONFIG_MPG123
+        case AMC_CODEC_MP3:
+            mpg123_delete(s->decoder);
+            break;
+#endif
+        default:
+            break;
+        }
+    }
     s->decoder = NULL;
+    s->decoder_open = false;
     s->decoder_failed = false;
 }
 
@@ -117,8 +144,25 @@ static void ipod_touch_amc_stream_reset(IPodTouchAMCState *s)
 /* The codec firmware is running: publish its output buffers. */
 static void ipod_touch_amc_dsp_run(IPodTouchAMCState *s)
 {
-    ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_NBUF, AMC_OUT_BUFFERS);
-    ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_LEN, AMC_OUT_SAMPLES);
+    uint32_t window = s->regs[AMC_MEM_WINDOW_CODEC / 4];
+
+    s->codec = AMC_CODEC_UNKNOWN;
+    for (int i = 0; i < ARRAY_SIZE(amc_codec_windows); i++) {
+        if (amc_codec_windows[i].window == window) {
+            s->codec = amc_codec_windows[i].codec;
+        }
+    }
+    if (s->codec == AMC_CODEC_ALAC) {
+        s->out_buffers = 1;
+        s->out_samples = AMC_OUT_SAMPLES_ALAC;
+    } else {
+        s->out_buffers = 2;
+        s->out_samples = AMC_OUT_SAMPLES;
+    }
+    assert(s->out_buffers * s->out_samples * 2 <= AMC_OUT_SPACE);
+    trace_ipod_touch_amc_dsp_run(s->codec, s->out_buffers, s->out_samples);
+    ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_NBUF, s->out_buffers);
+    ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_LEN, s->out_samples);
 }
 
 static void ipod_touch_amc_dma_done(void *opaque)
@@ -146,17 +190,12 @@ static void ipod_touch_amc_schedule_fill(IPodTouchAMCState *s)
 }
 
 #ifdef CONFIG_FAAD2
-static bool ipod_touch_amc_decoder_open(IPodTouchAMCState *s)
+static bool ipod_touch_amc_aac_open(IPodTouchAMCState *s)
 {
-    uint16_t flags = ipod_touch_amc_sram_read16(s, AMC_SRAM_CONTROL + AMC_CONTROL_FLAGS);
     uint16_t rate = ipod_touch_amc_sram_read16(s, AMC_SRAM_CONTROL + AMC_CONTROL_RATE);
     unsigned long out_rate;
     unsigned char out_channels;
 
-    if ((flags & (AMC_CONTROL_AAC | AMC_CONTROL_ALAC)) != AMC_CONTROL_AAC) {
-        qemu_log_mask(LOG_UNIMP, "%s: codec with control flags 0x%04x not supported\n", __func__, flags);
-        return false;
-    }
     if (rate > 11) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid AAC sample rate code %u\n", __func__, rate);
         return false;
@@ -182,8 +221,7 @@ static bool ipod_touch_amc_decoder_open(IPodTouchAMCState *s)
     return true;
 }
 
-/* Decodes frames until one produces audio; returns the number of 16-bit samples written to out. */
-static unsigned ipod_touch_amc_decode(IPodTouchAMCState *s, int16_t *out, unsigned max_samples)
+static unsigned ipod_touch_amc_aac_decode(IPodTouchAMCState *s, int16_t *out, unsigned max_samples)
 {
     while (s->input->len) {
         NeAACDecFrameInfo info;
@@ -210,6 +248,153 @@ static unsigned ipod_touch_amc_decode(IPodTouchAMCState *s, int16_t *out, unsign
 }
 #endif
 
+#ifdef CONFIG_MPG123
+static bool ipod_touch_amc_mp3_open(IPodTouchAMCState *s)
+{
+    const long *rates;
+    size_t nrates;
+    int err;
+    mpg123_handle *h = mpg123_new(NULL, &err);
+
+    if (!h) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: %s\n", __func__, mpg123_plain_strerror(err));
+        return false;
+    }
+    // 16-bit samples with the stream's rate and channels
+    mpg123_format_none(h);
+    mpg123_rates(&rates, &nrates);
+    for (size_t i = 0; i < nrates; i++) {
+        mpg123_format(h, rates[i], MPG123_MONO | MPG123_STEREO, MPG123_ENC_SIGNED_16);
+    }
+    if (mpg123_open_feed(h) != MPG123_OK) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: %s\n", __func__, mpg123_strerror(h));
+        mpg123_delete(h);
+        return false;
+    }
+    trace_ipod_touch_amc_decoder_open(0, 0);
+    s->decoder = h;
+    return true;
+}
+
+static unsigned ipod_touch_amc_mp3_decode(IPodTouchAMCState *s, int16_t *out, unsigned max_samples)
+{
+    mpg123_handle *h = s->decoder;
+
+    // mpg123 finds the frames in the stream itself and buffers what it has not decoded yet
+    if (s->input->len) {
+        mpg123_feed(h, s->input->data, s->input->len);
+        ipod_touch_amc_consume(s, s->input->len);
+    }
+    for (;;) {
+        off_t num;
+        unsigned char *audio;
+        size_t bytes;
+        int ret = mpg123_decode_frame(h, &num, &audio, &bytes);
+
+        if (ret == MPG123_NEW_FORMAT) {
+            long rate;
+            int channels, encoding;
+            mpg123_getformat(h, &rate, &channels, &encoding);
+            trace_ipod_touch_amc_decoder_open(rate, channels);
+            continue;
+        }
+        if (ret == MPG123_OK && bytes) {
+            unsigned samples = MIN(bytes / 2, max_samples);
+            memcpy(out, audio, samples * 2);
+            return samples;
+        }
+        if (ret == MPG123_NEED_MORE) {
+            return 0;
+        }
+        if (ret != MPG123_OK) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: %s\n", __func__, mpg123_strerror(h));
+            return 0;
+        }
+    }
+}
+#endif
+
+static bool ipod_touch_amc_alac_open(IPodTouchAMCState *s)
+{
+    uint16_t bit_depth = ipod_touch_amc_sram_read16(s, AMC_SRAM_CONTROL + AMC_CONTROL_ALAC_BIT_DEPTH);
+    uint16_t pb = ipod_touch_amc_sram_read16(s, AMC_SRAM_CONTROL + AMC_CONTROL_ALAC_PB);
+    uint16_t kb = ipod_touch_amc_sram_read16(s, AMC_SRAM_CONTROL + AMC_CONTROL_ALAC_KB);
+    uint16_t mb = ipod_touch_amc_sram_read16(s, AMC_SRAM_CONTROL + AMC_CONTROL_ALAC_MB);
+
+    trace_ipod_touch_amc_alac_params(bit_depth, pb, kb, mb);
+    if (bit_depth != 16) {
+        qemu_log_mask(LOG_UNIMP, "%s: %u-bit ALAC not supported\n", __func__, bit_depth);
+        return false;
+    }
+    if (pb == 0 || pb > 255 || kb == 0 || kb > 31 || mb == 0 || mb > 255) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid ALAC parameters pb %u kb %u mb %u\n", __func__, pb, kb, mb);
+        return false;
+    }
+    s->alac = (ALACConfig) {
+        .frame_length = ALAC_MAX_FRAME_LENGTH, .bit_depth = bit_depth, .pb = pb, .mb = mb, .kb = kb,
+    };
+    return true;
+}
+
+static unsigned ipod_touch_amc_alac_decode(IPodTouchAMCState *s, int16_t *out, unsigned max_samples)
+{
+    size_t used;
+    unsigned channels;
+    int frames = alac_decode_frame(&s->alac, s->input->data, s->input->len, out, max_samples / ALAC_MAX_CHANNELS,
+                                   &used, &channels);
+
+    if (frames < 0) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid ALAC frame, dropping the input\n", __func__);
+        ipod_touch_amc_consume(s, s->input->len);
+        return 0;
+    }
+    if (frames == 0) {
+        return 0; // wait for the rest of the frame
+    }
+    ipod_touch_amc_consume(s, used);
+    return frames * channels;
+}
+
+static bool ipod_touch_amc_decoder_start(IPodTouchAMCState *s)
+{
+    switch (s->codec) {
+#ifdef CONFIG_FAAD2
+    case AMC_CODEC_AAC:
+        return ipod_touch_amc_aac_open(s);
+#endif
+#ifdef CONFIG_MPG123
+    case AMC_CODEC_MP3:
+        return ipod_touch_amc_mp3_open(s);
+#endif
+    case AMC_CODEC_ALAC:
+        return ipod_touch_amc_alac_open(s);
+    default:
+        qemu_log_mask(LOG_UNIMP, "%s: no decoder for codec %u (QEMU built without its library?)\n", __func__,
+                      s->codec);
+        return false;
+    }
+}
+
+/* Decodes the next frame that produces audio; returns the number of 16-bit samples written to out, 0 if it needs
+ * more input. */
+static unsigned ipod_touch_amc_decode(IPodTouchAMCState *s, int16_t *out, unsigned max_samples)
+{
+    switch (s->codec) {
+#ifdef CONFIG_FAAD2
+    case AMC_CODEC_AAC:
+        return ipod_touch_amc_aac_decode(s, out, max_samples);
+#endif
+#ifdef CONFIG_MPG123
+    case AMC_CODEC_MP3:
+        return ipod_touch_amc_mp3_decode(s, out, max_samples);
+#endif
+    case AMC_CODEC_ALAC:
+        return ipod_touch_amc_alac_decode(s, out, max_samples);
+    default:
+        return 0;
+    }
+}
+
 /* Decodes the next output buffer, if the driver asked for one and the DSP has the input and a free buffer. */
 static void ipod_touch_amc_fill(void *opaque)
 {
@@ -217,43 +402,42 @@ static void ipod_touch_amc_fill(void *opaque)
     unsigned buf = s->out_buf;
 
     // the driver is still handling the previous buffer, or returns this one later, which rings the doorbell again
-    if (!s->fill_requested || (s->irq_status[0] & AMC_IRQ_OUTPUT) || !s->input->len ||
+    if (!s->fill_requested || (s->irq_status[0] & AMC_IRQ_OUTPUT) ||
         ipod_touch_amc_sram_read16(s, AMC_SRAM_OUT_DESC + AMC_OUT_STATE(buf)) != 0) {
         return;
     }
-
-#ifdef CONFIG_FAAD2
-    if (!s->decoder && !s->decoder_failed && !ipod_touch_amc_decoder_open(s)) {
-        s->decoder_failed = true;
-    }
-    if (s->decoder) {
-        int16_t pcm[AMC_OUT_SAMPLES];
-        unsigned samples = ipod_touch_amc_decode(s, pcm, AMC_OUT_SAMPLES);
-
-        if (!samples) {
-            return; // wait for more input
+    if (!s->decoder_open) {
+        // the decoders configure themselves from the first input
+        if (!s->input->len || s->decoder_failed) {
+            // without a decoder, the input is dropped so the driver does not stall
+            ipod_touch_amc_consume(s, s->input->len);
+            return;
         }
-        for (unsigned i = 0; i < samples; i++) {
-            pcm[i] = cpu_to_le16(pcm[i]);
+        s->decoder_open = ipod_touch_amc_decoder_start(s);
+        s->decoder_failed = !s->decoder_open;
+        if (!s->decoder_open) {
+            ipod_touch_amc_consume(s, s->input->len);
+            return;
         }
-        address_space_write(s->sram_as, s->sram_base + AMC_SRAM_OUT_PCM + buf * AMC_OUT_SAMPLES * 2,
-                            MEMTXATTRS_UNSPECIFIED, pcm, samples * 2);
-        ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_COUNT(buf), samples);
-        ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_STATE(buf), 1);
-        trace_ipod_touch_amc_output(buf, samples, s->in_consumed);
-        s->out_buf = (buf + 1) % AMC_OUT_BUFFERS;
-        s->fill_requested = false;
-        ipod_touch_amc_raise(s, AMC_IRQ_OUTPUT);
-        return;
     }
-#else
-    if (!s->decoder_failed) {
-        qemu_log_mask(LOG_UNIMP, "%s: QEMU was built without faad2, the AMC cannot decode\n", __func__);
-        s->decoder_failed = true;
+
+    int16_t pcm[AMC_OUT_MAX_SAMPLES];
+    unsigned samples = ipod_touch_amc_decode(s, pcm, s->out_samples);
+
+    if (!samples) {
+        return; // wait for more input
     }
-#endif
-    // without a decoder, the input is dropped so the driver does not stall
-    ipod_touch_amc_consume(s, s->input->len);
+    for (unsigned i = 0; i < samples; i++) {
+        pcm[i] = cpu_to_le16(pcm[i]);
+    }
+    address_space_write(s->sram_as, s->sram_base + AMC_SRAM_OUT_PCM + buf * s->out_samples * 2,
+                        MEMTXATTRS_UNSPECIFIED, pcm, samples * 2);
+    ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_COUNT(buf), samples);
+    ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_STATE(buf), 1);
+    trace_ipod_touch_amc_output(buf, samples, s->in_consumed);
+    s->out_buf = (buf + 1) % s->out_buffers;
+    s->fill_requested = false;
+    ipod_touch_amc_raise(s, AMC_IRQ_OUTPUT);
 }
 
 static void ipod_touch_amc_dump_input(IPodTouchAMCState *s, const uint8_t *data, size_t len)
@@ -498,6 +682,9 @@ static const VMStateDescription vmstate_ipod_touch_amc = {
         VMSTATE_TIMER_PTR(boot_timer, IPodTouchAMCState),
         VMSTATE_TIMER_PTR(dma_timer, IPodTouchAMCState),
         VMSTATE_BOOL(dma_irq, IPodTouchAMCState),
+        VMSTATE_UINT32(codec, IPodTouchAMCState),
+        VMSTATE_UINT32(out_buffers, IPodTouchAMCState),
+        VMSTATE_UINT32(out_samples, IPodTouchAMCState),
         VMSTATE_END_OF_LIST()
     }
 };

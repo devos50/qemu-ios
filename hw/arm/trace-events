@@ -72,7 +72,9 @@ ipod_touch_pmu_send(uint8_t data, uint32_t reg) "0x%02x (reg 0x%02x)"
 ipod_touch_amc_read(uint64_t addr, uint64_t val) "0x%04" PRIx64 " -> 0x%08" PRIx64
 ipod_touch_amc_write(uint64_t addr, uint64_t val) "0x%04" PRIx64 " <- 0x%08" PRIx64
 ipod_touch_amc_boot_done(void) "DSP booted"
-ipod_touch_amc_decoder_open(unsigned long rate, unsigned channels) "AAC decoder: %lu Hz, %u channels"
+ipod_touch_amc_dsp_run(unsigned codec, unsigned buffers, unsigned samples) "codec %u running, %u output buffers of %u samples"
+ipod_touch_amc_decoder_open(unsigned long rate, unsigned channels) "decoder: %lu Hz, %u channels"
+ipod_touch_amc_alac_params(unsigned bit_depth, unsigned pb, unsigned kb, unsigned mb) "ALAC decoder: %u bits, pb %u kb %u mb %u"
 ipod_touch_amc_output(unsigned buf, unsigned samples, uint64_t consumed) "buffer %u: %u samples, %" PRIu64 " input bytes consumed"
 ipod_touch_amc_ch4_desc(uint32_t addr, uint32_t ctrl, uint32_t src, uint32_t next) "descriptor 0x%08x: ctrl 0x%08x src 0x%08x next 0x%08x"
 

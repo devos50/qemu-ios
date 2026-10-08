@@ -5,6 +5,7 @@
 #include "qemu/timer.h"
 #include "hw/sysbus.h"
 #include "hw/irq.h"
+#include "hw/arm/ipod_touch_alac.h"
 
 #define TYPE_IPOD_TOUCH_AMC "ipodtouch.amc"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchAMCState, IPOD_TOUCH_AMC)
@@ -52,6 +53,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchAMCState, IPOD_TOUCH_AMC)
 #define AMC_CH5_MODE       0x198
 
 #define AMC_MEM_WINDOWS    0x938 // 18 memory window descriptors, up to 0x97c
+#define AMC_MEM_WINDOW_CODEC 0x960 // window 10, which differs between the codec images (table at 0xc02c07c8)
 #define AMC_DSP_START      0x984 // start the DSP (written 0 after loading the boot image)
 #define AMC_DSP_RUN        0x988 // written 0x100 after loading the codec image
 #define AMC_DOORBELL       0x98c // written 1 when the driver frees an output buffer
@@ -92,9 +94,26 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchAMCState, IPOD_TOUCH_AMC)
 #define AMC_CONTROL_AAC    0x6 // flag bits the driver sets for AAC
 #define AMC_CONTROL_ALAC   0x8 // only set for ALAC (0x1e), which shares the AAC bits
 
-// Output buffers the HLE reports: two buffers that hold one MP3 frame (1152 stereo frames), the largest of AAC/MP3
-#define AMC_OUT_BUFFERS    2
+// Output buffers the HLE reports: two buffers that hold one MP3 frame (1152 stereo frames), the larger of AAC/MP3,
+// or for ALAC a single buffer for one frame (4096 stereo frames), as two do not fit below the control block
+#define AMC_OUT_SPACE      (AMC_SRAM_CONTROL - AMC_SRAM_OUT_PCM)
 #define AMC_OUT_SAMPLES    (1152 * 2)
+#define AMC_OUT_SAMPLES_ALAC (ALAC_MAX_FRAME_LENGTH * ALAC_MAX_CHANNELS)
+#define AMC_OUT_MAX_SAMPLES AMC_OUT_SAMPLES_ALAC
+
+// ALAC parameters in the host control block (u16 fields with bytes of the stream's ALACSpecificConfig)
+#define AMC_CONTROL_ALAC_BIT_DEPTH 0x4
+#define AMC_CONTROL_ALAC_PB        0x6
+#define AMC_CONTROL_ALAC_KB        0x8
+#define AMC_CONTROL_ALAC_MB        0xa
+
+typedef enum AMCCodec {
+    AMC_CODEC_UNKNOWN,
+    AMC_CODEC_MP3,
+    AMC_CODEC_AAC,
+    AMC_CODEC_ALAC,
+    AMC_CODEC_SPEECH,
+} AMCCodec;
 
 // Delay between the driver starting the DSP and the "booted" interrupt
 #define AMC_BOOT_DELAY_NS  (10 * SCALE_US)
@@ -124,10 +143,15 @@ typedef struct IPodTouchAMCState {
     char *input_dump;    // debugging: append everything channel 4 transfers to this file
 
     // Output: the driver rings the doorbell to ask for the next buffer, which the DSP fills in turn
+    uint32_t codec;       // AMCCodec of the image the driver loaded
+    uint32_t out_buffers;
+    uint32_t out_samples; // capacity of each output buffer
     bool fill_requested;
     uint32_t out_buf;
-    void *decoder;
+    bool decoder_open;
     bool decoder_failed;
+    void *decoder;        // faad2 or mpg123 handle
+    ALACConfig alac;
 } IPodTouchAMCState;
 
 #endif

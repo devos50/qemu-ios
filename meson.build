@@ -1035,6 +1035,11 @@ if not get_option('libiscsi').auto() or have_block
                          required: get_option('libiscsi'),
                          method: 'pkg-config')
 endif
+mpg123 = not_found
+if not get_option('mpg123').auto() or have_system
+  mpg123 = dependency('libmpg123', required: get_option('mpg123'),
+                      method: 'pkg-config')
+endif
 faad2 = not_found
 if not get_option('faad2').auto() or have_system
   faad2 = dependency('faad2', required: get_option('faad2'),
@@ -2214,6 +2219,7 @@ config_host_data.set('CONFIG_STATX', has_statx)
 config_host_data.set('CONFIG_STATX_MNT_ID', has_statx_mnt_id)
 config_host_data.set('CONFIG_ZSTD', zstd.found())
 config_host_data.set('CONFIG_FAAD2', faad2.found())
+config_host_data.set('CONFIG_MPG123', mpg123.found())
 config_host_data.set('CONFIG_FUSE', fuse.found())
 config_host_data.set('CONFIG_FUSE_LSEEK', fuse_lseek.found())
 config_host_data.set('CONFIG_SPICE_PROTOCOL', spice_protocol.found())
@@ -4386,6 +4392,7 @@ summary_info += {'bzip2 support':     libbzip2}
 summary_info += {'lzfse support':     liblzfse}
 summary_info += {'zstd support':      zstd}
 summary_info += {'faad2 support':     faad2}
+summary_info += {'mpg123 support':    mpg123}
 summary_info += {'NUMA host support': numa}
 summary_info += {'capstone':          capstone}
 summary_info += {'libpmem support':   libpmem}
