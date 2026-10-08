@@ -14,6 +14,10 @@
  *    AMC_IRQ_OUTPUT, which it acknowledges through IRQ0_ACK;
  *  - the codec image is copied and DSP_RUN is written 0x100. The driver then reads the output buffer descriptor at
  *    SRAM 0x28000, which the firmware has filled in by then.
+ *
+ * Compressed data arrives through channel 4 (c02ae2d8): the driver builds a chain of descriptors in DRAM, enables
+ * AMC_IRQ_CH4_DONE and writes the first descriptor's address to the channel's START register. The handler masks the
+ * interrupt again, acknowledges the transfer with CTRL 0x20 and returns the buffer to userland.
  */
 #include "hw/arm/ipod_touch_amc.h"
 #include "hw/qdev-properties.h"
@@ -62,11 +66,79 @@ static void ipod_touch_amc_boot_done(void *opaque)
     ipod_touch_amc_raise(s, AMC_IRQ_OUTPUT);
 }
 
+static void ipod_touch_amc_input_reset(IPodTouchAMCState *s)
+{
+    g_byte_array_set_size(s->input, 0);
+    timer_del(s->dma_timer);
+}
+
 /* The codec firmware is running: publish its output buffers. */
 static void ipod_touch_amc_dsp_run(IPodTouchAMCState *s)
 {
     ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_NBUF, AMC_OUT_BUFFERS);
     ipod_touch_amc_sram_write16(s, AMC_SRAM_OUT_DESC + AMC_OUT_LEN, AMC_OUT_SAMPLES);
+}
+
+static void ipod_touch_amc_dma_done(void *opaque)
+{
+    IPodTouchAMCState *s = opaque;
+
+    s->ch_status[4] = 0;
+    if (s->dma_irq) {
+        ipod_touch_amc_raise(s, AMC_IRQ_CH4_DONE);
+    }
+}
+
+static void ipod_touch_amc_dump_input(IPodTouchAMCState *s, const uint8_t *data, size_t len)
+{
+    FILE *f = fopen(s->input_dump, "ab");
+    if (!f) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: cannot open %s\n", __func__, s->input_dump);
+        return;
+    }
+    fwrite(data, 1, len, f);
+    fclose(f);
+}
+
+/* Channel 4 transfers compressed data from DRAM into the DSP's input FIFO: collect it. */
+static void ipod_touch_amc_ch4_start(IPodTouchAMCState *s, uint32_t start)
+{
+    uint32_t next = start;
+    int count = 0;
+
+    if (s->ch_status[4] & 7) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: channel 4 started while not idle\n", __func__);
+        return;
+    }
+    s->dma_irq = false;
+    while (next) {
+        uint32_t desc[4], len, src;
+
+        if ((next & 3) != AMC_DESC_PHYS || ++count > AMC_DESC_MAX_CHAIN) {
+            qemu_log_mask(LOG_UNIMP, "%s: unsupported descriptor 0x%08x\n", __func__, next);
+            break;
+        }
+        address_space_read(s->sram_as, next & AMC_DESC_ADDR_MASK, MEMTXATTRS_UNSPECIFIED, desc, sizeof(desc));
+        for (int i = 0; i < 4; i++) {
+            desc[i] = le32_to_cpu(desc[i]);
+        }
+        len = desc[AMC_DESC_CTRL / 4] >> 16;
+        src = desc[AMC_DESC_SRC / 4];
+        trace_ipod_touch_amc_ch4_desc(next & AMC_DESC_ADDR_MASK, desc[AMC_DESC_CTRL / 4], src, desc[AMC_DESC_NEXT / 4]);
+
+        size_t old = s->input->len;
+        g_byte_array_set_size(s->input, old + len);
+        address_space_read(s->sram_as, src, MEMTXATTRS_UNSPECIFIED, s->input->data + old, len);
+        if (s->input_dump) {
+            ipod_touch_amc_dump_input(s, s->input->data + old, len);
+        }
+        if (desc[AMC_DESC_CTRL / 4] & AMC_DESC_CTRL_IRQ) {
+            s->dma_irq = true;
+        }
+        next = desc[AMC_DESC_NEXT / 4];
+    }
+    s->ch_status[4] = AMC_CH_STATUS_BUSY;
+    timer_mod(s->dma_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + AMC_DMA_DELAY_NS);
 }
 
 static void ipod_touch_amc_channel_ctrl(IPodTouchAMCState *s, int ch, uint32_t cmd)
@@ -79,6 +151,8 @@ static void ipod_touch_amc_channel_ctrl(IPodTouchAMCState *s, int ch, uint32_t c
     case AMC_CH_CMD_RESUME:
     case AMC_CH_CMD_RESET:
         s->ch_status[ch] = 0;
+        break;
+    case AMC_CH_CMD_DONE:
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: channel %d command 0x%x\n", __func__, ch, cmd);
@@ -154,7 +228,8 @@ static void ipod_touch_amc_write(void *opaque, hwaddr addr, uint64_t val, unsign
         s->irq_enabled[1] &= ~val;
         break;
     case AMC_DSP_START:
-        // the boot image signals that it runs
+        // a reboot drops the data of the previous stream; the boot image signals that it runs
+        ipod_touch_amc_input_reset(s);
         timer_mod(s->boot_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + AMC_BOOT_DELAY_NS);
         break;
     case AMC_DSP_RUN:
@@ -167,6 +242,8 @@ static void ipod_touch_amc_write(void *opaque, hwaddr addr, uint64_t val, unsign
         ch = ipod_touch_amc_channel(addr, &reg);
         if (ch >= 0 && reg == AMC_CH_CTRL) {
             ipod_touch_amc_channel_ctrl(s, ch, val);
+        } else if (ch == 4 && reg == AMC_CH_START) {
+            ipod_touch_amc_ch4_start(s, val);
         } else if (ch >= 0 && reg == AMC_CH_START) {
             qemu_log_mask(LOG_UNIMP, "%s: channel %d DMA start 0x%08" PRIx64 " not implemented\n", __func__, ch, val);
         } else if (addr != AMC_CLOCK_DIV && addr != AMC_DSP_CONFIG && addr != AMC_CH4_MODE && addr != AMC_CH5_MODE &&
@@ -198,6 +275,7 @@ static void ipod_touch_amc_reset(DeviceState *dev)
     memset(s->irq_status, 0, sizeof(s->irq_status));
     memset(s->irq_enabled, 0, sizeof(s->irq_enabled));
     timer_del(s->boot_timer);
+    ipod_touch_amc_input_reset(s);
     qemu_irq_lower(s->irq);
 }
 
@@ -210,6 +288,8 @@ static void ipod_touch_amc_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
     s->boot_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipod_touch_amc_boot_done, s);
+    s->dma_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipod_touch_amc_dma_done, s);
+    s->input = g_byte_array_new();
     s->sram_as = &address_space_memory;
 }
 
@@ -217,10 +297,13 @@ static void ipod_touch_amc_finalize(Object *obj)
 {
     IPodTouchAMCState *s = IPOD_TOUCH_AMC(obj);
     timer_free(s->boot_timer);
+    timer_free(s->dma_timer);
+    g_byte_array_free(s->input, true);
 }
 
 static Property ipod_touch_amc_properties[] = {
     DEFINE_PROP_UINT64("sram-base", IPodTouchAMCState, sram_base, 0x22000000),
+    DEFINE_PROP_STRING("input-dump", IPodTouchAMCState, input_dump),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -235,6 +318,8 @@ static const VMStateDescription vmstate_ipod_touch_amc = {
         VMSTATE_UINT32_ARRAY(irq_status, IPodTouchAMCState, 2),
         VMSTATE_UINT32_ARRAY(irq_enabled, IPodTouchAMCState, 2),
         VMSTATE_TIMER_PTR(boot_timer, IPodTouchAMCState),
+        VMSTATE_TIMER_PTR(dma_timer, IPodTouchAMCState),
+        VMSTATE_BOOL(dma_irq, IPodTouchAMCState),
         VMSTATE_END_OF_LIST()
     }
 };

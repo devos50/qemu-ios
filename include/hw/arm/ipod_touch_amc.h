@@ -20,8 +20,24 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchAMCState, IPOD_TOUCH_AMC)
 
 #define AMC_CH_CMD_HALT   0x04
 #define AMC_CH_CMD_RESUME 0x10
+#define AMC_CH_CMD_DONE   0x20 // acknowledges a finished transfer
 #define AMC_CH_CMD_RESET  0x60
+#define AMC_CH_STATUS_BUSY   1
 #define AMC_CH_STATUS_HALTED 7
+
+// Descriptor and START/next encoding: address | 1 for a physical address, | 2 for a DSP address
+#define AMC_DESC_PHYS     1
+#define AMC_DESC_DSP      2
+#define AMC_DESC_ADDR_MASK (~3u)
+#define AMC_DESC_NEXT     0x00
+#define AMC_DESC_CTRL     0x04 // bits 31:16 length in bytes, bit 4 interrupt when done, bits 11:7 burst
+#define AMC_DESC_SRC      0x08
+#define AMC_DESC_DST      0x0c
+#define AMC_DESC_CTRL_IRQ (1 << 4)
+#define AMC_DESC_MAX_CHAIN 256
+
+// Time a channel 4 transfer takes before it reports completion
+#define AMC_DMA_DELAY_NS  (50 * SCALE_US)
 
 // Read FIFOs of channels 4 and 5, drained by the driver after halting them
 #define AMC_CH4_FIFO_DATA  0x15c
@@ -77,6 +93,7 @@ typedef struct IPodTouchAMCState {
     MemoryRegion iomem;
     qemu_irq irq;
     QEMUTimer *boot_timer;
+    QEMUTimer *dma_timer;
     AddressSpace *sram_as;
     uint64_t sram_base;
 
@@ -85,6 +102,11 @@ typedef struct IPodTouchAMCState {
     uint32_t ch_status[AMC_NUM_CHANNELS];
     uint32_t irq_status[2];
     uint32_t irq_enabled[2];
+
+    // Compressed data the driver sent through channel 4 since the DSP last booted
+    GByteArray *input;
+    bool dma_irq;      // the running channel 4 transfer interrupts when done
+    char *input_dump;  // debugging: append everything channel 4 transfers to this file
 } IPodTouchAMCState;
 
 #endif
