@@ -1,18 +1,20 @@
 #include "hw/arm/ipod_touch_sha1.h"
 
-static uint64_t swapLong(uint64_t x) {
-    x = (x & 0x00000000FFFFFFFF) << 32 | (x & 0xFFFFFFFF00000000) >> 32;
-    x = (x & 0x0000FFFF0000FFFF) << 16 | (x & 0xFFFF0000FFFF0000) >> 16;
-    x = (x & 0x00FF00FF00FF00FF) << 8  | (x & 0xFF00FF00FF00FF00) >> 8;
-    return x;
+/*
+ * The guest pads the message itself (0x80, zeroes, 64-bit bit length), so the engine only runs the SHA-1 compression
+ * function over 64-byte blocks. We feed every block to OpenSSL as it arrives; after the padded final block the
+ * context state h0..h4 is the digest, so there is no limit on the input size (the restore ramdisk is ~25 MB).
+ */
+static void sha1_process(IPodTouchSHA1State *s, const void *data, size_t len)
+{
+    SHA1_Update(&s->ctx, data, len);
+    s->hash_computed = false;
 }
 
 static void flush_hw_buffer(IPodTouchSHA1State *s) {
-    // Flush the hardware buffer to the state buffer and clear the buffer.
-    memcpy(s->buffer + s->buffer_ind, (uint8_t *)s->hw_buffer, 0x40);
+    sha1_process(s, s->hw_buffer, 0x40);
     memset(s->hw_buffer, 0, 0x40);
     s->hw_buffer_dirty = false;
-    s->buffer_ind += 0x40;
 }
 
 static void sha1_reset(IPodTouchSHA1State *s)
@@ -21,19 +23,16 @@ static void sha1_reset(IPodTouchSHA1State *s)
 	s->memory_start = 0;
 	s->memory_mode = 0;
 	s->insize = 0;
-	memset(&s->buffer, 0, SHA1_BUFFER_SIZE);
 	memset(&s->hw_buffer, 0, 0x10 * sizeof(uint32_t));
-	s->buffer_ind = 0;
 	memset(&s->hashout, 0, 0x14);
 	s->hw_buffer_dirty = false;
 	s->hash_computed = false;
+	SHA1_Init(&s->ctx);
 }
 
 static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
 {
 	IPodTouchSHA1State *s = (IPodTouchSHA1State *)opaque;
-
-    //fprintf(stderr, "%s: offset 0x%08x\n", __FUNCTION__, offset);
 
 	switch(offset) {
 		case SHA_CONFIG:
@@ -48,19 +47,16 @@ static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
 			return s->insize;
 		/* Hash result ouput */
 		case 0x20 ... 0x34:
-			//fprintf(stderr, "Hash out %08x\n",  *(uint32_t *)&s->hashout[offset - 0x20]);
             if(!s->hash_computed) {
-                // lazy compute the final hash by inspecting the last eight bytes of the buffer, which contains the length of the input data.
-                uint64_t data_length = swapLong(((uint64_t *)s->buffer)[s->buffer_ind / 8 - 1]) / 8;
-
-                SHA_CTX ctx;
-                SHA1_Init(&ctx);
-                SHA1_Update(&ctx, s->buffer, data_length);
-                SHA1_Final(s->hashout, &ctx);
+                // the digest is the big-endian state after the guest-padded final block
+                const SHA_LONG h[5] = { s->ctx.h0, s->ctx.h1, s->ctx.h2, s->ctx.h3, s->ctx.h4 };
+                for(int i = 0; i < 5; i++) {
+                    stl_be_p(&s->hashout[i * 4], h[i]);
+                }
                 s->hash_computed = true;
             }
 
-			return *(uint32_t *)&s->hashout[offset - 0x20];
+			return ldl_le_p(&s->hashout[offset - 0x20]);
 	}
 
     return 0;
@@ -69,8 +65,6 @@ static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
 static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
 {
     IPodTouchSHA1State *s = (IPodTouchSHA1State *)opaque;
-
-    //fprintf(stderr, "%s: offset 0x%08x value 0x%08x\n", __FUNCTION__, offset, value);
 
 	switch(offset) {
 		case SHA_CONFIG:
@@ -82,10 +76,13 @@ static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, u
 
 				if(s->memory_mode)
 				{
-					// we are in memory mode - gradually add the memory to the buffer
-					for(int i = 0; i < s->insize / 0x40; i++) {
-						cpu_physical_memory_read(s->memory_start + i * 0x40, s->buffer + s->buffer_ind, 0x40);
-						s->buffer_ind += 0x40;
+					// we are in memory mode - hash the input straight from memory, a chunk at a time
+					uint8_t chunk[0x1000];
+					uint32_t len = s->insize & ~0x3f;
+					for(uint32_t done = 0; done < len; done += sizeof(chunk)) {
+						uint32_t n = MIN(len - done, sizeof(chunk));
+						cpu_physical_memory_read(s->memory_start + done, chunk, n);
+						sha1_process(s, chunk, n);
 					}
 				}
 			} else {
@@ -102,7 +99,6 @@ static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, u
 			s->memory_mode = value;
 			break;
 		case SHA_INSIZE:
-            assert(value <= SHA1_BUFFER_SIZE);
 			s->insize = value;
 			break;
 		case 0x40 ... 0x7c:
