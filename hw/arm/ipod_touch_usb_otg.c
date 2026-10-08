@@ -281,6 +281,25 @@ static void synopsys_usb_link_reset_step(synopsys_usb_state *_state)
 	}
 }
 
+// A core soft reset resets the transfer state machines and clears the endpoint
+// registers, so no endpoint stays armed with a transfer of the previous
+// software (e.g. iBEC's USB console IN transfer when the kernel takes over).
+static void synopsys_usb_reset_eps(synopsys_usb_state *_state)
+{
+	for(int i = 0; i < USB_NUM_ENDPOINTS; i++)
+	{
+		synopsys_usb_ep_state *eps[2] = { &_state->in_eps[i], &_state->out_eps[i] };
+		for(int dir = 0; dir < 2; dir++)
+		{
+			eps[dir]->control = 0;
+			eps[dir]->dma_address = 0;
+			eps[dir]->fifo = 0;
+			eps[dir]->tx_size = 0;
+			eps[dir]->interrupt_status = 0;
+		}
+	}
+}
+
 // The device went away from the host's point of view (core reset or soft
 // disconnect), so fail everything the host is waiting for.
 static void synopsys_usb_link_disconnect(synopsys_usb_state *_state)
@@ -604,6 +623,7 @@ static void synopsys_usb_write(void *opaque, hwaddr _addr, uint64_t _val, unsign
 		if(_val & GRSTCTL_CORESOFTRESET)
 		{
 			state->grstctl = GRSTCTL_AHBIDLE;
+			synopsys_usb_reset_eps(state);
 			synopsys_usb_link_disconnect(state);
 			state->gintsts |= GINTMSK_RESET;
 			synopsys_usb_update_irq(state);
@@ -764,21 +784,7 @@ static void s5l8900_usb_otg_reset(DeviceState *d)
 		counter += 0x100;
 	}
 
-	for(i = 0; i < USB_NUM_ENDPOINTS; i++)
-	{
-		synopsys_usb_ep_state *in = &state->in_eps[i];
-		in->control = 0;
-		in->dma_address = 0;
-		in->fifo = 0;
-		in->tx_size = 0;
-
-		synopsys_usb_ep_state *out = &state->out_eps[i];
-		out->control = 0;
-		out->dma_address = 0;
-		out->fifo = 0;
-		out->tx_size = 0;
-	}
-
+	synopsys_usb_reset_eps(state);
 	synopsys_usb_link_disconnect(state);
 
 	synopsys_usb_update_irq(state);
