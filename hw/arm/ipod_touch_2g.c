@@ -441,6 +441,9 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchSPIState *spi4_state = IPOD_TOUCH_SPI(dev);
     spi4_state->mt->sysic = sysic_state;
     spi4_state->mt->gpio_state = gpio_state;
+    qdev_connect_gpio_out_named(DEVICE(spi4_state->mt), "irq", 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_MULTITOUCH_IRQ));
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_MULTITOUCH_CS), qdev_get_gpio_in_named(DEVICE(spi4_state->mt), SSI_GPIO_CS, 0));
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_MULTITOUCH_RESET), qdev_get_gpio_in_named(DEVICE(spi4_state->mt), "reset", 0));
     nms->spi4_state = spi4_state;
 
     // init the chip ID module

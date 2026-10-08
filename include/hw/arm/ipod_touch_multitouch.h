@@ -69,6 +69,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMultitouchState, IPOD_TOUCH_MULTITOUCH)
 #define MT_CMD_SHORT_CONTROL_WRITE   0xE4
 #define MT_CMD_SHORT_CONTROL_READ    0xE6
 #define MT_CMD_FRAME_READ            0xEA
+// The frame read command once the sensor info reports a bcdVersion >= 0x24 (the driver's "flip NOP" mode). The driver
+// only switches to it when it re-reads the device properties, e.g., after resetting the controller.
+#define MT_CMD_FRAME_READ_FLIP       0xEB
 
 // frame types
 #define MT_FRAME_TYPE_PATH 0x44
@@ -113,7 +116,7 @@ typedef struct MTFrameHeader
 typedef struct MTFramePacket
 {
     uint8_t cmd;
-    uint8_t unused1;
+    uint8_t length_lsb; // ignored by the driver, but must match byte 1 of the length packet (see build_frame)
     uint8_t length1;
     uint8_t length2;
     uint8_t checksum_pad;
@@ -159,6 +162,10 @@ typedef struct IPodTouchMultitouchState {
     uint32_t buf_ind;
     uint32_t in_buffer_ind;
     uint8_t hbpp_atn_ack_response[2];
+    bool frame_data_read; // the current frame read command reads the frame data, not its length
+    bool firmware_running; // the driver has loaded the firmware and is reading the device properties or frames
+    int reset_level;
+    uint8_t unknown_cmd_logged[32]; // bitmap of unknown commands we've already logged
     MTFrame frame;
     bool frame_pending; // the driver hasn't read the frame yet
     int64_t frame_sent_ns;
@@ -168,7 +175,8 @@ typedef struct IPodTouchMultitouchState {
     bool reported_down;  // the driver has seen a touch start
     bool end_pending;    // a touch end still has to be followed by a full end
     QEMUTimer *touch_timer;
-    IPodTouchSYSICState *sysic;
+    qemu_irq irq;
+    IPodTouchSYSICState *sysic; // used by the button handler
     IPodTouchGPIOState *gpio_state;
     float touch_x;
     float touch_y;

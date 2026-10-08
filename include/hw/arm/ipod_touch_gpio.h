@@ -22,6 +22,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchGPIOState, IPOD_TOUCH_GPIO)
 #define GPIO_BUTTON_VOLDOWN_IRQ 0x62
 #define GPIO_LIGHTSENSOR_IRQ    0x25
 #define GPIO_I2S0_IRQ           0x2C // i2s0 frame sync
+#define GPIO_MULTITOUCH_IRQ     0x6D
 
 #define NUM_GPIO_PADS 0xD // pads 0-12, read at 0x24 + 0x20 * pad
 #define NUM_GPIO_PINS 0x20
@@ -33,6 +34,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchGPIOState, IPOD_TOUCH_GPIO)
 
 #define GPIO_NOR_CS_SPI0    0x000
 #define GPIO_NOR_CS_SPI1    0x406
+#define GPIO_MULTITOUCH_RESET 0xA06 // function-reset of the multi-touch node
+#define GPIO_MULTITOUCH_CS    0xA07 // function-spi_cs0 of spi4
 
 #define GPIO2PIN(gpio)       ((gpio) & 7)
 #define GPIO2PAD(gpio)       (((gpio) >> 8) & 0xFF)

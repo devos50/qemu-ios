@@ -1,6 +1,15 @@
 #include "hw/arm/ipod_touch_multitouch.h"
+#include "hw/irq.h"
+#include "qemu/log.h"
 
 #define MT_IO_BUFFER_SIZE 0x100
+
+static void log_unknown_command(IPodTouchMultitouchState *s, uint8_t cmd, const char *what) {
+    if(!(s->unknown_cmd_logged[cmd >> 3] & (1 << (cmd & 7)))) {
+        s->unknown_cmd_logged[cmd >> 3] |= 1 << (cmd & 7);
+        qemu_log_mask(LOG_UNIMP, "%s: unknown %s 0x%02x\n", __func__, what, cmd);
+    }
+}
 
 static void ensure_io_capacity(IPodTouchMultitouchState *s, uint32_t size) {
     if(size > s->io_capacity) {
@@ -73,7 +82,7 @@ static void prepare_report_info_response(IPodTouchMultitouchState *s, uint8_t re
         report_length = MT_REPORT_SENSOR_DIMENSIONS_SIZE;
     }
     else {
-        hw_error("Unknown report ID 0x%02x\n", report_id);
+        log_unknown_command(s, report_id, "report ID");
     }
 
     s->out_buffer[3] = (report_length & 0xFF);
@@ -114,7 +123,7 @@ static void prepare_short_control_response(IPodTouchMultitouchState *s, uint8_t 
         ob_int32[1] = MT_SENSOR_SURFACE_HEIGHT;
     }
     else {
-        hw_error("Unknown report ID 0x%02x\n", report_id);
+        log_unknown_command(s, report_id, "report ID");
     }
 
     // compute and set the checksum
@@ -125,6 +134,41 @@ static void prepare_short_control_response(IPodTouchMultitouchState *s, uint8_t 
 
     s->out_buffer[14] = (checksum & 0xFF);
     s->out_buffer[15] = (checksum >> 8) & 0xFF;
+}
+
+// The length packet of a frame read when there's no frame: a zero length tells the driver there's nothing to read.
+static void prepare_empty_frame_length_response(IPodTouchMultitouchState *s) {
+    memset(s->out_buffer, 0, sizeof(MTFrameLengthPacket));
+    s->out_buffer[0] = MT_CMD_FRAME_READ;
+    s->out_buffer[14] = MT_CMD_FRAME_READ;
+}
+
+// Forget the command in progress, e.g., when the chip select is deasserted in the middle of a command.
+static void reset_command_state(IPodTouchMultitouchState *s) {
+    s->cur_cmd = 0;
+    s->buf_size = 0;
+    s->buf_ind = 0;
+    s->in_buffer_ind = 0;
+    s->frame_data_read = false;
+}
+
+static void drop_touch_state(IPodTouchMultitouchState *s) {
+    timer_del(s->touch_timer);
+    s->frame_pending = false;
+    s->press_latched = false;
+    s->reported_down = false;
+    s->end_pending = false;
+}
+
+// The driver bootloads the controller after powering it up or resetting it, and only reads frames once the firmware
+// runs. Frames sent earlier make the driver fail to read them and reset the controller again.
+static void set_firmware_running(IPodTouchMultitouchState *s, bool running) {
+    if(s->firmware_running != running) {
+        s->firmware_running = running;
+        if(!running) {
+            drop_touch_state(s);
+        }
+    }
 }
 
 static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t value)
@@ -142,11 +186,17 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
         s->buf_ind = 0;
         s->in_buffer_ind = 0;
         
-        if(value == 0x18) { // filler packet??
+        if(value == 0x00) {
+            // The driver clears the interrupt by clocking out the first two bytes of its transmit buffer, which is
+            // all zeros after a controller reset.
+            s->buf_size = 1;
+        }
+        else if(value == 0x18) { // filler packet??
             s->buf_size = 2;
             s->out_buffer[1] = 0xE1;
         }
         else if(value == 0x1A) { // HBPP ACK
+            set_firmware_running(s, false);
             s->buf_size = 2;
             if(s->hbpp_atn_ack_response[0] == 0 && s->hbpp_atn_ack_response[1] == 0) {
                 // return the default ACK response
@@ -176,6 +226,7 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
             memset(s->out_buffer, 0, 16); // just return zeros
         }
         else if(value == MT_CMD_HBPP_DATA_PACKET) {
+            set_firmware_running(s, false);
             s->buf_size = 20; // should be enough initially, until we get the packet length
             memset(s->out_buffer + 1, 0, 20 - 1); // just return zeros
         }
@@ -187,6 +238,8 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
             prepare_cmd_status_response(s);
         }
         else if(value == MT_CMD_GET_INTERFACE_VERSION) {
+            // the first thing the driver does after the bootload, before reading the device properties
+            set_firmware_running(s, true);
             s->buf_size = 16;
             prepare_interface_version_response(s);
         }
@@ -199,16 +252,27 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
         else if(value == MT_CMD_SHORT_CONTROL_READ) {
             s->buf_size = 16;
         }
-        else if(value == MT_CMD_FRAME_READ) {
-            s->buf_size = sizeof(MTFrame);
-            s->out_buffer = (uint8_t *) &s->frame;
+        else if(value == MT_CMD_FRAME_READ || value == MT_CMD_FRAME_READ_FLIP) {
+            // Both the frame length and the frame data are read with this command, the third byte tells them apart.
+            // Start with the length packet, the frame packet starts with the same two bytes.
+            s->buf_size = sizeof(MTFrameLengthPacket);
+            if(s->frame_pending) {
+                s->out_buffer = (uint8_t *) &s->frame.frame_length;
+            }
+            else {
+                prepare_empty_frame_length_response(s);
+            }
         }
         else {
-            printf("%s Unknown command 0x%02x!\n", __func__, value);
+            log_unknown_command(s, value, "command");
+            s->buf_size = 1;
+            s->out_buffer[0] = 0;
         }
     }
 
-    s->in_buffer[s->in_buffer_ind] = value;
+    if(s->in_buffer_ind < s->io_capacity) {
+        s->in_buffer[s->in_buffer_ind] = value;
+    }
     s->in_buffer_ind++;
 
     if(s->cur_cmd == MT_CMD_HBPP_DATA_PACKET && s->in_buffer_ind == 10) {
@@ -238,18 +302,25 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
     else if(s->cur_cmd == MT_CMD_SHORT_CONTROL_READ && s->in_buffer_ind == 2) {
         prepare_short_control_response(s, s->in_buffer[1]);
     }
+    else if((s->cur_cmd == MT_CMD_FRAME_READ || s->cur_cmd == MT_CMD_FRAME_READ_FLIP) && s->in_buffer_ind == 3 &&
+            s->in_buffer[2] == 1 && s->frame_pending) {
+        // the driver reads the frame data (the length it got before + 5 bytes)
+        s->out_buffer = (uint8_t *) &s->frame.frame_packet;
+        s->buf_size = sizeof(MTFrame) - sizeof(MTFrameLengthPacket);
+        s->frame_data_read = true;
+    }
 
     // TODO process register writes!
 
-    uint8_t ret_val = s->out_buffer[s->buf_ind];
+    uint8_t ret_val = s->buf_ind < s->buf_size ? s->out_buffer[s->buf_ind] : 0;
     s->buf_ind++;
 
     //printf("<MULTITOUCH> Got value: 0x%02x, returning 0x%02x (index: %d, buffer length: %d)\n", value, ret_val, s->buf_ind, s->buf_size);
 
-    if(s->buf_ind == s->buf_size) {
+    if(s->buf_ind >= s->buf_size) {
         //printf("Finished command 0x%02x\n", s->cur_cmd);
 
-        if(s->cur_cmd == MT_CMD_FRAME_READ) {
+        if(s->frame_data_read) {
             s->frame_pending = false;
         }
 
@@ -260,11 +331,34 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
         }
 
         // we're done with the command
-        s->cur_cmd = 0;
-        s->buf_size = 0;
+        reset_command_state(s);
     }
 
     return ret_val;
+}
+
+// Commands are framed by the chip select line, which the driver drives through a GPIO. Deselecting the controller
+// aborts an unfinished command, e.g., the two-byte transfer the driver uses to clear the interrupt.
+static int ipod_touch_multitouch_set_cs(SSIPeripheral *dev, bool level)
+{
+    IPodTouchMultitouchState *s = IPOD_TOUCH_MULTITOUCH(dev);
+    if(level) {
+        reset_command_state(s);
+    }
+    return 0;
+}
+
+// The driver resets the controller (and then bootloads it again) through a GPIO, e.g., after too many errors.
+static void ipod_touch_multitouch_reset_line(void *opaque, int n, int level)
+{
+    IPodTouchMultitouchState *s = IPOD_TOUCH_MULTITOUCH(opaque);
+    if(level == s->reset_level) {
+        return;
+    }
+    s->reset_level = level;
+    reset_command_state(s);
+    memset(s->hbpp_atn_ack_response, 0, 2);
+    set_firmware_running(s, false);
 }
 
 static void build_frame(IPodTouchMultitouchState *s, uint8_t event, float x, float y, uint16_t radius1, uint16_t radius2, uint16_t radius3, uint16_t contactDensity) {
@@ -286,13 +380,16 @@ static void build_frame(IPodTouchMultitouchState *s, uint8_t event, float x, flo
     frame->frame_length.checksum2 = (checksum >> 8) & 0xFF;
 
     // create the frame packet
+    // The driver reads the length packet and the frame packet with the same command and we only know which one it
+    // wants after we've sent the first two bytes, so both packets start with the command and the length LSB.
     frame->frame_packet.cmd = MT_CMD_FRAME_READ;
+    frame->frame_packet.length_lsb = (data_len & 0xFF);
     frame->frame_packet.length1 = (data_len & 0xFF);
     frame->frame_packet.length2 = (data_len >> 8) & 0xFF;
 
     checksum = 0;
     for(int i = 0; i < 4; i++) {
-        checksum += ((uint8_t *) &frame->frame_length)[i];
+        checksum += ((uint8_t *) &frame->frame_packet)[i];
     }
 
     // the first five bytes have to sum up to 0.
@@ -350,8 +447,7 @@ static void build_frame(IPodTouchMultitouchState *s, uint8_t event, float x, flo
 }
 
 static void ipod_touch_multitouch_inform_frame_ready(IPodTouchMultitouchState *s) {
-    s->sysic->gpio_int_status[3] |= (1 << 13); // the multitouch interrupt bit is in group 3 (32 interrupts per group), and the 13th of the 3th group
-    qemu_irq_raise(s->sysic->gpio_irqs[3]);
+    qemu_irq_pulse(s->irq);
 }
 
 static void send_frame(IPodTouchMultitouchState *s, uint8_t event) {
@@ -374,11 +470,16 @@ static void touch_timer_tick(void *opaque)
     IPodTouchMultitouchState *s = (IPodTouchMultitouchState *)opaque;
     int64_t next = MT_FRAME_INTERVAL_NS;
 
+    if(!s->firmware_running) {
+        drop_touch_state(s);
+        return;
+    }
+
     if(s->frame_pending) {
         // The driver hasn't read the previous frame yet. If it's been a while and no read is in
         // progress, the driver probably missed the interrupt (e.g., across a device reset).
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-        if(s->cur_cmd != MT_CMD_FRAME_READ && now - s->frame_sent_ns >= MT_FRAME_TIMEOUT_NS) {
+        if(s->cur_cmd != MT_CMD_FRAME_READ && s->cur_cmd != MT_CMD_FRAME_READ_FLIP && now - s->frame_sent_ns >= MT_FRAME_TIMEOUT_NS) {
             printf("%s: frame %d not read by the driver, raising the interrupt again\n", __func__, s->frame.frame_packet.header.frameNum);
             s->frame_sent_ns = now;
             ipod_touch_multitouch_inform_frame_ready(s);
@@ -413,6 +514,9 @@ static void touch_timer_tick(void *opaque)
 
 void ipod_touch_multitouch_on_touch(IPodTouchMultitouchState *s) {
     s->touch_down = true;
+    if(!s->firmware_running) {
+        return; // the driver isn't ready for frames yet
+    }
     s->press_latched = true; // make sure a quick tap still produces a touch start
     timer_mod(s->touch_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
 }
@@ -429,6 +533,8 @@ static void ipod_touch_multitouch_realize(SSIPeripheral *d, Error **errp)
     IPodTouchMultitouchState *s = IPOD_TOUCH_MULTITOUCH(d);
     memset(s->hbpp_atn_ack_response, 0, 2);
     s->touch_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, touch_timer_tick, s);
+    qdev_init_gpio_out_named(DEVICE(d), &s->irq, "irq", 1);
+    qdev_init_gpio_in_named(DEVICE(d), ipod_touch_multitouch_reset_line, "reset", 1);
 
     ensure_io_capacity(s, MT_IO_BUFFER_SIZE);
 }
@@ -438,6 +544,8 @@ static void ipod_touch_multitouch_class_init(ObjectClass *klass, void *data)
     SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
     k->realize = ipod_touch_multitouch_realize;
     k->transfer = ipod_touch_multitouch_transfer;
+    k->set_cs = ipod_touch_multitouch_set_cs;
+    k->cs_polarity = SSI_CS_LOW;
 }
 
 static const TypeInfo ipod_touch_multitouch_type_info = {
