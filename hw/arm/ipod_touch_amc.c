@@ -29,7 +29,8 @@
  * buffer per doorbell.
  *
  * The model decodes AAC with faad2 when QEMU is built with it; the stream's sample rate comes from the host control
- * block and its channel count from the first syntax element. The output is always stereo.
+ * block and its channel count from the first syntax element. The output has the stream's channels: userland plays a
+ * mono stream's output as mono.
  */
 #include "hw/arm/ipod_touch_amc.h"
 #include "hw/qdev-properties.h"
@@ -181,7 +182,7 @@ static bool ipod_touch_amc_decoder_open(IPodTouchAMCState *s)
     return true;
 }
 
-/* Decodes frames until one produces audio; returns the number of 16-bit stereo samples written to out. */
+/* Decodes frames until one produces audio; returns the number of 16-bit samples written to out. */
 static unsigned ipod_touch_amc_decode(IPodTouchAMCState *s, int16_t *out, unsigned max_samples)
 {
     while (s->input->len) {
@@ -201,13 +202,9 @@ static unsigned ipod_touch_amc_decode(IPodTouchAMCState *s, int16_t *out, unsign
             continue;
         }
 
-        unsigned frames = MIN(info.samples / info.channels, max_samples / 2);
-        for (unsigned f = 0; f < frames; f++) {
-            int16_t left = pcm[f * info.channels];
-            out[f * 2] = left;
-            out[f * 2 + 1] = info.channels > 1 ? pcm[f * info.channels + 1] : left;
-        }
-        return frames * 2;
+        unsigned samples = MIN(info.samples, max_samples);
+        memcpy(out, pcm, samples * sizeof(*out));
+        return samples;
     }
     return 0;
 }
