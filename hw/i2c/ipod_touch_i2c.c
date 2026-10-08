@@ -46,10 +46,13 @@ static int s5l8900_i2c_receive(IPodTouchI2CState *s)
 
 static int s5l8900_i2c_send(IPodTouchI2CState *s, uint8_t data)
 {
-    if (!(s->status & S5L8900_IICSTAT_LASTBIT)) {
+    // IICDS always latches the byte: outside a transfer it is the address of
+    // the next START. Dropping it while the NACK bit of a failed transfer is
+    // still set would send that START to the stale address.
+    s->data = data;
+    s->iicreg20 |= 0x100;
+    if (s->active && !(s->status & S5L8900_IICSTAT_LASTBIT)) {
         s->status |= S5L8900_IICCON_ACKEN;
-        s->data = data;
-        s->iicreg20 |= 0x100;
         // the last received bit is set when the device does not acknowledge the byte
         bool nack = i2c_send(s->bus, s->data) != 0;
         if (nack) {
