@@ -59,6 +59,9 @@
 // DMAC0 peripheral request lines (from the i2s0 "dma-channels" device tree property)
 #define DMAC0_I2S0_TX_DREQ 10
 #define DMAC0_I2S0_RX_DREQ 11
+// UART Rx request lines ("dma-channels" of uart0 and uart1, both on dmac0)
+#define DMAC0_UART0_RX_DREQ 7
+#define DMAC0_UART1_RX_DREQ 9
 
 // GPIO interrupts
 #define S5L8900_GPIO_G0_IRQ 0x21

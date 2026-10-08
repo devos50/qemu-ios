@@ -127,6 +127,24 @@ static const Exynos4210UartReg exynos4210_uart_regs[] = {
 #define UTRSTAT_Tx_BUFFER_EMPTY         0x2
 #define UTRSTAT_Rx_BUFFER_DATA_READY    0x1
 
+/*
+ * Apple S5L8720 variant: interrupt sources are latched in the upper bits of
+ * UTRSTAT, cleared by writing 1, and enabled by UCON bits (from the iOS 2
+ * AppleS5L8900XSerial driver). There is no UINTP/UINTSP/UINTM.
+ */
+#define S5L_UTRSTAT_STATUS      0x7
+#define S5L_UTRSTAT_RX          0x8
+#define S5L_UTRSTAT_RX_TIMEOUT  0x10
+#define S5L_UTRSTAT_TX          0x20
+#define S5L_UTRSTAT_INT_MASK    0x178
+#define S5L_UCON_RX_TIMEOUT_EN  0x80
+#define S5L_UCON_RX_TIMEOUT_INT 0x800
+#define S5L_UCON_RX_INT         0x1000
+#define S5L_UCON_TX_INT         0x2000
+#define S5L_UCON_MODEM_INT      0x4000
+#define S5L_UCON_AUTOBAUD_INT   0x10000
+#define S5L_RX_TIMEOUT_WORDS    8
+
 /* UART Error Status */
 #define UERSTAT_OVERRUN  0x1
 #define UERSTAT_PARITY   0x2
@@ -159,7 +177,7 @@ struct Exynos4210UartState {
     qemu_irq          dmairq;
 
     uint32_t channel;
-
+    bool s5l8720_irq;
 };
 
 
@@ -273,12 +291,86 @@ static void exynos4210_uart_update_dmabusy(Exynos4210UartState *s)
     bool rx_dma_enabled = (s->reg[I_(UCON)] & 0x03) == 0x02;
     uint32_t count = fifo_elements_number(&s->rx);
 
+    if (s->s5l8720_irq) {
+        /*
+         * On the S5L8720 this output is the Rx DMA request line of the
+         * PL080: asserted while there is received data to fetch.
+         */
+        bool data = (s->reg[I_(UFCON)] & UFCON_FIFO_ENABLE)
+                    ? count != 0
+                    : s->reg[I_(UTRSTAT)] & UTRSTAT_Rx_BUFFER_DATA_READY;
+        qemu_set_irq(s->dmairq, data);
+        return;
+    }
+
     if (rx_dma_enabled && !count) {
         qemu_irq_raise(s->dmairq);
         trace_exynos_uart_dmabusy(s->channel);
     } else {
         qemu_irq_lower(s->dmairq);
         trace_exynos_uart_dmaready(s->channel);
+    }
+}
+
+static uint32_t exynos4210_uart_s5l_enabled(Exynos4210UartState *s)
+{
+    uint32_t ucon = s->reg[I_(UCON)];
+    uint32_t enabled = 0;
+
+    if (ucon & S5L_UCON_RX_INT) {
+        enabled |= S5L_UTRSTAT_RX;
+    }
+    if (ucon & S5L_UCON_RX_TIMEOUT_INT) {
+        enabled |= S5L_UTRSTAT_RX_TIMEOUT;
+    }
+    if (ucon & S5L_UCON_TX_INT) {
+        enabled |= S5L_UTRSTAT_TX;
+    }
+    if (ucon & S5L_UCON_MODEM_INT) {
+        enabled |= 0x40;
+    }
+    if (ucon & S5L_UCON_AUTOBAUD_INT) {
+        enabled |= 0x100;
+    }
+    return enabled;
+}
+
+/*
+ * Moves the sources the Exynos logic collected in UINTSP into the S5L8720
+ * UTRSTAT bits. The Rx timeout, which the Exynos logic flags with UTRSTAT bit
+ * 3, is the S5L8720 Rx interrupt bit, so it is reported as RX_TIMEOUT instead.
+ * The transmitter is always empty (writes are synchronous), so the Tx
+ * interrupt is pending whenever it is enabled, like a level FIFO interrupt.
+ */
+static void exynos4210_uart_s5l_update_irq(Exynos4210UartState *s)
+{
+    uint32_t utrstat = s->reg[I_(UTRSTAT)];
+    uint32_t pending = utrstat & S5L_UTRSTAT_INT_MASK & ~UTRSTAT_Rx_TIMEOUT;
+    uint32_t sources = 0;
+
+    if (s->reg[I_(UINTSP)] & UINTSP_RXD) {
+        sources |= (utrstat & UTRSTAT_Rx_TIMEOUT) ? S5L_UTRSTAT_RX_TIMEOUT
+                                                  : S5L_UTRSTAT_RX;
+    }
+    if (utrstat & UTRSTAT_Tx_BUFFER_EMPTY) {
+        sources |= S5L_UTRSTAT_TX;
+    }
+    /*
+     * Only enabled sources latch: iBoot and the kernel debug console poll
+     * UTRSTAT with all interrupts disabled and never clear these bits.
+     */
+    pending |= sources & exynos4210_uart_s5l_enabled(s);
+    exynos4210_uart_update_dmabusy(s);
+    s->reg[I_(UINTSP)] = 0;
+    s->reg[I_(UINTP)] = 0;
+    s->reg[I_(UTRSTAT)] = (utrstat & S5L_UTRSTAT_STATUS) | pending;
+
+    if (pending & exynos4210_uart_s5l_enabled(s)) {
+        qemu_irq_raise(s->irq);
+        trace_exynos_uart_irq_raised(s->channel, pending);
+    } else {
+        qemu_irq_lower(s->irq);
+        trace_exynos_uart_irq_lowered(s->channel);
     }
 }
 
@@ -312,6 +404,11 @@ static void exynos4210_uart_update_irq(Exynos4210UartState *s)
         s->reg[I_(UINTSP)] |= UINTSP_RXD;
     }
 
+    if (s->s5l8720_irq) {
+        exynos4210_uart_s5l_update_irq(s);
+        return;
+    }
+
     s->reg[I_(UINTP)] = s->reg[I_(UINTSP)] & ~s->reg[I_(UINTM)];
 
     if (s->reg[I_(UINTP)]) {
@@ -331,7 +428,7 @@ static void exynos4210_uart_timeout_int(void *opaque)
                                  s->reg[I_(UINTSP)]);
 
     if ((s->reg[I_(UTRSTAT)] & UTRSTAT_Rx_BUFFER_DATA_READY) ||
-        (s->reg[I_(UCON)] & (1 << 11))) {
+        (!s->s5l8720_irq && (s->reg[I_(UCON)] & (1 << 11)))) {
         s->reg[I_(UINTSP)] |= UINTSP_RXD;
         s->reg[I_(UTRSTAT)] |= UTRSTAT_Rx_TIMEOUT;
         exynos4210_uart_update_dmabusy(s);
@@ -388,7 +485,9 @@ static void exynos4210_uart_update_parameters(Exynos4210UartState *s)
 static void exynos4210_uart_rx_timeout_set(Exynos4210UartState *s)
 {
     if (s->reg[I_(UCON)] & 0x80) {
-        uint32_t timeout = ((s->reg[I_(UCON)] >> 12) & 0x0f) * s->wordtime;
+        uint32_t words = s->s5l8720_irq ? S5L_RX_TIMEOUT_WORDS
+                                        : (s->reg[I_(UCON)] >> 12) & 0x0f;
+        uint32_t timeout = words * s->wordtime;
 
         timer_mod(s->fifo_timeout_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + timeout);
@@ -450,7 +549,10 @@ static void exynos4210_uart_write(void *opaque, hwaddr offset,
         exynos4210_uart_update_irq(s);
         break;
     case UTRSTAT:
-        if (val & UTRSTAT_Rx_TIMEOUT) {
+        if (s->s5l8720_irq) {
+            s->reg[I_(UTRSTAT)] &= ~(val & S5L_UTRSTAT_INT_MASK);
+            exynos4210_uart_update_irq(s);
+        } else if (val & UTRSTAT_Rx_TIMEOUT) {
             s->reg[I_(UTRSTAT)] &= ~UTRSTAT_Rx_TIMEOUT;
         }
         break;
@@ -469,6 +571,11 @@ static void exynos4210_uart_write(void *opaque, hwaddr offset,
         exynos4210_uart_update_irq(s);
         break;
     case UCON:
+        s->reg[I_(UCON)] = val;
+        if (s->s5l8720_irq) {
+            exynos4210_uart_update_irq(s);
+        }
+        break;
     case UMCON:
     default:
         s->reg[I_(offset)] = val;
@@ -709,6 +816,7 @@ static Property exynos4210_uart_properties[] = {
     DEFINE_PROP_UINT32("channel", Exynos4210UartState, channel, 0),
     DEFINE_PROP_UINT32("rx-size", Exynos4210UartState, rx.size, 16),
     DEFINE_PROP_UINT32("tx-size", Exynos4210UartState, tx.size, 16),
+    DEFINE_PROP_BOOL("s5l8720-irq", Exynos4210UartState, s5l8720_irq, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

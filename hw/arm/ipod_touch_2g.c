@@ -386,24 +386,21 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_realize(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_SDIO_IRQ));
 
-    dev = exynos4210_uart_create(UART0_MEM_BASE, 256, 0, serial_hd(0), nms->irq[0][24]);
-    if (!dev) {
-        hw_error("Failed to create UART0 device!");
-    }
-
-    dev = exynos4210_uart_create(UART1_MEM_BASE, 256, 1, serial_hd(1), nms->irq[0][25]);
-    if (!dev) {
-        hw_error("Failed to create UART0 device!");
-    }
-
-    dev = exynos4210_uart_create(UART2_MEM_BASE, 256, 2, serial_hd(2), nms->irq[0][26]);
-    if (!dev) {
-        hw_error("Failed to create UART0 device!");
-    }
-
-    dev = exynos4210_uart_create(UART3_MEM_BASE, 256, 3, serial_hd(3), nms->irq[0][27]);
-    if (!dev) {
-        hw_error("Failed to create UART0 device!");
+    // init the UARTs: Samsung UARTs like the Exynos one, but with the S5L8720 interrupt registers
+    const hwaddr uart_bases[] = { UART0_MEM_BASE, UART1_MEM_BASE, UART2_MEM_BASE, UART3_MEM_BASE };
+    DeviceState *uarts[ARRAY_SIZE(uart_bases)];
+    for (int i = 0; i < ARRAY_SIZE(uart_bases); i++) {
+        dev = qdev_new("exynos4210.uart");
+        qdev_prop_set_chr(dev, "chardev", serial_hd(i));
+        qdev_prop_set_uint32(dev, "channel", i);
+        qdev_prop_set_uint32(dev, "rx-size", 256);
+        qdev_prop_set_uint32(dev, "tx-size", 256);
+        qdev_prop_set_bit(dev, "s5l8720-irq", true);
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_fatal);
+        sysbus_mmio_map(busdev, 0, uart_bases[i]);
+        sysbus_connect_irq(busdev, 0, nms->irq[0][24 + i]);
+        uarts[i] = dev;
     }
 
     // dev = exynos4210_uart_create(UART4_MEM_BASE, 256, 4, serial_hd(4), nms->irq[0][28]);
@@ -487,11 +484,14 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = qdev_new("pl080");
     PL080State *pl080_1 = PL080(dev);
     object_property_set_link(OBJECT(dev), "downstream", OBJECT(sysmem), &error_fatal);
-    qdev_prop_set_uint32(dev, "dreq-mask", (1 << DMAC0_I2S0_TX_DREQ) | (1 << DMAC0_I2S0_RX_DREQ));
+    qdev_prop_set_uint32(dev, "dreq-mask", (1 << DMAC0_I2S0_TX_DREQ) | (1 << DMAC0_I2S0_RX_DREQ) |
+                         (1 << DMAC0_UART0_RX_DREQ) | (1 << DMAC0_UART1_RX_DREQ));
     memory_region_add_subregion(sysmem, DMAC0_MEM_BASE, &pl080_1->iomem1);
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_DMAC0_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(uarts[0]), 1, qdev_get_gpio_in_named(DEVICE(pl080_1), "dreq", DMAC0_UART0_RX_DREQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(uarts[1]), 1, qdev_get_gpio_in_named(DEVICE(pl080_1), "dreq", DMAC0_UART1_RX_DREQ));
 
     dev = qdev_new("pl080");
     PL080State *pl080_2 = PL080(dev);
