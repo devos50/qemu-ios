@@ -18,8 +18,10 @@ static uint64_t ipod_touch_mbx1_read(void *opaque, hwaddr addr, unsigned size)
             return 0x40;
         case 0xf00:
             return (2 << 0x10) | (1 << 0x18); // seems to be some kind of identifier
-        case 0x1020:
-            return s->addr != 0x0 ? s->addr : 0x10000;
+        case MBX_MMU_CTRL:
+            // The MMU state follows the enable bit at once, and invalidations finish at once.
+            return (s->mmu_ctrl & ~(MBX_MMU_CTRL_ENABLED | MBX_MMU_CTRL_INVALIDATE_BUSY)) |
+                   ((s->mmu_ctrl & MBX_MMU_CTRL_ENABLE) ? MBX_MMU_CTRL_ENABLED : 0);
         default:
             break;
     }
@@ -33,9 +35,9 @@ static void ipod_touch_mbx1_write(void *opaque, hwaddr addr, uint64_t val, unsig
 
     switch(addr)
     {
-	case 0x1020:
-	    s->addr = val;
-	    break;
+        case MBX_MMU_CTRL:
+            s->mmu_ctrl = val & ~MBX_MMU_CTRL_INVALIDATE;
+            break;
     }
 }
 
