@@ -1,5 +1,6 @@
 #include "hw/arm/ipod_touch_aes.h"
 #include "qemu/log.h"
+#include "trace.h"
 
 /*
  * We don't have the GID key, so GID operations are answered from a table of the known image keys of iPhone OS 2.1.1
@@ -94,102 +95,121 @@ static bool ipod_touch_aes_gid_decrypt(const uint8_t *in, uint8_t *out, uint32_t
 
 static uint64_t ipod_touch_aes_read(void *opaque, hwaddr offset, unsigned size)
 {
-    struct IPodTouchAESState *aesop = (struct IPodTouchAESState *)opaque;
+    IPodTouchAESState *s = IPOD_TOUCH_AES(opaque);
 
     switch(offset) {
         case AES_STATUS:
-            return aesop->status;
-      default:
-            //fprintf(stderr, "%s: UNMAPPED AES_ADDR @ offset 0x%08x\n", __FUNCTION__, offset);
+            return s->status;
+        case AES_MODE:
+            // iBoot sets the fields of the mode register one at a time with read-modify-write.
+            return s->mode;
+        default:
             break;
     }
 
     return 0;
 }
 
+/* Merges a register write of `size` bytes at `offset` into the word array `words`, which starts at `base`. */
+static void ipod_touch_aes_write_words(uint32_t *words, hwaddr base, hwaddr offset, uint64_t value, unsigned size)
+{
+    uint32_t idx = (offset - base) / 4;
+    uint32_t shift = (offset & 3) * 8;
+    uint32_t mask = (size >= 4) ? 0xffffffff : ((1u << (size * 8)) - 1) << shift;
+
+    words[idx] = (words[idx] & ~mask) | (((uint32_t)value << shift) & mask);
+}
+
+static void ipod_touch_aes_run(IPodTouchAESState *s)
+{
+    bool encrypt = s->mode & AES_MODE_ENCRYPT;
+    uint32_t key_size = (s->mode >> 4) & 3;
+    uint32_t key_bits = key_size == AES256 ? 256 : (key_size == AES192 ? 192 : 128);
+    uint32_t src_addr = encrypt ? s->plain_addr : s->cipher_addr;
+    uint32_t dst_addr = encrypt ? s->cipher_addr : s->plain_addr;
+    uint8_t *in = g_malloc(s->size);
+    uint8_t *out = g_malloc(s->size);
+    AES_KEY key;
+
+    trace_ipod_touch_aes_op(s->mode, s->keytype, s->cipher_addr, s->plain_addr, s->size);
+    cpu_physical_memory_read(src_addr, in, s->size);
+
+    if(s->keytype == AESGID) {
+        if(encrypt || !ipod_touch_aes_gid_decrypt(in, out, s->size)) {
+            qemu_log_mask(LOG_UNIMP, "%s: no known GID %s result for this input (size %d)\n", __func__,
+                          encrypt ? "encryption" : "decryption", s->size);
+            memset(out, 0, s->size);
+        }
+    }
+    else {
+        if(s->keytype == AESUID) {
+            key_bits = sizeof(key_uid) * 8;
+            if(encrypt) {
+                AES_set_encrypt_key(key_uid, key_bits, &key);
+            }
+            else {
+                AES_set_decrypt_key(key_uid, key_bits, &key);
+            }
+        }
+        else {
+            // A key of n bits occupies the last n / 32 key words.
+            const uint8_t *custom = (const uint8_t *)&s->custkey[8 - key_bits / 32];
+            if(encrypt) {
+                AES_set_encrypt_key(custom, key_bits, &key);
+            }
+            else {
+                AES_set_decrypt_key(custom, key_bits, &key);
+            }
+        }
+
+        // The engine only processes whole blocks. IMG3 payloads leave the trailing partial block unencrypted,
+        // so it has to come out untouched rather than being decrypted as a zero-padded block.
+        uint32_t blocks_size = s->size & ~(AES_BLOCK_SIZE - 1);
+        AES_cbc_encrypt(in, out, blocks_size, &key, (uint8_t *)s->ivec, encrypt ? AES_ENCRYPT : AES_DECRYPT);
+        memcpy(out + blocks_size, in + blocks_size, s->size - blocks_size);
+    }
+
+    cpu_physical_memory_write(dst_addr, out, s->size);
+
+    memset(s->custkey, 0, sizeof(s->custkey));
+    memset(s->ivec, 0, sizeof(s->ivec));
+    g_free(in);
+    g_free(out);
+    s->status = 0xf;
+}
+
 static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
 {
-    struct IPodTouchAESState *aesop = (struct IPodTouchAESState *)opaque;
+    IPodTouchAESState *s = IPOD_TOUCH_AES(opaque);
 
-    uint8_t *inbuf;
-    uint8_t *buf;
-
-    // fprintf(stderr, "%s: offset 0x%08x value 0x%08x\n", __FUNCTION__, offset, value);
+    trace_ipod_touch_aes_write(offset, value);
 
     switch(offset) {
         case AES_GO:
-            inbuf = (uint8_t *)malloc(aesop->insize);
-            cpu_physical_memory_read((aesop->inaddr), inbuf, aesop->insize);
-
-            switch(aesop->keytype) {
-                    case AESGID:
-                        break;         
-                    case AESUID:
-                        AES_set_decrypt_key(key_uid, sizeof(key_uid) * 8, &aesop->decryptKey);
-                        break;
-                    case AESCustom:
-                        AES_set_decrypt_key((uint8_t *)(&aesop->custkey[4]), 0x10 * 8, &aesop->decryptKey);
-                        break;
-            }
-
-            buf = (uint8_t *) malloc(aesop->insize);
-
-            if(aesop->keytype == AESGID) {
-                if(!ipod_touch_aes_gid_decrypt(inbuf, buf, aesop->insize)) {
-                    qemu_log_mask(LOG_UNIMP, "%s: no known GID key for this KBAG (size %d)\n", __func__, aesop->insize);
-                    memset(buf, 0, aesop->insize);
-                }
-            }
-            else {
-                // The engine only processes whole blocks. IMG3 payloads leave the trailing partial block unencrypted,
-                // so it has to come out untouched rather than being decrypted as a zero-padded block.
-                uint32_t blocks_size = aesop->insize & ~(AES_BLOCK_SIZE - 1);
-                AES_cbc_encrypt(inbuf, buf, blocks_size, &aesop->decryptKey, (uint8_t *)aesop->ivec, AES_DECRYPT);
-                memcpy(buf + blocks_size, inbuf + blocks_size, aesop->insize - blocks_size);
-            }
-
-            cpu_physical_memory_write((aesop->outaddr), buf, aesop->insize);
-
-            memset(aesop->custkey, 0, 0x20);
-            memset(aesop->ivec, 0, 0x10);
-            free(inbuf);
-            free(buf);
-            aesop->outsize = aesop->insize;
-            aesop->status = 0xf;
+            ipod_touch_aes_run(s);
             break;
-        case AES_KEYLEN:
-            aesop->operation = value;
-            aesop->keylen = value;
+        case AES_MODE:
+            s->mode = value;
             break;
-        case AES_INADDR:
-            aesop->inaddr = value;
+        case AES_SIZE:
+            s->size = value;
             break;
-        case AES_INSIZE:
-            aesop->insize = value;
+        case AES_CIPHER_ADDR:
+            s->cipher_addr = value;
             break;
-        case AES_OUTSIZE:
-            aesop->outsize = value;
-            break;
-        case AES_OUTADDR:
-            aesop->outaddr = value;
+        case AES_PLAIN_ADDR:
+            s->plain_addr = value;
             break;
         case AES_TYPE:
-            aesop->keytype = value;
+            s->keytype = value;
             break;
         case AES_KEY_REG ... ((AES_KEY_REG + AES_KEYSIZE) - 1):
-            {
-                uint8_t idx = (offset - AES_KEY_REG) / 4;
-                aesop->custkey[idx] |= value;
-                break;
-            }
+            ipod_touch_aes_write_words(s->custkey, AES_KEY_REG, offset, value, size);
+            break;
         case AES_IV_REG ... ((AES_IV_REG + AES_IVSIZE) -1 ):
-            {
-                uint8_t idx = (offset - AES_IV_REG) / 4;
-                aesop->ivec[idx] |= value;
-                break;
-            }
+            ipod_touch_aes_write_words(s->ivec, AES_IV_REG, offset, value, size);
+            break;
         default:
-            //fprintf(stderr, "%s: UNMAPPED AES_ADDR @ offset 0x%08x - 0x%08x\n", __FUNCTION__, offset, value);
             break;
     }
 }
@@ -214,8 +234,9 @@ static void ipod_touch_aes_reset(DeviceState *dev)
 {
     IPodTouchAESState *s = IPOD_TOUCH_AES(dev);
 
-    memset(&s->custkey, 0, 8 * sizeof(uint32_t));
-    memset(&s->ivec, 0, 4 * sizeof(uint32_t));
+    memset(s->custkey, 0, sizeof(s->custkey));
+    memset(s->ivec, 0, sizeof(s->ivec));
+    s->mode = 0;
 }
 
 static void ipod_touch_aes_class_init(ObjectClass *klass, void *data)
