@@ -21,7 +21,6 @@ typedef struct IPodTouchMBXState {
     MemoryRegion iomem1;
     MemoryRegion iomem2;
     uint32_t mmu_ctrl;
-    bool alreadypatched;
 } IPodTouchMBXState;
 
 #endif

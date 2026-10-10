@@ -16,6 +16,7 @@
 #include "qemu/error-report.h"
 #include "chardev/char.h"
 #include "hw/qdev-properties-system.h"
+#include "net/net.h"
 
 #define VMSTATE_IT2G_CPREG(name) \
         VMSTATE_UINT64(IT2G_CPREG_VAR_NAME(name), IPodTouchMachineState)
@@ -198,6 +199,19 @@ static void ipod_touch_set_usb_chardev(Object *obj, const char *value, Error **e
     nms->usb_chardev = g_strdup(value);
 }
 
+static char *ipod_touch_get_netdev(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return g_strdup(nms->netdev);
+}
+
+static void ipod_touch_set_netdev(Object *obj, const char *value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    g_free(nms->netdev);
+    nms->netdev = g_strdup(value);
+}
+
 static bool ipod_touch_get_force_dfu(Object *obj, Error **errp)
 {
     IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
@@ -223,6 +237,9 @@ static void ipod_touch_instance_init(Object *obj)
 
     object_property_add_str(obj, "usb-chardev", ipod_touch_get_usb_chardev, ipod_touch_set_usb_chardev);
     object_property_set_description(obj, "usb-chardev", "ID of the chardev that carries the USB link to the host");
+
+    object_property_add_str(obj, "netdev", ipod_touch_get_netdev, ipod_touch_set_netdev);
+    object_property_set_description(obj, "netdev", "ID of the network backend of the Wi-Fi card");
 
     object_property_add_bool(obj, "dfu", ipod_touch_get_force_dfu, ipod_touch_set_force_dfu);
     object_property_set_description(obj, "dfu", "Hold the force-DFU GPIO so the bootrom enters DFU mode");
@@ -377,10 +394,21 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->gpio_state = gpio_state;
     memory_region_add_subregion(sysmem, GPIO_MEM_BASE, &gpio_state->iomem);
 
-    // init SDIO
+    // init SDIO, with the Wi-Fi card on the netdev= backend or on the first -nic
     dev = qdev_new("ipodtouch.sdio");
     IPodTouchSDIOState *sdio_state = IPOD_TOUCH_SDIO(dev);
     nms->sdio_state = sdio_state;
+    if (nms->netdev) {
+        NetClientState *netdev = qemu_find_netdev(nms->netdev);
+        if (!netdev) {
+            error_report("netdev '%s' not found", nms->netdev);
+            exit(1);
+        }
+        qdev_prop_set_netdev(dev, "netdev", netdev);
+    } else if (nd_table[0].used) {
+        qemu_check_nic_model(&nd_table[0], "bcm4325");
+        qdev_set_nic_properties(dev, &nd_table[0]);
+    }
     memory_region_add_subregion(sysmem, SDIO_MEM_BASE, &sdio_state->iomem);
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize(busdev, &error_fatal);

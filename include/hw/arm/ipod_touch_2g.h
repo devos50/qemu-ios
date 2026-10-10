@@ -195,6 +195,7 @@ typedef struct {
 	char nor_path[1024];
 	char nand_path[1024];
 	char *usb_chardev;
+	char *netdev;
 	bool force_dfu;
 	IT2G_CPREG_VAR_DEF(REG0);
 	IT2G_CPREG_VAR_DEF(REG1);
