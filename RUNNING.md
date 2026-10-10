@@ -77,6 +77,13 @@ We are now ready to run the emulator from the build directory with the following
 ./arm-softmmu/qemu-system-arm -M iPod-Touch,bootrom=<path to bootrom>,nand=<path to NAND directory>,nor=<path to NOR directory> -serial mon:stdio -cpu max -m 2G -d unimp
 ```
 
+### Sensors
+
+Press R in the emulator window to turn the device a quarter turn (portrait, landscape, upside down, landscape); apps that support landscape, such as Safari, rotate with it.
+The accelerometer starts lying flat, which keeps the current orientation, as on a real device.
+From the QEMU monitor you can also set the acceleration in mg, e.g. `qom-set /machine/accelerometer x 1000`, and the ambient light in lux, e.g. `qom-set /machine/lightsensor lux 10000`.
+With auto-brightness on, iOS 2 brightens the screen right away when the light increases, but only dims it when the device wakes up.
+
 ### Wi-Fi
 
 The emulator models the BCM4325 Wi-Fi chip. It shows one open network, `QEMU`, which you can join from Settings > Wi-Fi.

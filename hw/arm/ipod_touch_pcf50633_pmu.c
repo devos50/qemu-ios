@@ -2,6 +2,12 @@
 #include "hw/arm/ipod_touch_lcd.h"
 #include "trace.h"
 
+static void pcf50633_update_backlight(Pcf50633State *s)
+{
+    uint32_t level = MIN(s->backlight_level, PMU_BACKLIGHT_LEVEL_MAX);
+    lcd_changebrightness((s->backlight_ctrl & PMU_BACKLIGHT_CTRL_ON) ? level * 255 / PMU_BACKLIGHT_LEVEL_MAX : 0);
+}
+
 // The first byte of a write sets the register pointer, further bytes write to
 // the register it points at. Reads start at the register pointer. Both
 // advance the pointer.
@@ -40,6 +46,12 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
         case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
             res = s->rtc_offset[s->cmd - PMU_RTC_OFFSET];
             break;
+        case PMU_BACKLIGHT_LEVEL:
+            res = s->backlight_level;
+            break;
+        case PMU_BACKLIGHT_CTRL:
+            res = s->backlight_ctrl;
+            break;
         case 0x69:
             res = 0; // boot count error/panic
             break;
@@ -68,8 +80,13 @@ static int pcf50633_send(I2CSlave *i2c, uint8_t data)
     }
 
     switch(s->cmd) {
-        case PMU_DSBL1:
-            lcd_changebrightness(data);
+        case PMU_BACKLIGHT_LEVEL:
+            s->backlight_level = data;
+            pcf50633_update_backlight(s);
+            break;
+        case PMU_BACKLIGHT_CTRL:
+            s->backlight_ctrl = data;
+            pcf50633_update_backlight(s);
             break;
         case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
             s->rtc_offset[s->cmd - PMU_RTC_OFFSET] = data;
@@ -82,7 +99,11 @@ static int pcf50633_send(I2CSlave *i2c, uint8_t data)
 
 static void pcf50633_init(Object *obj)
 {
+    Pcf50633State *s = PCF50633(obj);
 
+    // full brightness until the bootloader programs the backlight
+    s->backlight_level = PMU_BACKLIGHT_LEVEL_MAX;
+    s->backlight_ctrl = PMU_BACKLIGHT_CTRL_ON;
 }
 
 static void pcf50633_class_init(ObjectClass *klass, void *data)

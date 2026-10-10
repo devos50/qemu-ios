@@ -16,7 +16,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(Pcf50633State, PCF50633)
 #define PMU_STATUS_A 0x04
 #define PMU_STATUS_A_USB_PRESENT (1 << 3)
 
-#define PMU_DSBL1 0x30	
+// Backlight of the D1759 (AppleD1759PMUBacklight): a level from 1 to 0xF6, and a control register whose bit 0 switches
+// the backlight on (bit 1 is set while the driver fades the level, bit 2 is always set).
+#define PMU_BACKLIGHT_LEVEL 0x30
+#define PMU_BACKLIGHT_CTRL  0x31
+#define PMU_BACKLIGHT_CTRL_ON 0x01
+#define PMU_BACKLIGHT_LEVEL_MAX 0xF6
 #define PMU_MBCS1 0x4B
 #define PMU_ADCC1 0x57
 
@@ -32,6 +37,8 @@ typedef struct Pcf50633State {
 	bool usb_present;
 	uint32_t rtc_count;
 	uint8_t rtc_offset[4];
+	uint8_t backlight_level;
+	uint8_t backlight_ctrl;
 } Pcf50633State;
 
 #endif

@@ -38,6 +38,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(LIS302DLState, LIS302DL)
 // Sensitivity in the +/- 2g range (typical): 18 mg per LSB
 #define ACCEL_MG_PER_LSB 18
 
+// Output noise of a real sensor at rest, in LSB either way. AppleLIS302DL only reports a sample when it differs from
+// the previous one, so a perfectly still sensor would produce a single event.
+#define ACCEL_NOISE_LSB 1
+
 typedef struct LIS302DLState {
 	I2CSlave i2c;
 	uint8_t reg;         // current register pointer
@@ -47,6 +51,10 @@ typedef struct LIS302DLState {
 	uint8_t ctrl_reg2;
 	uint8_t ctrl_reg3;
 	int32_t accel_mg[3]; // acceleration along the X, Y and Z axes, in mg
+	uint32_t noise_seed; // state of the noise generator
+	int orientation;     // index of the orientation lis302dl_rotate last selected, -1 for lying flat
 } LIS302DLState;
+
+const char *lis302dl_rotate(LIS302DLState *s);
 
 #endif

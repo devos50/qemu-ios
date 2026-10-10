@@ -320,6 +320,12 @@ static void ipod_touch_key_event(void *opaque, int keycode)
         info_report("iPod Touch: host audio %s", muted ? "muted" : "unmuted");
         return;
     }
+    else if(keycode == KEY_R_DOWN) {
+        // rotate the device by tilting the accelerometer
+        IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(qdev_get_machine());
+        info_report("iPod Touch: rotated to %s", lis302dl_rotate(nms->accelerometer));
+        return;
+    }
     else return;
     
     s->sysic->gpio_int_status[gpio_group] |= (1 << gpio_selector);
@@ -568,6 +574,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     // init the accelerometer
     I2CSlave *accelerometer = i2c_slave_new("lis302dl", 0x1D);
     object_property_add_child(OBJECT(machine), "accelerometer", OBJECT(accelerometer));
+    nms->accelerometer = LIS302DL(accelerometer);
     i2c_slave_realize_and_unref(accelerometer, i2c_state->bus, &error_fatal);
 
     // init the audio codec, which plays what the I2S controller sends

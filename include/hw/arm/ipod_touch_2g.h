@@ -32,6 +32,7 @@
 #include "hw/arm/ipod_touch_i2s.h"
 #include "hw/arm/ipod_touch_cs42l58.h"
 #include "hw/arm/ipod_touch_amc.h"
+#include "hw/arm/ipod_touch_lis302dl.h"
 
 #define TYPE_IPOD_TOUCH "iPod-Touch"
 
@@ -91,6 +92,9 @@
 
 #define KEY_M         50
 #define KEY_M_DOWN    KEY_M
+
+#define KEY_R         19
+#define KEY_R_DOWN    KEY_R
 
 const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L8900_GPIO_G2_IRQ, S5L8900_GPIO_G3_IRQ, S5L8900_GPIO_G4_IRQ };
 
@@ -196,6 +200,7 @@ typedef struct {
 	char nand_path[1024];
 	char *usb_chardev;
 	char *netdev;
+	LIS302DLState *accelerometer;
 	bool force_dfu;
 	IT2G_CPREG_VAR_DEF(REG0);
 	IT2G_CPREG_VAR_DEF(REG1);

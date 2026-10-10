@@ -5,6 +5,13 @@
 
 static const char *axis_names[3] = { "x", "y", "z" };
 
+// Returns noise in [-ACCEL_NOISE_LSB, ACCEL_NOISE_LSB], from a deterministic linear congruential generator.
+static int32_t lis302dl_noise(LIS302DLState *s)
+{
+    s->noise_seed = s->noise_seed * 1103515245 + 12345;
+    return (int32_t)((s->noise_seed >> 16) % (2 * ACCEL_NOISE_LSB + 1)) - ACCEL_NOISE_LSB;
+}
+
 // Converts an acceleration in mg to the signed 8-bit output register value.
 static uint8_t lis302dl_output(LIS302DLState *s, int axis)
 {
@@ -15,7 +22,7 @@ static uint8_t lis302dl_output(LIS302DLState *s, int axis)
         return 0;
     }
 
-    val = s->accel_mg[axis] / ACCEL_MG_PER_LSB;
+    val = s->accel_mg[axis] / ACCEL_MG_PER_LSB + lis302dl_noise(s);
     return (uint8_t)(int8_t)MAX(INT8_MIN, MIN(INT8_MAX, val));
 }
 
@@ -102,6 +109,27 @@ static int lis302dl_send(I2CSlave *i2c, uint8_t data)
     return 0;
 }
 
+// Turns the device a quarter turn counter-clockwise, starting from upright portrait; returns the new
+// orientation. iOS keeps its orientation while the device lies flat, which is where it starts.
+const char *lis302dl_rotate(LIS302DLState *s)
+{
+    static const struct {
+        int32_t x, y;
+        const char *name;
+    } orientations[] = {
+        { 0, -1000, "portrait" },
+        { 1000, 0, "landscape, home button right" },
+        { 0, 1000, "portrait upside down" },
+        { -1000, 0, "landscape, home button left" },
+    };
+
+    s->orientation = (s->orientation + 1) % ARRAY_SIZE(orientations);
+    s->accel_mg[0] = orientations[s->orientation].x;
+    s->accel_mg[1] = orientations[s->orientation].y;
+    s->accel_mg[2] = 0;
+    return orientations[s->orientation].name;
+}
+
 // getter and setter of the acceleration properties
 static void lis302dl_visit_accel(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
 {
@@ -118,6 +146,7 @@ static void lis302dl_reset(DeviceState *dev)
     s->ctrl_reg1 = ACCEL_CTRL1_RESET_VALUE;
     s->ctrl_reg2 = 0;
     s->ctrl_reg3 = 0;
+    s->noise_seed = 1;
 }
 
 static void lis302dl_init(Object *obj)
@@ -125,8 +154,9 @@ static void lis302dl_init(Object *obj)
     LIS302DLState *s = LIS302DL(obj);
 
     // By default, the device is lying flat and face-up so gravity only acts on the Z axis.
-    // Note that the kernel negates X and Z (device tree "orientation" = 5), so +Z here becomes -1g for iOS
-    // and setting X to +/- 1000 (with Z = 0) corresponds to the landscape orientations.
+    // Note that the kernel negates X and Z (device tree "orientation" = 5), so +Z here becomes -1g for iOS.
+    // Held upright in portrait, Y is -1000; setting X to +/- 1000 (with Y and Z = 0) gives the landscape orientations.
+    s->orientation = -1;
     s->accel_mg[0] = 0;
     s->accel_mg[1] = 0;
     s->accel_mg[2] = 1000;
