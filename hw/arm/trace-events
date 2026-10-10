@@ -111,3 +111,15 @@ ipod_touch_bcm4325_event(uint32_t type, uint32_t status, uint16_t flags) "event 
 ipod_touch_mipi_dsi_read(uint64_t addr, uint32_t val) "0x%02" PRIx64 " -> 0x%08x"
 ipod_touch_mipi_dsi_write(uint64_t addr, uint64_t val) "0x%02" PRIx64 " <- 0x%08" PRIx64
 ipod_touch_mipi_dsi_packet(uint8_t type, uint8_t data0, uint8_t data1) "type 0x%02x data 0x%02x 0x%02x"
+
+# ipod_touch_mbx.c
+ipod_touch_mbx_read(uint64_t addr, uint64_t val) "0x%04" PRIx64 " -> 0x%08" PRIx64
+ipod_touch_mbx_write(uint64_t addr, uint64_t val) "0x%04" PRIx64 " <- 0x%08" PRIx64
+ipod_touch_mbx_irq(uint32_t status, uint32_t mask, int level) "status 0x%08x mask 0x%08x level %d"
+ipod_touch_mbx_mmu_fault(uint32_t va) "no mapping for GPU address 0x%08x"
+ipod_touch_mbx_2d_block(uint32_t header, uint32_t len) "block 0x%08x, %u words"
+ipod_touch_mbx_2d_blit(uint32_t rop, unsigned rot, int x0, int y0, int x1, int y1, uint32_t blend) "rop 0x%04x rot %u (%d,%d)-(%d,%d) blend 0x%08x"
+ipod_touch_mbx_2d_surfaces(uint32_t dst, uint32_t dst_fmt, int32_t dst_stride, uint32_t src, uint32_t src_fmt, int32_t src_stride, uint32_t sx, uint32_t sy) "dst 0x%08x fmt %u stride %d, src/colour 0x%08x fmt %u stride %d at (%u,%u)"
+ipod_touch_mbx_2d_flush(void) "flush"
+ipod_touch_mbx_3d_start(void) "3D render started"
+ipod_touch_mbx_ta_write(uint64_t offset, uint64_t val) "TA port 0x%06" PRIx64 " <- 0x%08" PRIx64

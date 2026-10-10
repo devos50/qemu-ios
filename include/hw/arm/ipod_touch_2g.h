@@ -56,6 +56,7 @@
 #define S5L8720_FMSS_IRQ 0x36
 #define S5L8720_SPI4_IRQ 0x37
 #define S5L8720_WDT_IRQ 0x33
+#define S5L8720_MBX_IRQ 0x35
 
 // DMAC0 peripheral request lines (from the i2s0 "dma-channels" device tree property)
 #define DMAC0_I2S0_TX_DREQ 10
