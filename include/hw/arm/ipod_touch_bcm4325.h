@@ -205,7 +205,6 @@ typedef struct BCM4325State {
     GHashTable *iovars; // set values by name
     MACAddr bssid;
     bool associated;
-    uint32_t scan_pending; // ioctl that started the scan, or 0
     QEMUTimer *scan_timer;
     QEMUTimer *join_timer;
     bool join_ok;

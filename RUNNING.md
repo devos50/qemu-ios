@@ -21,7 +21,7 @@ Make sure you have the required libraries installed to compile QEMU:
 
 ```
 # On MacOS
-brew install glib ninja pixman pkg-config sdl2
+brew install glib libslirp ninja pixman pkg-config sdl2
 
 # On Linux (Ubuntu)
 sudo apt install make ninja-build pkg-config libssl-dev libsdl2-dev libpixman-1-dev libpixman-1-0 libglib2.0-dev
@@ -43,7 +43,7 @@ cd build
 ../configure --target-list=arm-softmmu --extra-cflags=-I/usr/local/opt/openssl@3/include --extra-ldflags='-L/usr/local/opt/openssl@3/lib -lcrypto'
 
 # On Apple Silicon Macs
-../configure --enable-sdl --target-list=arm-softmmu --disable-capstone --disable-pie --disable-slirp --extra-cflags=-I/opt/homebrew/opt/openssl@3/include --extra-ldflags='-L/opt/homebrew/opt/openssl@3/lib -lcrypto'
+../configure --enable-sdl --target-list=arm-softmmu --disable-capstone --disable-pie --extra-cflags=-I/opt/homebrew/opt/openssl@3/include --extra-ldflags='-L/opt/homebrew/opt/openssl@3/lib -lcrypto'
 
 # On Linux
 ../configure --enable-sdl --disable-cocoa --target-list=arm-softmmu --disable-capstone --disable-slirp --extra-cflags=-I/usr/include/openssl --extra-ldflags='-lcrypto' --disable-werror --enable-pie
@@ -76,5 +76,26 @@ We are now ready to run the emulator from the build directory with the following
 ```
 ./arm-softmmu/qemu-system-arm -M iPod-Touch,bootrom=<path to bootrom>,nand=<path to NAND directory>,nor=<path to NOR directory> -serial mon:stdio -cpu max -m 2G -d unimp
 ```
+
+### Wi-Fi
+
+The emulator models the BCM4325 Wi-Fi chip. It shows one open network, `QEMU`, which you can join from Settings > Wi-Fi.
+The network traffic goes to a QEMU network backend. With QEMU's user-mode networking the device gets an address by DHCP (10.0.2.15) and can reach the internet through the host.
+User-mode networking needs libslirp: QEMU builds it in when the library is installed and `--disable-slirp` is not passed to `configure` (on Linux, install `libslirp-dev` or `libslirp` and drop `--disable-slirp` from the commands above).
+
+Without further options, QEMU connects the Wi-Fi chip to user-mode networking. To choose the backend yourself, add either
+
+```
+-nic user,model=bcm4325
+```
+
+or a netdev and the `netdev` machine option:
+
+```
+-netdev user,id=net0 -M iPod-Touch,bootrom=...,nand=...,nor=...,netdev=net0
+```
+
+Use `-nic none` to run without a network, and `-nic user,model=bcm4325,mac=<address>` to set the Wi-Fi MAC address.
+To trace the SDIO and Wi-Fi traffic, add `-trace 'ipod_touch_bcm4325_*' -trace ipod_touch_sdio_cmd`.
 
 If there are any issues running the above commands, please let me know by [opening an issue](https://github.com/devos50/qemu-ios/issues/new).

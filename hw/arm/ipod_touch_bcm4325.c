@@ -20,7 +20,6 @@
 #include "qemu/log.h"
 #include "trace.h"
 
-static const uint8_t bcm4325_default_mac[6] = { 0x00, 0x23, 0x32, 0x6E, 0xAA, 0x10 };
 static const uint8_t bcm4325_ap_bssid[6] = { 0x02, 0x51, 0x45, 0x4D, 0x55, 0x01 };
 static const uint8_t bcm4325_ap_rates[] = { 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24 };
 static const uint8_t bcm4325_ap_ext_rates[] = { 0x30, 0x48, 0x60, 0x6C };
@@ -210,13 +209,11 @@ static void bcm4325_scan_done(void *opaque)
 {
     BCM4325State *s = opaque;
 
-    s->scan_pending = 0;
     bcm4325_send_event(s, WLC_E_SCAN_COMPLETE, WLC_E_STATUS_SUCCESS, 0, bcm4325_ap_bssid);
 }
 
-static void bcm4325_start_scan(BCM4325State *s, uint32_t cmd)
+static void bcm4325_start_scan(BCM4325State *s)
 {
-    s->scan_pending = cmd;
     timer_mod(s->scan_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 100 * SCALE_MS);
 }
 
@@ -295,7 +292,7 @@ static void bcm4325_iovar(BCM4325State *s, bool set, const uint8_t *in, uint32_t
             // wl_iscan_params_t: version, action (1 start, 2 continue, 3 abort), scan duration, scan params
             uint16_t action = lduw_le_p(value + 4);
             if (action == 1 || action == 2) {
-                bcm4325_start_scan(s, WLC_SET_VAR);
+                bcm4325_start_scan(s);
             }
             return;
         }
@@ -338,7 +335,7 @@ static bool bcm4325_ioctl(BCM4325State *s, uint32_t cmd, bool set, const uint8_t
         bcm4325_join(s, in, inlen);
         return true;
     case WLC_SCAN:
-        bcm4325_start_scan(s, cmd);
+        bcm4325_start_scan(s);
         return true;
     case WLC_DISASSOC:
         bcm4325_link_down(s);
@@ -533,7 +530,6 @@ static void bcm4325_reset_backplane(BCM4325State *s)
     s->core_regs[(BCM4325_SOCRAM_BASE - BCM4325_CHIPCOMMON_BASE) / BCM4325_CORE_SIZE][SB_IDHIGH / 4] = 0x6000225D;
     s->fw_running = false;
     s->associated = false;
-    s->scan_pending = 0;
     timer_del(s->scan_timer);
     timer_del(s->join_timer);
 
@@ -977,8 +973,6 @@ void bcm4325_reset(BCM4325State *s)
 
 void bcm4325_init(BCM4325State *s, DeviceState *owner, BCM4325IRQHandler handler, void *opaque)
 {
-    static const MACAddr zero_mac;
-
     s->irq_handler = handler;
     s->irq_opaque = opaque;
     s->socram = g_malloc0(BCM4325_SOCRAM_SIZE);
@@ -988,9 +982,7 @@ void bcm4325_init(BCM4325State *s, DeviceState *owner, BCM4325IRQHandler handler
     s->scan_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, bcm4325_scan_done, s);
     s->join_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, bcm4325_join_done, s);
 
-    if (!memcmp(&s->conf.macaddr, &zero_mac, sizeof(zero_mac))) {
-        memcpy(s->conf.macaddr.a, bcm4325_default_mac, 6);
-    }
+    qemu_macaddr_default_if_unset(&s->conf.macaddr);
     bcm4325_build_cis(s);
 
     s->nic = qemu_new_nic(&net_bcm4325_info, &s->conf, "bcm4325", owner->id, &owner->mem_reentrancy_guard, s);
