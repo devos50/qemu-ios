@@ -105,4 +105,10 @@ or a netdev and the `netdev` machine option:
 Use `-nic none` to run without a network, and `-nic user,model=bcm4325,mac=<address>` to set the Wi-Fi MAC address.
 To trace the SDIO and Wi-Fi traffic, add `-trace 'ipod_touch_bcm4325_*' -trace ipod_touch_sdio_cmd`.
 
+### Graphics
+
+The emulator models the PowerVR MBX Lite graphics core that SpringBoard uses for compositing. It carries out the 2D core's fills and copies, and the 3D blits that blend layers, directly in the emulated memory, so a stock SpringBoard draws through the MBX and no longer needs `LK_ENABLE_MBX2D=0`.
+OpenGL ES is not supported yet: the tile accelerator, which apps' 3D scenes go through, is not modelled, so their scenes stay empty.
+To trace the graphics commands, add `-trace 'ipod_touch_mbx_2d_*' -trace 'ipod_touch_mbx_3d_*'`.
+
 If there are any issues running the above commands, please let me know by [opening an issue](https://github.com/devos50/qemu-ios/issues/new).
