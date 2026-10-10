@@ -777,6 +777,9 @@ static uint64_t ipod_touch_mbx1_read(void *opaque, hwaddr addr, unsigned size)
     case MBX_INT_CLEAR:
     case MBX_3D_START:
     case MBX_TA_START:
+    case MBX_TA_ABORT:
+    case MBX_SCENE_SETUP0:
+    case MBX_SCENE_SETUP1:
     case MBX_REGION_START:
     case MBX_PB_INIT:
         val = 0;
@@ -842,7 +845,15 @@ static void ipod_touch_mbx1_write(void *opaque, hwaddr addr, uint64_t val, unsig
             qemu_log_mask(LOG_UNIMP, "%s: tile accelerator not implemented\n", __func__);
         }
         break;
+    case MBX_TA_ABORT:
+        if (val & 1) {
+            s->int_status |= MBX_INT_TA_DONE;
+        }
+        break;
+    case MBX_SCENE_SETUP0:
+    case MBX_SCENE_SETUP1:
     case MBX_REGION_START:
+        // the kernel spins on these without a delay and panics after 10000 reads
         if (val & 1) {
             s->int_status |= MBX_INT_REGION_DONE;
         }

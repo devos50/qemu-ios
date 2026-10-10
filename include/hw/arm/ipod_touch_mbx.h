@@ -50,7 +50,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMBXState, IPOD_TOUCH_MBX)
 #define MBX_3D_OBJECT_END      0xf0000000
 #define MBX_3D_MAX_OBJECTS     64
 #define MBX_TA_START           0x800
-#define MBX_REGION_START       0x81c // -> MBX_INT_REGION_DONE
+#define MBX_TA_ABORT           0x808 // -> MBX_INT_TA_DONE
+#define MBX_SCENE_SETUP0       0x814 // written before a scene render -> MBX_INT_REGION_DONE
+#define MBX_SCENE_SETUP1       0x818 // likewise
+#define MBX_REGION_START       0x81c // before a scene's TA stream -> MBX_INT_REGION_DONE
 #define MBX_PB_INIT            0x838 // parameter buffer setup -> MBX_INT_RENDER_DONE
 
 // MMU: eight directory registers hold the physical addresses of page-table pages that each map 4 MB of the 32 MB GPU
