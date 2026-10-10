@@ -11,9 +11,15 @@
  *  - The 2D core. MBX2D builds blocks of 2D commands in a command buffer, the kernel adds the surfaces' GPU addresses
  *    and copies them to the 2D slave port (writeTo2DSlavePort, 0xc04e5ac8), followed by a FLUSH word. The model
  *    parses that stream and carries out the fills and copies straight in guest memory.
- *  - The 3D core is not emulated yet: renders (3D blits and scenes) complete without drawing.
+ *  - 3D blits. For compositing that the 2D core cannot do (blending layers with their own alpha, which is most of
+ *    SpringBoard's), MBX2D asks the kernel for a 3D blit (AppleMBXDevice::setup3DBlit, 0xc04e67ec). The kernel
+ *    fills in object templates in a parameter buffer it built at start-up, points every region of the render
+ *    rectangle at one object list and starts a render. The model draws that object list: textured quads, with the
+ *    destination read back as a second texture for blending, clipped by depth-only quads.
+ *  - The tile accelerator, which builds parameter buffers for OpenGL ES scenes, is not emulated yet.
  */
 #include "qemu/osdep.h"
+#include <math.h>
 #include "qemu/log.h"
 #include "exec/address-spaces.h"
 #include "migration/vmstate.h"
@@ -411,6 +417,346 @@ static void ipod_touch_mbx_2d_push(IPodTouchMBXState *s, uint32_t word)
 }
 
 /*
+ * 3D core
+ */
+
+static uint32_t ipod_touch_mbx_ldl(IPodTouchMBXState *s, uint32_t va)
+{
+    uint8_t buf[4];
+    ipod_touch_mbx_access(s, va, buf, 4, false);
+    return ldl_le_p(buf);
+}
+
+static float ipod_touch_mbx_ldf(IPodTouchMBXState *s, uint32_t va)
+{
+    union { uint32_t u; float f; } v = { .u = ipod_touch_mbx_ldl(s, va) };
+    return v.f;
+}
+
+// Maps the pixel format codes of the render target mode and of texture control words to the 2D formats.
+static uint32_t ipod_touch_mbx_3d_format(uint32_t code)
+{
+    switch (code) {
+    case 0:
+    case 3:
+        return MBX_FMT_ARGB1555;
+    case 1:
+        return MBX_FMT_RGB565;
+    case 2:
+        return MBX_FMT_ARGB4444;
+    case 6:
+        return MBX_FMT_ARGB8888;
+    default:
+        return 0;
+    }
+}
+
+typedef struct MBXRenderTarget {
+    uint32_t addr;
+    uint32_t stride;
+    uint32_t format;
+    unsigned bpp;
+    int x0, y0, x1, y1;
+    uint8_t *pixels; // the render rectangle, read before and written back after the render
+    uint8_t *mask;   // pixels the depth-only objects left visible
+} MBXRenderTarget;
+
+typedef struct MBXTexture {
+    uint32_t addr;
+    uint32_t stride;
+    uint32_t format;
+    unsigned bpp;
+    int w, h;
+    int x0, y0, cw, ch; // the part of the texture the object samples, cached in data
+    uint8_t *data;
+    bool is_target;
+} MBXTexture;
+
+// Decodes a texture's two control words: log2(width) - 3 in bits 24-27 and log2(height) - 3 in bits 20-23 of the
+// first, its format in bits 14-17; the stride in pixels is split over bit 0 (bit 3 of the stride) and bits 18-24 of
+// the second (bits 4-10), which also holds the address >> 7 in bits 0-17.
+static bool ipod_touch_mbx_3d_texture(IPodTouchMBXState *s, MBXRenderTarget *rt, uint32_t a, uint32_t b,
+                                      MBXTexture *tex)
+{
+    memset(tex, 0, sizeof(*tex));
+    tex->w = 8 << ((a >> 24) & 0xf);
+    tex->h = 8 << ((a >> 20) & 0xf);
+    tex->format = ipod_touch_mbx_3d_format((a >> 14) & 0xf);
+    tex->bpp = ipod_touch_mbx_bpp(tex->format);
+    tex->stride = ((((b >> 18) & 0x7f) << 4) | ((a & 1) << 3)) * tex->bpp;
+    tex->addr = (b & 0x3ffff) << 7;
+    tex->is_target = tex->addr == rt->addr && tex->stride == rt->stride && tex->format == rt->format;
+    if (!tex->bpp) {
+        qemu_log_mask(LOG_UNIMP, "%s: texture format %u not implemented\n", __func__, (a >> 14) & 0xf);
+        return false;
+    }
+    return true;
+}
+
+static void ipod_touch_mbx_3d_texture_load(IPodTouchMBXState *s, MBXTexture *tex, float umin, float vmin,
+                                           float umax, float vmax)
+{
+    int x0 = MAX((int)floorf(umin * tex->w) - 1, 0), y0 = MAX((int)floorf(vmin * tex->h) - 1, 0);
+    int x1 = MIN((int)ceilf(umax * tex->w) + 1, tex->w), y1 = MIN((int)ceilf(vmax * tex->h) + 1, tex->h);
+
+    tex->x0 = x0;
+    tex->y0 = y0;
+    tex->cw = MAX(x1 - x0, 1);
+    tex->ch = MAX(y1 - y0, 1);
+    tex->data = g_malloc0((size_t)tex->cw * tex->ch * tex->bpp);
+    for (int y = 0; y < tex->ch; y++) {
+        ipod_touch_mbx_access(s, tex->addr + (y0 + y) * tex->stride + x0 * tex->bpp,
+                              tex->data + (size_t)y * tex->cw * tex->bpp, tex->cw * tex->bpp, false);
+    }
+}
+
+static uint32_t ipod_touch_mbx_3d_sample(MBXRenderTarget *rt, MBXTexture *tex, float u, float v)
+{
+    int x = (int)floorf(u * tex->w), y = (int)floorf(v * tex->h);
+
+    if (tex->is_target) {
+        x = MIN(MAX(x, rt->x0), rt->x1 - 1);
+        y = MIN(MAX(y, rt->y0), rt->y1 - 1);
+        return ipod_touch_mbx_unpack(rt->format,
+                                     rt->pixels + ((size_t)(y - rt->y0) * (rt->x1 - rt->x0) + x - rt->x0) * rt->bpp);
+    }
+    x = MIN(MAX(x - tex->x0, 0), tex->cw - 1);
+    y = MIN(MAX(y - tex->y0, 0), tex->ch - 1);
+    return ipod_touch_mbx_unpack(tex->format, tex->data + ((size_t)y * tex->cw + x) * tex->bpp);
+}
+
+static uint32_t ipod_touch_mbx_scale(uint32_t argb, uint32_t alpha)
+{
+    uint32_t out = 0;
+    for (int shift = 0; shift < 32; shift += 8) {
+        out |= (((argb >> shift) & 0xff) * alpha / 255) << shift;
+    }
+    return out;
+}
+
+static uint32_t ipod_touch_mbx_over(uint32_t src, uint32_t dst)
+{
+    uint32_t inv = 255 - (src >> 24), out = 0;
+    for (int shift = 0; shift < 32; shift += 8) {
+        out |= MIN(((src >> shift) & 0xff) + ((dst >> shift) & 0xff) * inv / 255, 0xff) << shift;
+    }
+    return out;
+}
+
+#define MBX_3D_MAX_ATTRS 5 // colour, then u and v of up to two textures
+
+// Rasterises a four-vertex strip (triangles 0-1-2 and 1-2-3), covering each pixel at most once. For every covered
+// pixel inside the render rectangle, calls the shader with the attributes interpolated at its centre.
+static void ipod_touch_mbx_3d_strip(MBXRenderTarget *rt, float xy[4][2], float attr[4][MBX_3D_MAX_ATTRS],
+                                    void (*shade)(MBXRenderTarget *, int, int, float *, void *), void *opaque)
+{
+    static const int tris[2][3] = { { 0, 1, 2 }, { 1, 2, 3 } };
+    float xmin = xy[0][0], xmax = xy[0][0], ymin = xy[0][1], ymax = xy[0][1];
+
+    for (int i = 1; i < 4; i++) {
+        xmin = MIN(xmin, xy[i][0]);
+        xmax = MAX(xmax, xy[i][0]);
+        ymin = MIN(ymin, xy[i][1]);
+        ymax = MAX(ymax, xy[i][1]);
+    }
+    int px0 = MAX(rt->x0, (int)floorf(xmin)), px1 = MIN(rt->x1, (int)ceilf(xmax));
+    int py0 = MAX(rt->y0, (int)floorf(ymin)), py1 = MIN(rt->y1, (int)ceilf(ymax));
+
+    for (int y = py0; y < py1; y++) {
+        for (int x = px0; x < px1; x++) {
+            float cx = x + 0.5f, cy = y + 0.5f;
+
+            for (int t = 0; t < 2; t++) {
+                const float *a = xy[tris[t][0]], *b = xy[tris[t][1]], *c = xy[tris[t][2]];
+                float area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                float w0, w1, w2, out[MBX_3D_MAX_ATTRS];
+
+                if (area == 0) {
+                    continue;
+                }
+                w0 = ((b[0] - cx) * (c[1] - cy) - (b[1] - cy) * (c[0] - cx)) / area;
+                w1 = ((c[0] - cx) * (a[1] - cy) - (c[1] - cy) * (a[0] - cx)) / area;
+                w2 = 1.0f - w0 - w1;
+                if (w0 < 0 || w1 < 0 || w2 < 0) {
+                    continue;
+                }
+                for (int i = 0; i < MBX_3D_MAX_ATTRS; i++) {
+                    out[i] = w0 * attr[tris[t][0]][i] + w1 * attr[tris[t][1]][i] + w2 * attr[tris[t][2]][i];
+                }
+                shade(rt, x, y, out, opaque);
+                break;
+            }
+        }
+    }
+}
+
+static void ipod_touch_mbx_3d_shade_mask(MBXRenderTarget *rt, int x, int y, float *attr, void *opaque)
+{
+    rt->mask[(y - rt->y0) * (rt->x1 - rt->x0) + x - rt->x0] = *(uint8_t *)opaque;
+}
+
+typedef struct MBXShader {
+    int textures;
+    MBXTexture tex[2];
+    uint32_t colour;
+} MBXShader;
+
+static void ipod_touch_mbx_3d_shade(MBXRenderTarget *rt, int x, int y, float *attr, void *opaque)
+{
+    MBXShader *sh = opaque;
+    size_t i = (size_t)(y - rt->y0) * (rt->x1 - rt->x0) + x - rt->x0;
+    uint8_t *p = rt->pixels + i * rt->bpp;
+    uint32_t alpha = sh->colour >> 24, pixel;
+
+    if (!rt->mask[i]) {
+        return;
+    }
+    if (sh->textures == 0) {
+        pixel = sh->colour;
+    } else if (sh->textures == 2) {
+        // MBX2D's blended copies read the destination back as the second texture: premultiplied source over it,
+        // scaled by the vertex alpha
+        uint32_t src = ipod_touch_mbx_3d_sample(rt, &sh->tex[0], attr[1], attr[2]);
+        uint32_t dst = ipod_touch_mbx_3d_sample(rt, &sh->tex[1], attr[3], attr[4]);
+        pixel = ipod_touch_mbx_over(ipod_touch_mbx_scale(src, alpha), dst);
+    } else if (sh->tex[0].is_target) {
+        // blended colour fills read the destination back as their only texture
+        uint32_t dst = ipod_touch_mbx_3d_sample(rt, &sh->tex[0], attr[1], attr[2]);
+        pixel = ipod_touch_mbx_over(ipod_touch_mbx_scale(sh->colour | 0xff000000, alpha), dst);
+    } else {
+        pixel = ipod_touch_mbx_3d_sample(rt, &sh->tex[0], attr[1], attr[2]);
+    }
+    ipod_touch_mbx_pack(rt->format, p, pixel);
+}
+
+// Draws one object. Its pointer holds the block's offset in words in bits 0-19 and its layout in bits 20-27:
+// 0x02 is a depth-only quad (the ISP word, four x/y pairs and four z), the others start with a header word and the
+// control words of 0 (0x0a), 1 (0x12) or 2 (0x1a) textures, each followed by its TSP word, then the ISP word, the
+// four x/y pairs, four z and four 1/w, and per vertex the colour and the u/v pairs of the textures.
+static void ipod_touch_mbx_3d_object(IPodTouchMBXState *s, MBXRenderTarget *rt, uint32_t objects, uint32_t ptr)
+{
+    uint32_t layout = (ptr >> 20) & 0xff;
+    uint32_t va = objects + (ptr & 0xfffff) * 4;
+    float xy[4][2], attr[4][MBX_3D_MAX_ATTRS] = { { 0 } };
+    MBXShader sh = { 0 };
+    uint32_t isp;
+
+    trace_ipod_touch_mbx_3d_object(ptr);
+    if ((layout & 7) != 2 || layout > 0x1a) {
+        qemu_log_mask(LOG_UNIMP, "%s: object 0x%08x not implemented\n", __func__, ptr);
+        return;
+    }
+    if (layout == 0x02) {
+        uint8_t visible;
+
+        isp = ipod_touch_mbx_ldl(s, va);
+        for (int i = 0; i < 4; i++) {
+            xy[i][0] = ipod_touch_mbx_ldf(s, va + 4 + i * 8);
+            xy[i][1] = ipod_touch_mbx_ldf(s, va + 8 + i * 8);
+        }
+        // MBX2D's 3D blits clip with two such quads: the whole screen with ISP bit 12 clear, then the clip
+        // rectangle with it set
+        visible = (isp >> 12) & 1;
+        ipod_touch_mbx_3d_strip(rt, xy, attr, ipod_touch_mbx_3d_shade_mask, &visible);
+        return;
+    }
+
+    sh.textures = (layout >> 3) - 1;
+    va += 4;
+    for (int t = 0; t < sh.textures; t++) {
+        uint32_t a = ipod_touch_mbx_ldl(s, va), b = ipod_touch_mbx_ldl(s, va + 4);
+        trace_ipod_touch_mbx_3d_texture(t, a, b, ipod_touch_mbx_ldl(s, va + 8));
+        if (!ipod_touch_mbx_3d_texture(s, rt, a, b, &sh.tex[t])) {
+            return;
+        }
+        va += 12;
+    }
+    isp = ipod_touch_mbx_ldl(s, va);
+    va += 4;
+    for (int i = 0; i < 4; i++) {
+        xy[i][0] = ipod_touch_mbx_ldf(s, va + i * 8);
+        xy[i][1] = ipod_touch_mbx_ldf(s, va + 4 + i * 8);
+    }
+    va += 4 * 4 * 4; // x/y pairs, z and 1/w
+    for (int i = 0; i < 4; i++) {
+        uint32_t colour = ipod_touch_mbx_ldl(s, va);
+        va += 4;
+        // the blits have a single colour, so it is not interpolated
+        sh.colour = colour;
+        for (int j = 0; j < sh.textures * 2; j++) {
+            attr[i][1 + j] = ipod_touch_mbx_ldf(s, va);
+            va += 4;
+        }
+    }
+    trace_ipod_touch_mbx_3d_draw(sh.textures, isp, sh.colour, (int)xy[0][0], (int)xy[0][1], (int)xy[3][0], (int)xy[3][1]);
+
+    for (int t = 0; t < sh.textures; t++) {
+        float umin = attr[0][1 + 2 * t], umax = umin, vmin = attr[0][2 + 2 * t], vmax = vmin;
+        for (int i = 1; i < 4; i++) {
+            umin = MIN(umin, attr[i][1 + 2 * t]);
+            umax = MAX(umax, attr[i][1 + 2 * t]);
+            vmin = MIN(vmin, attr[i][2 + 2 * t]);
+            vmax = MAX(vmax, attr[i][2 + 2 * t]);
+        }
+        if (!sh.tex[t].is_target) {
+            ipod_touch_mbx_3d_texture_load(s, &sh.tex[t], umin, vmin, umax, vmax);
+        }
+    }
+    ipod_touch_mbx_3d_strip(rt, xy, attr, ipod_touch_mbx_3d_shade, &sh);
+    for (int t = 0; t < sh.textures; t++) {
+        g_free(sh.tex[t].data);
+    }
+}
+
+// Renders the object lists of the regions in MBX_3D_REGIONS into the render target. The regions of a 3D blit
+// all share one object list, which is drawn once over the whole render rectangle.
+static void ipod_touch_mbx_3d_render(IPodTouchMBXState *s)
+{
+    MBXRenderTarget rt = {
+        .addr = s->regs[MBX_3D_RT_ADDR / 4],
+        .stride = s->regs[MBX_3D_RT_STRIDE / 4] * 4,
+        .format = ipod_touch_mbx_3d_format(s->regs[MBX_3D_RT_MODE / 4]),
+        .x0 = s->regs[MBX_3D_RT_XRANGE / 4] & 0xffff,
+        .x1 = s->regs[MBX_3D_RT_XRANGE / 4] >> 16,
+        .y0 = s->regs[MBX_3D_RT_YRANGE / 4] & 0xffff,
+        .y1 = s->regs[MBX_3D_RT_YRANGE / 4] >> 16,
+    };
+    uint32_t objects = s->regs[MBX_3D_OBJECTS / 4];
+    uint32_t region = s->regs[MBX_3D_REGIONS / 4];
+    uint32_t list = ipod_touch_mbx_ldl(s, region + 4) & MBX_3D_REGION_LIST_MASK;
+    int w = rt.x1 - rt.x0, h = rt.y1 - rt.y0;
+
+    rt.bpp = ipod_touch_mbx_bpp(rt.format);
+    trace_ipod_touch_mbx_3d_render(rt.addr, rt.format, rt.stride, rt.x0, rt.y0, rt.x1, rt.y1);
+    if (!rt.bpp || w <= 0 || h <= 0) {
+        qemu_log_mask(LOG_UNIMP, "%s: render target mode %u not implemented\n", __func__,
+                      s->regs[MBX_3D_RT_MODE / 4]);
+        return;
+    }
+
+    rt.pixels = g_malloc((size_t)w * h * rt.bpp);
+    rt.mask = g_malloc((size_t)w * h);
+    memset(rt.mask, 1, (size_t)w * h);
+    for (int y = 0; y < h; y++) {
+        ipod_touch_mbx_access(s, rt.addr + (rt.y0 + y) * rt.stride + rt.x0 * rt.bpp,
+                              rt.pixels + (size_t)y * w * rt.bpp, w * rt.bpp, false);
+    }
+    for (int i = 0; i < MBX_3D_MAX_OBJECTS; i++) {
+        uint32_t ptr = ipod_touch_mbx_ldl(s, list + i * 4);
+        if (ptr == MBX_3D_OBJECT_END) {
+            break;
+        }
+        ipod_touch_mbx_3d_object(s, &rt, objects, ptr);
+    }
+    for (int y = 0; y < h; y++) {
+        ipod_touch_mbx_access(s, rt.addr + (rt.y0 + y) * rt.stride + rt.x0 * rt.bpp,
+                              rt.pixels + (size_t)y * w * rt.bpp, w * rt.bpp, true);
+    }
+    g_free(rt.pixels);
+    g_free(rt.mask);
+}
+
+/*
  * Registers
  */
 
@@ -487,6 +833,7 @@ static void ipod_touch_mbx1_write(void *opaque, hwaddr addr, uint64_t val, unsig
     case MBX_3D_START:
         if (val & 1) {
             trace_ipod_touch_mbx_3d_start();
+            ipod_touch_mbx_3d_render(s);
             timer_mod(s->timer_3d, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + MBX_3D_DELAY_NS);
         }
         break;

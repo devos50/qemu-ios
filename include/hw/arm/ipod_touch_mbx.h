@@ -36,6 +36,19 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMBXState, IPOD_TOUCH_MBX)
 
 // Kick registers, written 1 to start an operation
 #define MBX_3D_START           0x680 // render the scene or 3D blit set up in 0x600-0x6ec
+
+// 3D render setup: a list of regions (tile x | y << 8, then the address of the region's object list), the object
+// buffer, and the render target (pixel range, address, mode and stride in words)
+#define MBX_3D_REGIONS         0x608
+#define MBX_3D_OBJECTS         0x60c
+#define MBX_3D_RT_MODE         0x650 // 1 RGB565, 2 ARGB4444, 3 ARGB1555, 6 ARGB8888
+#define MBX_3D_RT_XRANGE       0x654 // x0 | x1 << 16
+#define MBX_3D_RT_YRANGE       0x658
+#define MBX_3D_RT_ADDR         0x65c
+#define MBX_3D_RT_STRIDE       0x660
+#define MBX_3D_REGION_LIST_MASK 0x1fffffc
+#define MBX_3D_OBJECT_END      0xf0000000
+#define MBX_3D_MAX_OBJECTS     64
 #define MBX_TA_START           0x800
 #define MBX_REGION_START       0x81c // -> MBX_INT_REGION_DONE
 #define MBX_PB_INIT            0x838 // parameter buffer setup -> MBX_INT_RENDER_DONE
