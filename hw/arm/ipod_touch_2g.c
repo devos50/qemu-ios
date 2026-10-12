@@ -120,6 +120,11 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
         { "spi1-page",     SPI1_MEM_BASE,     0x1000 },
         { "uart1-page",    UART1_MEM_BASE,    0x1000 },
         { "spi4-page",     SPI4_MEM_BASE,     0x1000 },
+        /*
+         * Not in the device tree: from iPhone OS 2.2 on, iBSS writes bus arbitration settings here (0x40, 0x44)
+         * together with the priority registers of the MIU and SYSIC. Without a backing region they abort.
+         */
+        { "bus-config",    BUSCFG_MEM_BASE,   0x1000 },
     };
     for (int i = 0; i < ARRAY_SIZE(unimp_regions); i++) {
         create_unimplemented_device(unimp_regions[i].name, unimp_regions[i].base, unimp_regions[i].size);
