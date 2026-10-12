@@ -188,6 +188,32 @@ static void ipod_touch_set_nand_path(Object *obj, const char *value, Error **err
     g_strlcpy(nms->nand_path, value, sizeof(nms->nand_path));
 }
 
+static char *ipod_touch_get_nand_disk(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return g_strdup(nms->nand_disk);
+}
+
+static void ipod_touch_set_nand_disk(Object *obj, const char *value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    g_free(nms->nand_disk);
+    nms->nand_disk = g_strdup(value);
+}
+
+static char *ipod_touch_get_nand_overlay(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return g_strdup(nms->nand_overlay);
+}
+
+static void ipod_touch_set_nand_overlay(Object *obj, const char *value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    g_free(nms->nand_overlay);
+    nms->nand_overlay = g_strdup(value);
+}
+
 static char *ipod_touch_get_usb_chardev(Object *obj, Error **errp)
 {
     IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
@@ -236,6 +262,13 @@ static void ipod_touch_instance_init(Object *obj)
 
     object_property_add_str(obj, "nand", ipod_touch_get_nand_path, ipod_touch_set_nand_path);
     object_property_set_description(obj, "nand", "Path to the NAND files");
+
+    object_property_add_str(obj, "nand-disk", ipod_touch_get_nand_disk, ipod_touch_set_nand_disk);
+    object_property_set_description(obj, "nand-disk", "Disk image presented as a freshly formatted NAND "
+                                                      "(instead of nand)");
+
+    object_property_add_str(obj, "nand-overlay", ipod_touch_get_nand_overlay, ipod_touch_set_nand_overlay);
+    object_property_set_description(obj, "nand-overlay", "Directory for the NAND pages written on top of nand-disk");
 
     object_property_add_str(obj, "usb-chardev", ipod_touch_get_usb_chardev, ipod_touch_set_usb_chardev);
     object_property_set_description(obj, "usb-chardev", "ID of the chardev that carries the USB link to the host");
@@ -621,7 +654,15 @@ static void ipod_touch_machine_init(MachineState *machine)
     // init the FMSS flash controller
     dev = qdev_new("ipodtouch.fmss");
     IPodTouchFMSSState *fmss_state = IPOD_TOUCH_FMSS(dev);
-    fmss_state->nand_path = nms->nand_path;
+    if (nms->nand_disk) {
+        if (!nms->nand_overlay || nms->nand_path[0]) {
+            error_report("nand-disk needs nand-overlay, and can't be combined with nand");
+            exit(1);
+        }
+        ipod_touch_nand_open_disk(&fmss_state->nand, nms->nand_disk, nms->nand_overlay, &error_fatal);
+    } else {
+        ipod_touch_nand_open_pages(&fmss_state->nand, nms->nand_path[0] ? nms->nand_path : NULL);
+    }
     nms->fmss_state = fmss_state;
     busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, FMSS_MEM_BASE, &fmss_state->iomem);

@@ -64,6 +64,15 @@ We are now ready to run the emulator from the build directory with the following
 ./qemu-system-arm -M iPod-Touch,bootrom=<path to bootrom>,nand=<path to NAND directory>,nor=<path to NOR directory> -serial mon:stdio -cpu max -m 2G -d unimp
 ```
 
+### NAND Formats
+
+The `nand` option takes a directory with one file per written page (`cs<ce>/<page>.page`, page data followed by the spare area).
+Instead, the NAND can be a disk image: `nand-disk=<disk.img>,nand-overlay=<directory>`.
+The disk image holds the disk that the FTL presents, logical page n at offset n * 4096 (the MBR at page 0); an empty file is an empty NAND, ready to be restored.
+The emulator presents it as a freshly formatted NAND with every data block in place and never writes to it.
+The pages that iOS programs or erases go to the overlay directory, per CE a sparse data file, a sparse spare file and a state byte per page.
+The Skeuo pipeline folds the overlay back into the disk image when the emulator has stopped (`nand.py`), after which macOS can mount the partitions of the image with `hdiutil attach -imagekey diskimage-class=CRawDiskImage`.
+
 ### Sensors
 
 Press R in the emulator window to turn the device a quarter turn (portrait, landscape, upside down, landscape); apps that support landscape, such as Safari, rotate with it.

@@ -199,6 +199,8 @@ typedef struct {
 	char bootrom_path[1024];
 	char nor_path[1024];
 	char nand_path[1024];
+	char *nand_disk;
+	char *nand_overlay;
 	char *usb_chardev;
 	char *netdev;
 	LIS302DLState *accelerometer;

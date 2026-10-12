@@ -40,72 +40,6 @@ static uint32_t fmss_reg(IPodTouchFMSSState *s, hwaddr reg)
     return s->regs[reg / 4];
 }
 
-static char *nand_page_filename(IPodTouchFMSSState *s, uint32_t ce, uint32_t page)
-{
-    return g_strdup_printf("%s/cs%u/%u.page", s->nand_path, ce, page);
-}
-
-// Reads a page into the page and spare buffers. Returns false if the page is erased.
-static bool nand_read_page(IPodTouchFMSSState *s, uint32_t ce, uint32_t page)
-{
-    g_autofree char *filename = nand_page_filename(s, ce, page);
-    FILE *f = fopen(filename, "rb");
-    if (!f) {
-        memset(s->page_buffer, 0xFF, sizeof(s->page_buffer));
-        memset(s->spare_buffer, 0xFF, sizeof(s->spare_buffer));
-        return false;
-    }
-
-    if (fread(s->page_buffer, 1, NAND_BYTES_PER_PAGE, f) != NAND_BYTES_PER_PAGE ||
-        fread(s->spare_buffer, 1, NAND_BYTES_PER_SPARE, f) != NAND_BYTES_PER_SPARE) {
-        error_report("%s: %s is truncated", __func__, filename);
-    }
-    fclose(f);
-    return true;
-}
-
-// Programs a page with the contents of the page and spare buffers.
-static bool nand_program_page(IPodTouchFMSSState *s, uint32_t ce, uint32_t page)
-{
-    g_autofree char *dirname = g_strdup_printf("%s/cs%u", s->nand_path, ce);
-    g_autofree char *filename = nand_page_filename(s, ce, page);
-
-    if (g_file_test(filename, G_FILE_TEST_EXISTS)) {
-        qemu_log_mask(LOG_GUEST_ERROR, "%s: programming page %u on CE %u that is not erased\n", __func__, page, ce);
-    }
-
-    if (g_mkdir_with_parents(dirname, 0700) != 0) {
-        error_report("%s: unable to create %s: %s", __func__, dirname, strerror(errno));
-        return false;
-    }
-
-    FILE *f = fopen(filename, "wb");
-    if (!f) {
-        error_report("%s: unable to open %s: %s", __func__, filename, strerror(errno));
-        return false;
-    }
-    bool ok = fwrite(s->page_buffer, 1, NAND_BYTES_PER_PAGE, f) == NAND_BYTES_PER_PAGE &&
-              fwrite(s->spare_buffer, 1, NAND_BYTES_PER_SPARE, f) == NAND_BYTES_PER_SPARE;
-    if (fclose(f) != 0 || !ok) {
-        error_report("%s: unable to write %s", __func__, filename);
-        return false;
-    }
-    return true;
-}
-
-static bool nand_erase_block(IPodTouchFMSSState *s, uint32_t ce, uint32_t block)
-{
-    bool ok = true;
-    for (uint32_t i = 0; i < NAND_PAGES_PER_BLOCK; i++) {
-        g_autofree char *filename = nand_page_filename(s, ce, block * NAND_PAGES_PER_BLOCK + i);
-        if (unlink(filename) != 0 && errno != ENOENT) {
-            error_report("%s: unable to erase %s: %s", __func__, filename, strerror(errno));
-            ok = false;
-        }
-    }
-    return ok;
-}
-
 // Converts a CE mask with a single bit set to a CE index. Returns -1 if the mask is invalid.
 static int fmss_ce_from_mask(uint32_t mask)
 {
@@ -191,7 +125,7 @@ static uint32_t fmss_read(IPodTouchFMSSState *s)
             return FMSS_STATUS_ERROR;
         }
 
-        if (nand_read_page(s, ce, page)) {
+        if (ipod_touch_nand_read_page(&s->nand, ce, page, s->page_buffer, s->spare_buffer)) {
             all_clean = false;
         }
 
@@ -236,7 +170,7 @@ static uint32_t fmss_program(IPodTouchFMSSState *s)
         memset(s->spare_buffer, 0xFF, sizeof(s->spare_buffer));
         physical_memory_read(fmss_reg(s, FMSS_PARAM_META_ADDR) + i * FMSS_META_SIZE, s->spare_buffer, FMSS_META_SIZE);
 
-        if (!nand_program_page(s, ce, page)) {
+        if (!ipod_touch_nand_program_page(&s->nand, ce, page, s->page_buffer, s->spare_buffer)) {
             return FMSS_STATUS_ERROR;
         }
     }
@@ -258,7 +192,7 @@ static uint32_t fmss_erase(IPodTouchFMSSState *s)
             qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid CE %u for page %u\n", __func__, ce, page);
             return FMSS_STATUS_ERROR;
         }
-        if (!nand_erase_block(s, ce, page / NAND_PAGES_PER_BLOCK)) {
+        if (!ipod_touch_nand_erase_block(&s->nand, ce, page / NAND_PAGES_PER_BLOCK)) {
             return FMSS_STATUS_ERROR;
         }
     }

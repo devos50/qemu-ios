@@ -8,6 +8,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/hw-error.h"
 #include "hw/core/irq.h"
+#include "hw/arm/ipod_touch_nand.h"
 
 #define TYPE_IPOD_TOUCH_FMSS                "ipodtouch.fmss"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchFMSSState, IPOD_TOUCH_FMSS)
@@ -62,12 +63,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchFMSSState, IPOD_TOUCH_FMSS)
 #define FMSS_SEQ_OP_LOAD          0x04  // r[arg] = reg & imm
 #define FMSS_FMCMD                0x8   // the command register of the NAND bus
 
-// NAND geometry of the Samsung 0xb614d5ad chips on the iPod Touch 2G
-#define NAND_CHIP_ID              0xb614d5ad
-#define NAND_NUM_CE               4
-#define NAND_BYTES_PER_PAGE       4096
-#define NAND_BYTES_PER_SPARE      64
-#define NAND_PAGES_PER_BLOCK      128
 #define FMSS_META_SIZE            12    // the part of the spare area that is visible to the driver
 #define FMSS_MAX_PAGES_PER_OP     1024
 
@@ -93,7 +88,7 @@ typedef struct IPodTouchFMSSState
 
     uint8_t page_buffer[NAND_BYTES_PER_PAGE];
     uint8_t spare_buffer[NAND_BYTES_PER_SPARE];
-    char *nand_path;
+    IPodTouchNAND nand;
 } IPodTouchFMSSState;
 
 #endif

@@ -130,6 +130,7 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_mipi_dsi.c',
   'ipod_touch_miu.c',
   'ipod_touch_multitouch.c',
+  'ipod_touch_nand.c',
   'ipod_touch_nor_spi.c',
   'ipod_touch_pcf50633_pmu.c',
   'ipod_touch_pke.c',
