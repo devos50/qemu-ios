@@ -110,6 +110,19 @@ arm_common_ss.add(when: 'CONFIG_SX1', if_true: files('omap_sx1.c'))
 arm_common_ss.add(when: 'CONFIG_VERSATILE', if_true: files('versatilepb.c'))
 arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 
+arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
+  'ipod_touch_chipid.c',
+  'ipod_touch_clock.c',
+  'ipod_touch_gpio.c',
+  'ipod_touch_miu.c',
+  'ipod_touch_multitouch.c',
+  'ipod_touch_nor_spi.c',
+  'ipod_touch_spi.c',
+  'ipod_touch_sysic.c',
+  'ipod_touch_timer.c',
+  'ipod_touch_wdt.c',
+), openssl])
+
 arm_common_ss.add(files('boot.c'))
 
 hw_common_arch += {'arm': arm_common_ss}

@@ -729,3 +729,14 @@ config ARMSSE
     select SSE_COUNTER
     select SSE_TIMER
 
+config IPOD_TOUCH_2G
+    bool
+    default y
+    depends on TCG && ARM && OPENSSL
+    select EXYNOS4210_UART
+    select FRAMEBUFFER
+    select I2C
+    select PL080
+    select PL192
+    select SSI
+    select UNIMP
