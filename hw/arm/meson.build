@@ -114,6 +114,7 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
   'ipod_touch_aes.c',
   'ipod_touch_chipid.c',
   'ipod_touch_clock.c',
+  'ipod_touch_fmss.c',
   'ipod_touch_gpio.c',
   'ipod_touch_miu.c',
   'ipod_touch_multitouch.c',
