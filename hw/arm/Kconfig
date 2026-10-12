@@ -64,6 +64,7 @@ config EXYNOS4
     select SDHCI
     select USB_EHCI_SYSBUS
     select OR_IRQ
+    select EXYNOS4210_UART
 
 config INTEGRATOR
     bool
@@ -727,3 +728,4 @@ config ARMSSE
     select UNIMP
     select SSE_COUNTER
     select SSE_TIMER
+
