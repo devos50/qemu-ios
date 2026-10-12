@@ -202,6 +202,7 @@ typedef struct {
 	char nand_path[1024];
 	char *nand_disk;
 	char *nand_overlay;
+	uint32_t nand_epoch;
 	char *usb_chardev;
 	char *netdev;
 	LIS302DLState *accelerometer;

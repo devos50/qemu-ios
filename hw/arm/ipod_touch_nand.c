@@ -44,9 +44,13 @@
 #define LBN_SIZE                        ((uint64_t)PAGES_PER_SUBLOCK * NAND_BYTES_PER_PAGE)
 #define DISK_SIZE                       (FTL_NUM_OF_LBNS * LBN_SIZE)
 
-// both the NAND signature and the bad block table are stored in the last block of each CE
+/*
+ * The NAND signature and the bad block table are stored in the last two blocks of each CE: the last reserved blocks of
+ * the second and the first plane. They need blocks of their own, because the NAND driver erases every block that holds
+ * a signature when it updates it (e.g. the epoch update when iPhone OS 2.2 meets a NAND formatted for 2.1.1).
+ */
 #define NAND_SIG_PAGE                   ((NAND_BLOCKS_PER_CE - 1) * NAND_PAGES_PER_BLOCK)
-#define BBT_PAGE                        (NAND_SIG_PAGE + 1)
+#define BBT_PAGE                        ((NAND_BLOCKS_PER_CE - 2) * NAND_PAGES_PER_BLOCK)
 
 // chip blocks that are replaced by a block in the reserved area of the same plane (block 0 and the VFL info blocks)
 static const uint32_t remapped_blocks[] = { 0, 1, 2, 3, 4 };
@@ -147,7 +151,8 @@ static void format_vfl_context(IPodTouchNAND *nand)
             bad_map[plane * VFL_RESERVED_BLOCKS_PER_BANK + plane_idx[plane]] = remapped_blocks[i];
             plane_idx[plane]++;
         }
-        // the last reserved block of the second plane holds the NAND signature and the BBT
+        // the last reserved blocks of the two planes hold the BBT and the NAND signature
+        bad_map[VFL_RESERVED_BLOCKS_PER_BANK - 1] = VFL_BAD_MAP_TABLE_UNUSABLE;
         bad_map[2 * VFL_RESERVED_BLOCKS_PER_BANK - 1] = VFL_BAD_MAP_TABLE_UNUSABLE;
 
         stw_le_p(page + 16, ARRAY_SIZE(remapped_blocks));  // wNumOfInitBadBlk
@@ -246,14 +251,16 @@ static void add_vfl_special_page(IPodTouchNAND *nand, const char *magic, const u
     }
 }
 
-static void low_level_format(IPodTouchNAND *nand)
+static void low_level_format(IPodTouchNAND *nand, uint32_t epoch)
 {
     uint8_t sig[4];
     uint8_t bbt[NAND_BLOCKS_PER_CE / 8];
 
     format_vfl_context(nand);
     format_ftl_context(nand);
-    stl_le_p(sig, 0x43313131);
+    // "C11" and the security epoch of the NAND driver that formatted the NAND (as a digit). A driver of another epoch
+    // starts an epoch update, which iBoot can't do, so the NAND has to match the firmware.
+    stl_le_p(sig, 0x43313100 | ('0' + epoch));
     add_vfl_special_page(nand, "NANDDRIVERSIGN", sig, sizeof(sig), NAND_SIG_PAGE);
     // all blocks are good; the VFL rebuilds its bad block map from awBadMapTable when it opens the NAND
     memset(bbt, 0xFF, sizeof(bbt));
@@ -333,7 +340,8 @@ static int open_overlay_file(const char *overlay, uint32_t ce, const char *ext, 
     return qemu_create(path, O_RDWR | O_BINARY, 0600, errp);
 }
 
-bool ipod_touch_nand_open_disk(IPodTouchNAND *nand, const char *disk, const char *overlay, Error **errp)
+bool ipod_touch_nand_open_disk(IPodTouchNAND *nand, const char *disk, const char *overlay, uint32_t epoch,
+                               Error **errp)
 {
     nand->disk_fd = qemu_open(disk, O_RDONLY | O_BINARY, errp);
     if (nand->disk_fd < 0) {
@@ -348,7 +356,7 @@ bool ipod_touch_nand_open_disk(IPodTouchNAND *nand, const char *disk, const char
     find_data_lbns(nand);
 
     nand->special_pages = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, g_free);
-    low_level_format(nand);
+    low_level_format(nand, epoch);
 
     if (g_mkdir_with_parents(overlay, 0700) != 0) {
         error_setg_errno(errp, errno, "unable to create the NAND overlay %s", overlay);

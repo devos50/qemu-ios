@@ -72,6 +72,7 @@ The disk image holds the disk that the FTL presents, logical page n at offset n 
 The emulator presents it as a freshly formatted NAND with every data block in place and never writes to it.
 The pages that iOS programs or erases go to the overlay directory, per CE a sparse data file, a sparse spare file and a state byte per page.
 The Skeuo pipeline folds the overlay back into the disk image when the emulator has stopped (`nand.py`), after which macOS can mount the partitions of the image with `hdiutil attach -imagekey diskimage-class=CRawDiskImage`.
+The NAND signature carries the epoch of the NAND driver that formatted it, and iBoot only boots from a NAND of its own epoch, so `nand-epoch=<n>` has to match the firmware: 1 for iPhone OS 2.1.1 (the default), 2 for 2.2.
 
 ### Sensors
 

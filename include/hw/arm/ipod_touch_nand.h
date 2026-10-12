@@ -38,7 +38,8 @@ typedef struct IPodTouchNAND {
 } IPodTouchNAND;
 
 void ipod_touch_nand_open_pages(IPodTouchNAND *nand, const char *dir);
-bool ipod_touch_nand_open_disk(IPodTouchNAND *nand, const char *disk, const char *overlay, Error **errp);
+bool ipod_touch_nand_open_disk(IPodTouchNAND *nand, const char *disk, const char *overlay, uint32_t epoch,
+                               Error **errp);
 
 // Reads a page into data and spare. Returns false if the page is erased (data and spare are then all 0xFF).
 bool ipod_touch_nand_read_page(IPodTouchNAND *nand, uint32_t ce, uint32_t page, uint8_t *data, uint8_t *spare);

@@ -259,6 +259,8 @@ static void ipod_touch_set_force_dfu(Object *obj, bool value, Error **errp)
 
 static void ipod_touch_instance_init(Object *obj)
 {
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+
     object_property_add_str(obj, "bootrom", ipod_touch_get_bootrom_path, ipod_touch_set_bootrom_path);
     object_property_set_description(obj, "bootrom", "Path to the S5L8720 bootrom binary");
 
@@ -274,6 +276,11 @@ static void ipod_touch_instance_init(Object *obj)
 
     object_property_add_str(obj, "nand-overlay", ipod_touch_get_nand_overlay, ipod_touch_set_nand_overlay);
     object_property_set_description(obj, "nand-overlay", "Directory for the NAND pages written on top of nand-disk");
+
+    nms->nand_epoch = 1;
+    object_property_add_uint32_ptr(obj, "nand-epoch", &nms->nand_epoch, OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "nand-epoch", "Security epoch of the NAND driver the nand-disk NAND is "
+                                                       "formatted for: 1 for iPhone OS 2.1.1, 2 for 2.2");
 
     object_property_add_str(obj, "usb-chardev", ipod_touch_get_usb_chardev, ipod_touch_set_usb_chardev);
     object_property_set_description(obj, "usb-chardev", "ID of the chardev that carries the USB link to the host");
@@ -664,7 +671,8 @@ static void ipod_touch_machine_init(MachineState *machine)
             error_report("nand-disk needs nand-overlay, and can't be combined with nand");
             exit(1);
         }
-        ipod_touch_nand_open_disk(&fmss_state->nand, nms->nand_disk, nms->nand_overlay, &error_fatal);
+        ipod_touch_nand_open_disk(&fmss_state->nand, nms->nand_disk, nms->nand_overlay, nms->nand_epoch,
+                                  &error_fatal);
     } else {
         ipod_touch_nand_open_pages(&fmss_state->nand, nms->nand_path[0] ? nms->nand_path : NULL);
     }
