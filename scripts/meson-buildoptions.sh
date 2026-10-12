@@ -116,6 +116,7 @@ meson_options_help() {
   printf "%s\n" '  dmg             dmg image format support'
   printf "%s\n" '  docs            Documentations build support'
   printf "%s\n" '  dsound          DirectSound sound support'
+  printf "%s\n" '  faad2           AAC decoding for the iPod Touch AMC audio decoder'
   printf "%s\n" '  fuse            FUSE block device export'
   printf "%s\n" '  fuse-lseek      SEEK_HOLE/SEEK_DATA support for FUSE exports'
   printf "%s\n" '  gcrypt          libgcrypt cryptography support'
@@ -152,6 +153,7 @@ meson_options_help() {
   printf "%s\n" '  membarrier      membarrier system call (for Linux 4.14+ or Windows'
   printf "%s\n" '  modules         modules support (non Windows)'
   printf "%s\n" '  mpath           Multipath persistent reservation passthrough'
+  printf "%s\n" '  mpg123          MP3 decoding for the iPod Touch AMC audio decoder'
   printf "%s\n" '  mshv            MSHV acceleration support'
   printf "%s\n" '  multiprocess    Out of process device emulation support'
   printf "%s\n" '  netmap          netmap network backend support'
@@ -160,6 +162,7 @@ meson_options_help() {
   printf "%s\n" '  numa            libnuma support'
   printf "%s\n" '  nvmm            NVMM acceleration support'
   printf "%s\n" '  opengl          OpenGL support'
+  printf "%s\n" '  openssl         OpenSSL libcrypto, needed by the iPod Touch machine'
   printf "%s\n" '  oss             OSS sound support'
   printf "%s\n" '  pa              PulseAudio sound support'
   printf "%s\n" '  parallels       parallels image format support'
@@ -313,6 +316,8 @@ _meson_option_parse() {
     --disable-docs) printf "%s" -Ddocs=disabled ;;
     --enable-dsound) printf "%s" -Ddsound=enabled ;;
     --disable-dsound) printf "%s" -Ddsound=disabled ;;
+    --enable-faad2) printf "%s" -Dfaad2=enabled ;;
+    --disable-faad2) printf "%s" -Dfaad2=disabled ;;
     --enable-fdt) printf "%s" -Dfdt=enabled ;;
     --disable-fdt) printf "%s" -Dfdt=disabled ;;
     --enable-fdt=*) quote_sh "-Dfdt=$2" ;;
@@ -406,6 +411,8 @@ _meson_option_parse() {
     --disable-modules) printf "%s" -Dmodules=disabled ;;
     --enable-mpath) printf "%s" -Dmpath=enabled ;;
     --disable-mpath) printf "%s" -Dmpath=disabled ;;
+    --enable-mpg123) printf "%s" -Dmpg123=enabled ;;
+    --disable-mpg123) printf "%s" -Dmpg123=disabled ;;
     --enable-mshv) printf "%s" -Dmshv=enabled ;;
     --disable-mshv) printf "%s" -Dmshv=disabled ;;
     --enable-multiprocess) printf "%s" -Dmultiprocess=enabled ;;
@@ -422,6 +429,8 @@ _meson_option_parse() {
     --disable-nvmm) printf "%s" -Dnvmm=disabled ;;
     --enable-opengl) printf "%s" -Dopengl=enabled ;;
     --disable-opengl) printf "%s" -Dopengl=disabled ;;
+    --enable-openssl) printf "%s" -Dopenssl=enabled ;;
+    --disable-openssl) printf "%s" -Dopenssl=disabled ;;
     --enable-oss) printf "%s" -Doss=enabled ;;
     --disable-oss) printf "%s" -Doss=disabled ;;
     --enable-pa) printf "%s" -Dpa=enabled ;;

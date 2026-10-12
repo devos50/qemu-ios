@@ -20,6 +20,9 @@ config X11
 config PIXMAN
     bool
 
+config OPENSSL
+    bool
+
 config SPICE
     bool
 
