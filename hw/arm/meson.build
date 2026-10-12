@@ -133,6 +133,9 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
   'ipod_touch_sysic.c',
   'ipod_touch_timer.c',
   'ipod_touch_tvout.c',
+  'ipod_touch_usb_link.c',
+  'ipod_touch_usb_otg.c',
+  'ipod_touch_usb_phys.c',
   'ipod_touch_wdt.c',
 ), openssl])
 
