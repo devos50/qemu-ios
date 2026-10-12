@@ -16,6 +16,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "qapi/error.h"
+#include "trace.h"
 
 #define PL080_CONF_E    0x1
 #define PL080_CONF_M1   0x2
@@ -50,7 +51,7 @@ static const VMStateDescription vmstate_pl080_channel = {
 
 static const VMStateDescription vmstate_pl080 = {
     .name = "pl080",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8(tc_int, PL080State),
@@ -67,6 +68,7 @@ static const VMStateDescription vmstate_pl080 = {
         VMSTATE_STRUCT_ARRAY(chan, PL080State, PL080_MAX_CHANNELS,
                              1, vmstate_pl080_channel, pl080_channel),
         VMSTATE_INT32(running, PL080State),
+        VMSTATE_UINT32_V(dreq, PL080State, 2),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -85,6 +87,24 @@ static void pl080_update(PL080State *s)
     qemu_set_irq(s->interr, errlevel);
     qemu_set_irq(s->inttc, tclevel);
     qemu_set_irq(s->irq, errlevel || tclevel);
+}
+
+/*
+ * Whether the peripheral that controls the flow of a transfer requests data.
+ * Peripherals without a request line (not in dreq_mask) are always ready, so
+ * their transfers complete at once.
+ */
+static bool pl080_peripheral_ready(PL080State *s, uint32_t req, int id)
+{
+    if (id >= PL080_NUM_DREQ || !(s->dreq_mask & (1u << id))) {
+        if (!(s->dreq_unpaced_logged & (1u << id))) {
+            s->dreq_unpaced_logged |= 1u << id;
+            qemu_log_mask(LOG_UNIMP, "pl080: peripheral %d has no request line, "
+                          "transferring without flow control\n", id);
+        }
+        return true;
+    }
+    return req & (1u << id);
 }
 
 static void pl080_run(PL080State *s)
@@ -138,26 +158,27 @@ again:
             src_id = (ch->conf >> 1) & 0x1f;
             dest_id = (ch->conf >> 6) & 0x1f;
             size = ch->ctrl & 0xfff;
-            req = s->req_single | s->req_burst;
+            req = s->req_single | s->req_burst | s->dreq;
             switch (flow) {
             case 0:
                 break;
             case 1:
-                if ((req & (1u << dest_id)) == 0)
+                if (!pl080_peripheral_ready(s, req, dest_id))
                     size = 0;
                 break;
             case 2:
-                if ((req & (1u << src_id)) == 0)
+                if (!pl080_peripheral_ready(s, req, src_id))
                     size = 0;
                 break;
             case 3:
-                if ((req & (1u << src_id)) == 0
-                        || (req & (1u << dest_id)) == 0)
+                if (!pl080_peripheral_ready(s, req, src_id)
+                        || !pl080_peripheral_ready(s, req, dest_id))
                     size = 0;
                 break;
             }
-            if (!size)
+            if (!size) {
                 continue;
+            }
 
             /* Transfer one element.  */
             /* ??? Should transfer multiple elements for a burst request.  */
@@ -204,6 +225,9 @@ again:
             ch->ctrl = (ch->ctrl & 0xfffff000) | size;
             if (size == 0) {
                 /* Transfer complete.  */
+                if (ch->ctrl & PL080_CCTRL_I) {
+                    s->tc_int |= 1 << c;
+                }
                 next_lli = (ch->lli & ~3);
                 if (next_lli) {
                     ch->src = address_space_ldl_le(&s->downstream_as,
@@ -225,9 +249,6 @@ again:
                 } else {
                     ch->conf &= ~PL080_CCONF_E;
                 }
-                if (ch->ctrl & PL080_CCTRL_I) {
-                    s->tc_int |= 1 << c;
-                }
             }
             goto again;
         }
@@ -235,6 +256,24 @@ again:
             s->running = 1;
     }
     pl080_update(s);
+}
+
+/*
+ * A peripheral asserts its request line while it can accept (or provide)
+ * data, and deasserts it once its FIFO is full (or empty). The DMAC transfers
+ * while the line is asserted.
+ */
+static void pl080_dreq(void *opaque, int n, int level)
+{
+    PL080State *s = PL080(opaque);
+
+    trace_pl080_dreq(n, level);
+    if (level) {
+        s->dreq |= 1u << n;
+        pl080_run(s);
+    } else {
+        s->dreq &= ~(1u << n);
+    }
 }
 
 static uint64_t pl080_read(void *opaque, hwaddr offset,
@@ -311,6 +350,7 @@ static void pl080_write(void *opaque, hwaddr offset,
 {
     PL080State *s = (PL080State *)opaque;
     int i;
+
 
     if (offset >= 0x100 && offset < 0x200) {
         i = (offset & 0xe0) >> 5;
@@ -404,11 +444,14 @@ static void pl080_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     PL080State *s = PL080(obj);
 
-    memory_region_init_io(&s->iomem, OBJECT(s), &pl080_ops, s, "pl080", 0x1000);
-    sysbus_init_mmio(sbd, &s->iomem);
+    memory_region_init_io(&s->iomem1, OBJECT(s), &pl080_ops, s, "pl080", 0x1000);
+    sysbus_init_mmio(sbd, &s->iomem1);
+    memory_region_init_io(&s->iomem2, OBJECT(s), &pl080_ops, s, "pl080", 0x1000);
+    sysbus_init_mmio(sbd, &s->iomem2);
     sysbus_init_irq(sbd, &s->irq);
     sysbus_init_irq(sbd, &s->interr);
     sysbus_init_irq(sbd, &s->inttc);
+    qdev_init_gpio_in_named(DEVICE(obj), pl080_dreq, "dreq", PL080_NUM_DREQ);
     s->nchannels = 8;
 }
 
@@ -434,6 +477,7 @@ static void pl081_init(Object *obj)
 static const Property pl080_properties[] = {
     DEFINE_PROP_LINK("downstream", PL080State, downstream,
                      TYPE_MEMORY_REGION, MemoryRegion *),
+    DEFINE_PROP_UINT32("dreq-mask", PL080State, dreq_mask, 0),
 };
 
 static void pl080_class_init(ObjectClass *oc, const void *data)

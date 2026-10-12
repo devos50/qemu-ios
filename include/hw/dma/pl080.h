@@ -33,6 +33,7 @@
 #include "qom/object.h"
 
 #define PL080_MAX_CHANNELS 8
+#define PL080_NUM_DREQ 16
 
 typedef struct {
     uint32_t src;
@@ -49,7 +50,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(PL080State, PL080)
 struct PL080State {
     SysBusDevice parent_obj;
 
-    MemoryRegion iomem;
+    MemoryRegion iomem1;
+    MemoryRegion iomem2;
     uint8_t tc_int;
     uint8_t tc_mask;
     uint8_t err_int;
@@ -58,6 +60,14 @@ struct PL080State {
     uint32_t sync;
     uint32_t req_single;
     uint32_t req_burst;
+    /*
+     * Peripheral request lines (the "dreq" GPIO inputs). Only the lines in
+     * dreq_mask are wired to a device model: transfers that another
+     * peripheral would flow control run without waiting for requests.
+     */
+    uint32_t dreq;
+    uint32_t dreq_mask;
+    uint32_t dreq_unpaced_logged;
     pl080_channel chan[PL080_MAX_CHANNELS];
     int nchannels;
     /* Flag to avoid recursive DMA invocations.  */
