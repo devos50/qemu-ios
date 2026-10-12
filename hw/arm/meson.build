@@ -112,12 +112,16 @@ arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 
 arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
   'ipod_touch_aes.c',
+  'ipod_touch_alac.c',
+  'ipod_touch_amc.c',
   'ipod_touch_bcm4325.c',
   'ipod_touch_cd3272_mikey.c',
   'ipod_touch_chipid.c',
   'ipod_touch_clock.c',
+  'ipod_touch_cs42l58.c',
   'ipod_touch_fmss.c',
   'ipod_touch_gpio.c',
+  'ipod_touch_i2s.c',
   'ipod_touch_isl29003dl.c',
   'ipod_touch_lcd.c',
   'ipod_touch_lis302dl.c',
@@ -140,6 +144,8 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
   'ipod_touch_usb_phys.c',
   'ipod_touch_wdt.c',
 ), openssl])
+arm_common_ss.add(when: ['CONFIG_IPOD_TOUCH_2G', faad2], if_true: faad2)
+arm_common_ss.add(when: ['CONFIG_IPOD_TOUCH_2G', mpg123], if_true: mpg123)
 
 arm_common_ss.add(files('boot.c'))
 
