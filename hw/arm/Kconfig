@@ -732,7 +732,7 @@ config ARMSSE
 config IPOD_TOUCH_2G
     bool
     default y
-    depends on TCG && ARM && OPENSSL
+    depends on TCG && ARM
     select EXYNOS4210_UART
     select FRAMEBUFFER
     select I2C

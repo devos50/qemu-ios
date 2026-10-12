@@ -21,16 +21,16 @@ Make sure you have the required libraries installed to compile QEMU:
 
 ```
 # On MacOS
-brew install glib libslirp ninja pixman pkg-config sdl2 openssl@3 faad2 mpg123
+brew install glib libslirp ninja pixman pkg-config sdl2 faad2 mpg123
 
 # On Linux (Ubuntu)
-sudo apt install make ninja-build pkg-config libssl-dev libsdl2-dev libpixman-1-dev libglib2.0-dev libslirp-dev libfaad-dev libmpg123-dev
+sudo apt install make ninja-build pkg-config libsdl2-dev libpixman-1-dev libglib2.0-dev libslirp-dev libfaad-dev libmpg123-dev
 
 # On Linux (Arch)
-sudo pacman -S --needed make ninja pkgconf openssl sdl2 pixman glib2 libslirp faad2 mpg123
+sudo pacman -S --needed make ninja pkgconf sdl2 pixman glib2 libslirp faad2 mpg123
 
 # On Windows (MSYS2/mingw64)
-pacman -S base-devel mingw-w64-x86_64-toolchain git python ninja mingw-w64-x86_64-glib2 mingw-w64-x86_64-pixman python-setuptools mingw-w64-x86_64-SDL2 mingw-w64-x86_64-openssl mingw-w64-x86_64-libslirp
+pacman -S base-devel mingw-w64-x86_64-toolchain git python ninja mingw-w64-x86_64-glib2 mingw-w64-x86_64-pixman python-setuptools mingw-w64-x86_64-SDL2 mingw-w64-x86_64-libslirp
 ```
 
 Compile QEMU by running the following commands from the root directory:
@@ -42,8 +42,6 @@ cd build
 make
 ```
 
-The iPod Touch machine needs OpenSSL's libcrypto, which the AES, SHA1 and PKE engines use; `configure` finds it with pkg-config and leaves the machine out when it is missing.
-Homebrew does not put OpenSSL on the pkg-config path, so on macOS run `configure` with `PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig`.
 faad2 and mpg123 are optional: without them the AMC audio decoder plays no AAC or MP3.
 SDL handles the emulator window and its keyboard and mouse input.
 You can speed up the `make` command by passing the number of available CPU cores with the `-j` flag, e.g., use `make -j6` to compile using six CPU cores.

@@ -264,8 +264,6 @@ option('vte', type : 'feature', value : 'auto',
        description: 'vte support for the gtk UI')
 option('xkbcommon', type : 'feature', value : 'auto',
        description: 'xkbcommon support')
-option('openssl', type : 'feature', value : 'auto',
-       description: 'OpenSSL libcrypto, needed by the iPod Touch machine')
 option('faad2', type : 'feature', value : 'auto',
        description: 'AAC decoding for the iPod Touch AMC audio decoder')
 option('mpg123', type : 'feature', value : 'auto',

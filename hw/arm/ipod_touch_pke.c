@@ -1,42 +1,80 @@
 #include "hw/arm/ipod_touch_pke.h"
-#include <openssl/bn.h>
-#include <openssl/bio.h>
+#include "qemu/bswap.h"
+#include "qemu/host-utils.h"
 
-static uint8_t *datahex(char* string) {
+/*
+ * Modular arithmetic on little-endian numbers of n 32-bit limbs, enough for the RSA signature check the engine is
+ * used for: base^65537 mod modulus with keys of up to 2048 bits. Multiplication is shift-and-add, which takes a few
+ * milliseconds for 17 multiplications of 2048-bit numbers.
+ */
+#define PKE_MAX_LIMBS (sizeof(((IPodTouchPKEState *)0)->segments) / 4)
+#define PKE_EXPONENT  65537
 
-    if(string == NULL) 
-       return NULL;
-
-    size_t slength = strlen(string);
-    if((slength % 2) != 0) // must be even
-       return NULL;
-
-    size_t dlength = slength / 2;
-
-    uint8_t* data = malloc(dlength);
-    memset(data, 0, dlength);
-
-    size_t index = 0;
-    while (index < slength) {
-        char c = string[index];
-        int value = 0;
-        if(c >= '0' && c <= '9')
-          value = (c - '0');
-        else if (c >= 'A' && c <= 'F') 
-          value = (10 + (c - 'A'));
-        else if (c >= 'a' && c <= 'f')
-          value = (10 + (c - 'a'));
-        else {
-          free(data);
-          return NULL;
+static int pke_cmp(const uint32_t *a, const uint32_t *b, int n)
+{
+    for(int i = n - 1; i >= 0; i--) {
+        if(a[i] != b[i]) {
+            return a[i] > b[i] ? 1 : -1;
         }
-
-        data[(index/2)] += value << (((index + 1) % 2) * 4);
-
-        index++;
     }
+    return 0;
+}
 
-    return data;
+static void pke_sub(uint32_t *r, const uint32_t *a, int n)
+{
+    uint64_t borrow = 0;
+    for(int i = 0; i < n; i++) {
+        uint64_t d = (uint64_t)r[i] - a[i] - borrow;
+        r[i] = d;
+        borrow = (d >> 32) & 1;
+    }
+}
+
+/* r = (r + a) mod m, for r, a < m */
+static void pke_add_mod(uint32_t *r, const uint32_t *a, const uint32_t *m, int n)
+{
+    uint64_t carry = 0;
+    for(int i = 0; i < n; i++) {
+        uint64_t t = (uint64_t)r[i] + a[i] + carry;
+        r[i] = t;
+        carry = t >> 32;
+    }
+    // the sum is below 2m, and subtracting m also undoes a carry out of the top limb
+    if(carry || pke_cmp(r, m, n) >= 0) {
+        pke_sub(r, m, n);
+    }
+}
+
+/* r = (a * b) mod m, for a < m */
+static void pke_mul_mod(uint32_t *r, const uint32_t *a, const uint32_t *b, const uint32_t *m, int n)
+{
+    uint32_t acc[PKE_MAX_LIMBS] = { 0 };
+
+    for(int bit = n * 32 - 1; bit >= 0; bit--) {
+        pke_add_mod(acc, acc, m, n);
+        if(b[bit / 32] & (1u << (bit % 32))) {
+            pke_add_mod(acc, a, m, n);
+        }
+    }
+    memcpy(r, acc, n * 4);
+}
+
+/* r = base^PKE_EXPONENT mod m */
+static void pke_exp_mod(uint32_t *r, const uint32_t *base, const uint32_t *m, int n)
+{
+    uint32_t one[PKE_MAX_LIMBS] = { 1 };
+    uint32_t b[PKE_MAX_LIMBS];
+    uint32_t acc[PKE_MAX_LIMBS];
+
+    pke_mul_mod(b, one, base, m, n); // reduce the base below m
+    memcpy(acc, b, n * 4);
+    for(int bit = 30 - clz32(PKE_EXPONENT); bit >= 0; bit--) {
+        pke_mul_mod(acc, acc, acc, m, n);
+        if(PKE_EXPONENT & (1u << bit)) {
+            pke_mul_mod(acc, acc, b, m, n);
+        }
+    }
+    memcpy(r, acc, n * 4);
 }
 
 static uint64_t ipod_touch_pke_read(void *opaque, hwaddr offset, unsigned size)
@@ -83,26 +121,20 @@ static void ipod_touch_pke_write(void *opaque, hwaddr offset, uint64_t value, un
             s->num_started++;
 
             if(s->num_started == 5) { // TODO this is arbitrary!
-                
-
-                BIGNUM *mod_bn = BN_lebin2bn(s->segments, s->segment_size, NULL);
-                BIGNUM *base_bn = BN_lebin2bn(s->segments + s->segment_size, s->segment_size, NULL);
-                BIGNUM *exp_bn = BN_new();
-                BN_dec2bn(&exp_bn,"65537");
-                // BN_print(BIO_new_fp(stdout, BIO_NOCLOSE), exp_bn);
-                // printf("\n\n");
-
-                BIGNUM *res = BN_new();
-                BN_CTX *ctx = BN_CTX_new();
-                BN_mod_exp(res, base_bn, exp_bn, mod_bn, ctx);
-                // BN_print(BIO_new_fp(stdout, BIO_NOCLOSE), res);
-                // printf("\n\n");
-
-                char *res_hex = datahex(BN_bn2hex(res));
-
-                // copy this into SEG1 - note that the hex conversion removes the first 0x00 bytes so we add it back and shift everything to the right one place.
-                for(int i = 0; i < (s->segment_size - 1); i++) { s->segments[s->segment_size + s->segment_size - 2 - i] = res_hex[i]; }
-                s->segments[s->segment_size + s->segment_size - 1] = 0x0;
+                // SEG0 holds the modulus and SEG1 the base; the result replaces the base
+                int n = s->segment_size / 4;
+                uint32_t mod[PKE_MAX_LIMBS], base[PKE_MAX_LIMBS], res[PKE_MAX_LIMBS];
+                if(n == 0) {
+                    break;
+                }
+                for(int i = 0; i < n; i++) {
+                    mod[i] = ldl_le_p(s->segments + i * 4);
+                    base[i] = ldl_le_p(s->segments + s->segment_size + i * 4);
+                }
+                pke_exp_mod(res, base, mod, n);
+                for(int i = 0; i < n; i++) {
+                    stl_le_p(s->segments + s->segment_size + i * 4, res[i]);
+                }
             }
             break;
         }

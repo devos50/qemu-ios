@@ -1,19 +1,65 @@
 #include "hw/arm/ipod_touch_sha1.h"
 #include "system/physmem.h"
+#include "qemu/bitops.h"
 
 /*
  * The guest pads the message itself (0x80, zeroes, 64-bit bit length), so the engine only runs the SHA-1 compression
- * function over 64-byte blocks. We feed every block to OpenSSL as it arrives; after the padded final block the
- * context state h0..h4 is the digest, so there is no limit on the input size (the restore ramdisk is ~25 MB).
+ * function over 64-byte blocks. We compress every block as it arrives; after the padded final block the state
+ * h0..h4 is the digest, so there is no limit on the input size (the restore ramdisk is ~25 MB).
  */
-static void sha1_process(IPodTouchSHA1State *s, const void *data, size_t len)
+static void sha1_compress(uint32_t state[5], const uint8_t *block)
 {
-    SHA1_Update(&s->ctx, data, len);
+    uint32_t w[80];
+    uint32_t a = state[0], b = state[1], c = state[2], d = state[3], e = state[4];
+
+    for(int i = 0; i < 16; i++) {
+        w[i] = ldl_be_p(block + i * 4);
+    }
+    for(int i = 16; i < 80; i++) {
+        w[i] = rol32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    }
+
+    for(int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if(i < 20) {
+            f = (b & c) | (~b & d);
+            k = 0x5a827999;
+        } else if(i < 40) {
+            f = b ^ c ^ d;
+            k = 0x6ed9eba1;
+        } else if(i < 60) {
+            f = (b & c) | (b & d) | (c & d);
+            k = 0x8f1bbcdc;
+        } else {
+            f = b ^ c ^ d;
+            k = 0xca62c1d6;
+        }
+        uint32_t t = rol32(a, 5) + f + e + k + w[i];
+        e = d;
+        d = c;
+        c = rol32(b, 30);
+        b = a;
+        a = t;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+}
+
+static void sha1_process(IPodTouchSHA1State *s, const uint8_t *data, size_t len)
+{
+    // the engine only takes whole blocks: hardware buffer flushes and memory mode lengths are multiples of 64
+    for(size_t off = 0; off + 64 <= len; off += 64) {
+        sha1_compress(s->state, data + off);
+    }
     s->hash_computed = false;
 }
 
 static void flush_hw_buffer(IPodTouchSHA1State *s) {
-    sha1_process(s, s->hw_buffer, 0x40);
+    sha1_process(s, (const uint8_t *)s->hw_buffer, 0x40);
     memset(s->hw_buffer, 0, 0x40);
     s->hw_buffer_dirty = false;
 }
@@ -28,7 +74,11 @@ static void sha1_reset(IPodTouchSHA1State *s)
 	memset(&s->hashout, 0, 0x14);
 	s->hw_buffer_dirty = false;
 	s->hash_computed = false;
-	SHA1_Init(&s->ctx);
+	s->state[0] = 0x67452301;
+	s->state[1] = 0xefcdab89;
+	s->state[2] = 0x98badcfe;
+	s->state[3] = 0x10325476;
+	s->state[4] = 0xc3d2e1f0;
 }
 
 static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
@@ -50,9 +100,8 @@ static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
 		case 0x20 ... 0x34:
             if(!s->hash_computed) {
                 // the digest is the big-endian state after the guest-padded final block
-                const SHA_LONG h[5] = { s->ctx.h0, s->ctx.h1, s->ctx.h2, s->ctx.h3, s->ctx.h4 };
                 for(int i = 0; i < 5; i++) {
-                    stl_be_p(&s->hashout[i * 4], h[i]);
+                    stl_be_p(&s->hashout[i * 4], s->state[i]);
                 }
                 s->hash_computed = true;
             }

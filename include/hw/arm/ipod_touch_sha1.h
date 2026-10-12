@@ -6,7 +6,6 @@
 #include "hw/core/hw-error.h"
 #include "exec/hwaddr.h"
 #include "system/memory.h"
-#include <openssl/sha.h>
 
 #define TYPE_IPOD_TOUCH_SHA1                "ipodtouch.sha1"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSHA1State, IPOD_TOUCH_SHA1)
@@ -28,7 +27,7 @@ typedef struct IPodTouchSHA1State {
     uint8_t hashout[0x14];
     bool hw_buffer_dirty;
     bool hash_computed;
-    SHA_CTX ctx;
+    uint32_t state[5]; // running SHA-1 state h0..h4
 } IPodTouchSHA1State;
 
 #endif

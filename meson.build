@@ -1382,11 +1382,6 @@ if not get_option('libiscsi').auto() or have_block
                          required: get_option('libiscsi'),
                          method: 'pkg-config')
 endif
-openssl = not_found
-if not get_option('openssl').auto() or have_system
-  openssl = dependency('libcrypto', required: get_option('openssl'),
-                       method: 'pkg-config')
-endif
 mpg123 = not_found
 if not get_option('mpg123').auto() or have_system
   mpg123 = dependency('libmpg123', required: get_option('mpg123'),
@@ -3278,7 +3273,6 @@ host_kconfig = \
   (get_option('fuzzing') ? ['CONFIG_FUZZ=y'] : []) + \
   (have_tpm ? ['CONFIG_TPM=y'] : []) + \
   (pixman.found() ? ['CONFIG_PIXMAN=y'] : []) + \
-  (openssl.found() ? ['CONFIG_OPENSSL=y'] : []) + \
   (spice.found() ? ['CONFIG_SPICE=y'] : []) + \
   (have_ivshmem ? ['CONFIG_IVSHMEM=y'] : []) + \
   (opengl.found() ? ['CONFIG_OPENGL=y'] : []) + \
@@ -5014,7 +5008,6 @@ summary_info += {'snappy support':    snappy}
 summary_info += {'bzip2 support':     libbzip2}
 summary_info += {'lzfse support':     liblzfse}
 summary_info += {'zstd support':      zstd}
-summary_info += {'OpenSSL libcrypto': openssl}
 summary_info += {'faad2 support':     faad2}
 summary_info += {'mpg123 support':    mpg123}
 summary_info += {'Query Processing Library support': qpl}

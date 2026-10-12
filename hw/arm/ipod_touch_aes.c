@@ -94,6 +94,31 @@ static bool ipod_touch_aes_gid_decrypt(const uint8_t *in, uint8_t *out, uint32_t
 }
 
 
+/* CBC over whole blocks, updating `ivec` like the engine's IV register would. */
+static void ipod_touch_aes_cbc(const uint8_t *in, uint8_t *out, uint32_t len, const AES_KEY *key,
+                               uint8_t *ivec, bool encrypt)
+{
+    uint8_t block[AES_BLOCK_SIZE];
+
+    for(uint32_t off = 0; off < len; off += AES_BLOCK_SIZE) {
+        if(encrypt) {
+            for(int i = 0; i < AES_BLOCK_SIZE; i++) {
+                block[i] = in[off + i] ^ ivec[i];
+            }
+            AES_encrypt(block, out + off, key);
+            memcpy(ivec, out + off, AES_BLOCK_SIZE);
+        }
+        else {
+            AES_decrypt(in + off, block, key);
+            for(int i = 0; i < AES_BLOCK_SIZE; i++) {
+                block[i] ^= ivec[i];
+            }
+            memcpy(ivec, in + off, AES_BLOCK_SIZE);
+            memcpy(out + off, block, AES_BLOCK_SIZE);
+        }
+    }
+}
+
 static uint64_t ipod_touch_aes_read(void *opaque, hwaddr offset, unsigned size)
 {
     IPodTouchAESState *s = IPOD_TOUCH_AES(opaque);
@@ -166,7 +191,7 @@ static void ipod_touch_aes_run(IPodTouchAESState *s)
         // The engine only processes whole blocks. IMG3 payloads leave the trailing partial block unencrypted,
         // so it has to come out untouched rather than being decrypted as a zero-padded block.
         uint32_t blocks_size = s->size & ~(AES_BLOCK_SIZE - 1);
-        AES_cbc_encrypt(in, out, blocks_size, &key, (uint8_t *)s->ivec, encrypt ? AES_ENCRYPT : AES_DECRYPT);
+        ipod_touch_aes_cbc(in, out, blocks_size, &key, (uint8_t *)s->ivec, encrypt);
         memcpy(out + blocks_size, in + blocks_size, s->size - blocks_size);
     }
 
