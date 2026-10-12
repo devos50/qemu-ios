@@ -112,6 +112,7 @@ arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 
 arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
   'ipod_touch_aes.c',
+  'ipod_touch_bcm4325.c',
   'ipod_touch_cd3272_mikey.c',
   'ipod_touch_chipid.c',
   'ipod_touch_clock.c',
@@ -128,6 +129,7 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: [files(
   'ipod_touch_pcf50633_pmu.c',
   'ipod_touch_pke.c',
   'ipod_touch_scaler_csc.c',
+  'ipod_touch_sdio.c',
   'ipod_touch_sha1.c',
   'ipod_touch_spi.c',
   'ipod_touch_sysic.c',
