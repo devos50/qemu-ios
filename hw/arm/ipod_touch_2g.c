@@ -720,7 +720,10 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = qdev_new("ipodtouch.sha1");
     IPodTouchSHA1State *sha1_state = IPOD_TOUCH_SHA1(dev);
     nms->sha1_state = sha1_state;
+    busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, SHA1_MEM_BASE, &sha1_state->iomem);
+    sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_SHA1_IRQ));
+    sysbus_realize(busdev, &error_fatal);
 
     // init AES engine
     dev = qdev_new("ipodtouch.aes");

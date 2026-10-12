@@ -6,6 +6,10 @@
  * The guest pads the message itself (0x80, zeroes, 64-bit bit length), so the engine only runs the SHA-1 compression
  * function over 64-byte blocks. We compress every block as it arrives; after the padded final block the state
  * h0..h4 is the digest, so there is no limit on the input size (the restore ramdisk is ~25 MB).
+ *
+ * The bootloaders poll the engine. The kernel's AppleS5L8900XSHA1 (used through /dev/sha1_0, e.g. by asr from iPhone OS
+ * 2.2 on) hashes a request in chunks: it resets the engine, writes the state of the previous chunk back into the hash
+ * registers and starts with SHA_CONFIG_CONTINUE, and it waits for an interrupt for chunks of 4 KiB and more.
  */
 static void sha1_compress(uint32_t state[5], const uint8_t *block)
 {
@@ -64,6 +68,11 @@ static void flush_hw_buffer(IPodTouchSHA1State *s) {
     s->hw_buffer_dirty = false;
 }
 
+static void sha1_update_irq(IPodTouchSHA1State *s)
+{
+    qemu_set_irq(s->irq, s->irq_status && s->irq_enable);
+}
+
 static void sha1_reset(IPodTouchSHA1State *s)
 {
 	s->config = 0;
@@ -87,9 +96,13 @@ static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
 
 	switch(offset) {
 		case SHA_CONFIG:
-			return s->config;
+			return s->config & ~SHA_CONFIG_BUSY; // operations complete immediately
 		case SHA_RESET:
 			return 0;
+		case SHA_IRQ_STATUS:
+			return s->irq_status;
+		case SHA_IRQ_ENABLE:
+			return s->irq_enable;
 		case SHA_MEMORY_START:
 			return s->memory_start;
 		case SHA_MEMORY_MODE:
@@ -118,7 +131,7 @@ static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, u
 
 	switch(offset) {
 		case SHA_CONFIG:
-			if(value == 0x2 || value == 0xa)
+			if(value & SHA_CONFIG_START)
 			{
                 if(s->hw_buffer_dirty) {
                     flush_hw_buffer(s);
@@ -135,12 +148,33 @@ static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, u
 						sha1_process(s, chunk, n);
 					}
 				}
+
+				if(value & SHA_CONFIG_IRQ) {
+					s->irq_status = 1;
+					sha1_update_irq(s);
+				}
 			} else {
 				s->config = value;
 			}
 			break;
 		case SHA_RESET:
 			sha1_reset(s);
+			break;
+		case SHA_IRQ_STATUS:
+			if(value & 1) {
+				s->irq_status = 0;
+				sha1_update_irq(s);
+			}
+			break;
+		case SHA_IRQ_ENABLE:
+			s->irq_enable = value & 1;
+			sha1_update_irq(s);
+			break;
+		case SHA_HASH ... SHA_HASH + 0x10:
+			// the state to continue from (the kernel hashes long inputs in chunks), in the byte order the registers
+			// read back
+			s->state[(offset - SHA_HASH) / 4] = bswap32(value);
+			s->hash_computed = false;
 			break;
 		case SHA_MEMORY_START:
 			s->memory_start = value;
@@ -173,6 +207,7 @@ static void ipod_touch_sha1_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &sha1_ops, s, "sha1", 0x100);
     sysbus_init_mmio(sbd, &s->iomem);
+    sysbus_init_irq(sbd, &s->irq);
 
     sha1_reset(s);
 }
