@@ -447,8 +447,9 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->irq[1] = g_malloc0(sizeof(qemu_irq) * 32);
     for (int i = 0; i < 32; i++) { nms->irq[1][i] = qdev_get_gpio_in(dev, i); }
 
-    // // chain VICs together
+    // chain VICs together
     nms->vic1->daisy = nms->vic0;
+    nms->vic0->daisy_callback = nms->vic1;
 
     // init clock 0
     dev = qdev_new(TYPE_IPOD_TOUCH_CLOCK);
