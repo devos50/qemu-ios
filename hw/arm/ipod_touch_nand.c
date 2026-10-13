@@ -28,6 +28,8 @@
 #define VFL_BAD_MAP_TABLE_UNUSABLE      0xFFFF
 #define WMR_MAX_RESERVED_SIZE           820
 #define VFL_INITIAL_CXT_AGE             0xFFFFFF00
+#define VFL_CXT_CHECKSUM_OFFSET         0x7F8
+#define VFL_CXT_CHECKSUM_SEED           0xAABBCCDD
 
 #define FTL_CXT_SECTION_SIZE            3
 #define FREE_SECTION_SIZE               20
@@ -125,6 +127,20 @@ static void context_spare(uint8_t *spare, uint32_t age, uint8_t status, uint8_t 
     spare[9] = type;
 }
 
+// The two checksums at the end of the VFL context: the sum and the XOR of the words before them, each combined with a
+// seed. The VSVFL of iOS 4 refuses a context with wrong checksums, older ones don't check them.
+static void vfl_context_checksum(uint8_t *ctx)
+{
+    uint32_t sum = 0, xor = 0;
+
+    for (int i = 0; i < VFL_CXT_CHECKSUM_OFFSET; i += 4) {
+        sum += ldl_le_p(ctx + i);
+        xor ^= ldl_le_p(ctx + i);
+    }
+    stl_le_p(ctx + VFL_CXT_CHECKSUM_OFFSET, sum + VFL_CXT_CHECKSUM_SEED);
+    stl_le_p(ctx + VFL_CXT_CHECKSUM_OFFSET + 4, xor ^ VFL_CXT_CHECKSUM_SEED);
+}
+
 static void format_vfl_context(IPodTouchNAND *nand)
 {
     g_autofree uint8_t *page = g_malloc0(NAND_BYTES_PER_PAGE);
@@ -171,6 +187,7 @@ static void format_vfl_context(IPodTouchNAND *nand)
         }
         stl_le_p(page + 1754, VFL_VENDOR_SPECIFIC_TYPE);
         stl_le_p(page + 2036, VFL_META_VERSION);
+        vfl_context_checksum(page);
 
         context_spare(spare, VFL_INITIAL_CXT_AGE, 0, VFL_CTX_SPARE_TYPE);
         for (int i = 0; i < VFL_NUM_OF_VFL_CXT_COPIES; i++) {
