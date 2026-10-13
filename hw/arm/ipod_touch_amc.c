@@ -37,6 +37,8 @@
 #include "hw/arm/ipod_touch_amc.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "migration/qemu-file-types.h"
+#include "qapi/error.h"
 #include "system/address-spaces.h"
 #include "qemu/log.h"
 #include "qemu/bswap.h"
@@ -669,10 +671,67 @@ static const Property ipod_touch_amc_properties[] = {
     DEFINE_PROP_STRING("input-dump", IPodTouchAMCState, input_dump),
 };
 
+// sanity limits for a loaded state: the driver configures at most two output buffers, and the input is drained as it
+// is decoded
+#define AMC_MAX_OUT_BUFFERS 2
+#define AMC_MAX_SAVED_INPUT (64 * 1024 * 1024)
+
+static bool ipod_touch_amc_save_input(QEMUFile *f, void *pv, size_t size, const VMStateField *field,
+                                      JSONWriter *vmdesc, Error **errp)
+{
+    GByteArray **input = pv;
+
+    qemu_put_be32(f, (*input)->len);
+    qemu_put_buffer(f, (*input)->data, (*input)->len);
+    return true;
+}
+
+static bool ipod_touch_amc_load_input(QEMUFile *f, void *pv, size_t size, const VMStateField *field, Error **errp)
+{
+    GByteArray **input = pv;
+    uint32_t len = qemu_get_be32(f);
+
+    if (len > AMC_MAX_SAVED_INPUT) {
+        error_setg(errp, "AMC: %u bytes of saved input", len);
+        return false;
+    }
+    g_byte_array_set_size(*input, len);
+    qemu_get_buffer(f, (*input)->data, len);
+    return true;
+}
+
+static const VMStateInfo vmstate_info_amc_input = {
+    .name = "amc input",
+    .load = ipod_touch_amc_load_input,
+    .save = ipod_touch_amc_save_input,
+};
+
+/*
+ * The decoder library state is not saved: the decoder is closed and starts again from the input that follows, like
+ * after a stream reset. The ALAC parameters are reread from the DSP's SRAM then.
+ */
+static int ipod_touch_amc_pre_load(void *opaque)
+{
+    ipod_touch_amc_decoder_close(opaque);
+    return 0;
+}
+
+static int ipod_touch_amc_post_load(void *opaque, int version_id)
+{
+    IPodTouchAMCState *s = opaque;
+
+    if (s->out_buffers > AMC_MAX_OUT_BUFFERS || (s->out_buffers && s->out_buf >= s->out_buffers)) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
 static const VMStateDescription vmstate_ipod_touch_amc = {
     .name = TYPE_IPOD_TOUCH_AMC,
     .version_id = 1,
     .minimum_version_id = 1,
+    .pre_load = ipod_touch_amc_pre_load,
+    .post_load = ipod_touch_amc_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, IPodTouchAMCState, AMC_REG_SIZE / 4),
         VMSTATE_UINT32_ARRAY(ch_ctrl, IPodTouchAMCState, AMC_NUM_CHANNELS),
@@ -685,6 +744,18 @@ static const VMStateDescription vmstate_ipod_touch_amc = {
         VMSTATE_UINT32(codec, IPodTouchAMCState),
         VMSTATE_UINT32(out_buffers, IPodTouchAMCState),
         VMSTATE_UINT32(out_samples, IPodTouchAMCState),
+        VMSTATE_TIMER_PTR(fill_timer, IPodTouchAMCState),
+        {
+            .name = "input",
+            .info = &vmstate_info_amc_input,
+            .flags = VMS_SINGLE,
+            .offset = offsetof(IPodTouchAMCState, input),
+        },
+        VMSTATE_UINT64(in_received, IPodTouchAMCState),
+        VMSTATE_UINT64(in_consumed, IPodTouchAMCState),
+        VMSTATE_BOOL(fill_requested, IPodTouchAMCState),
+        VMSTATE_UINT32(out_buf, IPodTouchAMCState),
+        VMSTATE_BOOL(decoder_failed, IPodTouchAMCState),
         VMSTATE_END_OF_LIST()
     }
 };

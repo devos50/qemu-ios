@@ -371,10 +371,23 @@ static const Property ipod_touch_i2s_properties[] = {
     DEFINE_PROP_UINT32("sample-rate", IPodTouchI2SState, sample_rate, 44100),
 };
 
+// The host output (voice and the frames not yet played) starts over at the loaded sample rate.
+static int ipod_touch_i2s_post_load(void *opaque, int version_id)
+{
+    IPodTouchI2SState *s = opaque;
+
+    if (s->tx_sample >= 2 || s->sample_rate == 0) {
+        return -EINVAL;
+    }
+    ipod_touch_i2s_open_voice(s);
+    return 0;
+}
+
 static const VMStateDescription vmstate_ipod_touch_i2s = {
     .name = TYPE_IPOD_TOUCH_I2S,
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = ipod_touch_i2s_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(clkcon, IPodTouchI2SState),
         VMSTATE_UINT32(txcon, IPodTouchI2SState),
@@ -386,9 +399,12 @@ static const VMStateDescription vmstate_ipod_touch_i2s = {
         VMSTATE_UINT32(sample_rate, IPodTouchI2SState),
         VMSTATE_INT64(tx_start_ns, IPodTouchI2SState),
         VMSTATE_UINT64(tx_frames, IPodTouchI2SState),
+        VMSTATE_UINT32(tx_room, IPodTouchI2SState),
         VMSTATE_UINT32(tx_sample, IPodTouchI2SState),
+        VMSTATE_INT16_ARRAY(frame, IPodTouchI2SState, 2),
         VMSTATE_INT64(rx_start_ns, IPodTouchI2SState),
         VMSTATE_UINT64(rx_frames, IPodTouchI2SState),
+        VMSTATE_UINT32(rx_avail, IPodTouchI2SState),
         VMSTATE_INT32_ARRAY(gain, IPodTouchI2SState, 2),
         VMSTATE_TIMER_PTR(timer, IPodTouchI2SState),
         VMSTATE_END_OF_LIST()
