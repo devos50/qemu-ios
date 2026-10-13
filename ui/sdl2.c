@@ -590,6 +590,20 @@ static void handle_mousewheel(SDL_Event *ev)
     qemu_input_event_sync();
 }
 
+/*
+ * Closing the window quits, except with -action shutdown=pause: then it
+ * pauses the machine like any other host shutdown request, and whoever
+ * controls QEMU (e.g. a process that saves the machine first) quits it over
+ * QMP.
+ */
+static void sdl2_close_request(void)
+{
+    if (shutdown_action != SHUTDOWN_ACTION_PAUSE) {
+        shutdown_action = SHUTDOWN_ACTION_POWEROFF;
+    }
+    qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+}
+
 static void handle_windowevent(SDL_Event *ev)
 {
     struct sdl2_console *scon = get_scon_from_window(ev->window.windowID);
@@ -645,8 +659,7 @@ static void handle_windowevent(SDL_Event *ev)
                 allow_close = false;
             }
             if (allow_close) {
-                shutdown_action = SHUTDOWN_ACTION_POWEROFF;
-                qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+                sdl2_close_request();
             }
         } else {
             SDL_HideWindow(scon->real_window);
@@ -692,8 +705,7 @@ void sdl2_poll_events(struct sdl2_console *scon)
                 allow_close = false;
             }
             if (allow_close) {
-                shutdown_action = SHUTDOWN_ACTION_POWEROFF;
-                qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+                sdl2_close_request();
             }
             break;
         case SDL_MOUSEMOTION:

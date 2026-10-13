@@ -1242,6 +1242,19 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                                                          (NSApplication *)sender
 {
     COCOA_DEBUG("QemuCocoaAppController: applicationShouldTerminate\n");
+    /*
+     * With -action shutdown=pause, closing the window pauses the machine
+     * like any other host shutdown request; whoever controls QEMU (e.g. a
+     * process that saves the machine first) quits it over QMP.
+     */
+    if (bool_with_bql(^bool {
+        return shutdown_action == SHUTDOWN_ACTION_PAUSE;
+    })) {
+        with_bql(^{
+            qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+        });
+        return NSTerminateCancel;
+    }
     return [self verifyQuit];
 }
 
