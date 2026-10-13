@@ -389,62 +389,103 @@ static void ipod_touch_aes_write_words(uint32_t *words, hwaddr base, hwaddr offs
     words[idx] = (words[idx] & ~mask) | (((uint32_t)value << shift) & mask);
 }
 
-static void ipod_touch_aes_run(IPodTouchAESState *s)
+static void ipod_touch_aes_update_irq(IPodTouchAESState *s)
+{
+    qemu_set_irq(s->irq, (s->status & s->irq_enable & AES_STATUS_MASK) != 0);
+}
+
+static void ipod_touch_aes_finish(IPodTouchAESState *s)
+{
+    s->remaining = 0;
+    memset(s->custkey, 0, sizeof(s->custkey));
+    memset(s->ivec, 0, sizeof(s->ivec));
+    // an operation that used up its segments also reports them as such (the boot chain sees and acks 0xf)
+    s->status |= AES_STATUS_DONE | (s->in_size == 0 ? AES_STATUS_IN_EMPTY : 0) |
+                 (s->out_size == 0 ? AES_STATUS_OUT_FULL : 0);
+}
+
+/*
+ * Runs the operation until it is done or a segment runs out. The engine only processes whole blocks: IMG3 payloads
+ * leave a trailing partial block unencrypted, so that has to come out untouched rather than being processed as a
+ * zero-padded block.
+ */
+static void ipod_touch_aes_process(IPodTouchAESState *s)
+{
+    bool encrypt = s->mode & AES_MODE_ENCRYPT;
+
+    while(s->remaining) {
+        if(s->in_size == 0 || s->out_size == 0) {
+            s->status |= (s->in_size == 0 ? AES_STATUS_IN_EMPTY : 0) | (s->out_size == 0 ? AES_STATUS_OUT_FULL : 0);
+            return;
+        }
+
+        uint32_t len = MIN(s->remaining, MIN(s->in_size, s->out_size));
+        uint32_t blocks_len = len & ~(AES_BLOCK_SIZE - 1);
+        if(blocks_len == 0 && len != s->remaining) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: segment of %u bytes splits a block\n", __func__, len);
+            ipod_touch_aes_finish(s);
+            return;
+        }
+
+        uint8_t *buf = g_malloc(len);
+        physical_memory_read(s->in_addr, buf, len);
+        ipod_touch_aes_cbc(buf, buf, blocks_len, &s->key, (uint8_t *)s->ivec, encrypt);
+        physical_memory_write(s->out_addr, buf, len);
+        g_free(buf);
+
+        s->in_addr += len;
+        s->in_size -= len;
+        s->out_addr += len;
+        s->out_size -= len;
+        s->remaining -= len;
+    }
+    ipod_touch_aes_finish(s);
+}
+
+static void ipod_touch_aes_start(IPodTouchAESState *s)
 {
     bool encrypt = s->mode & AES_MODE_ENCRYPT;
     uint32_t key_size = (s->mode >> 4) & 3;
     uint32_t key_bits = key_size == AES256 ? 256 : (key_size == AES192 ? 192 : 128);
-    uint32_t src_addr = encrypt ? s->plain_addr : s->cipher_addr;
-    uint32_t dst_addr = encrypt ? s->cipher_addr : s->plain_addr;
-    uint8_t *in = g_malloc(s->size);
-    uint8_t *out = g_malloc(s->size);
-    AES_KEY key;
 
-    trace_ipod_touch_aes_op(s->mode, s->keytype, s->cipher_addr, s->plain_addr, s->size);
-    physical_memory_read(src_addr, in, s->size);
+    trace_ipod_touch_aes_op(s->mode, s->keytype, s->in_addr, s->out_addr, s->size);
 
     if(s->keytype == AESGID) {
+        // answered as a whole from the table, so the KBAG has to be in a single segment (it always is)
+        uint8_t *in = g_malloc(s->size);
+        uint8_t *out = g_malloc0(s->size);
+        physical_memory_read(s->in_addr, in, s->size);
         if(encrypt || !ipod_touch_aes_gid_decrypt(in, out, s->size)) {
             qemu_log_mask(LOG_UNIMP, "%s: no known GID %s result for this input (size %d)\n", __func__,
                           encrypt ? "encryption" : "decryption", s->size);
-            memset(out, 0, s->size);
         }
+        physical_memory_write(s->out_addr, out, s->size);
+        g_free(in);
+        g_free(out);
+        s->in_size -= MIN(s->in_size, s->size);
+        s->out_size -= MIN(s->out_size, s->size);
+        ipod_touch_aes_finish(s);
+        return;
+    }
+
+    const uint8_t *key;
+    if(s->keytype == AESUID) {
+        key = key_uid;
+        key_bits = sizeof(key_uid) * 8;
     }
     else {
-        if(s->keytype == AESUID) {
-            key_bits = sizeof(key_uid) * 8;
-            if(encrypt) {
-                AES_set_encrypt_key(key_uid, key_bits, &key);
-            }
-            else {
-                AES_set_decrypt_key(key_uid, key_bits, &key);
-            }
-        }
-        else {
-            // A key of n bits occupies the last n / 32 key words.
-            const uint8_t *custom = (const uint8_t *)&s->custkey[8 - key_bits / 32];
-            if(encrypt) {
-                AES_set_encrypt_key(custom, key_bits, &key);
-            }
-            else {
-                AES_set_decrypt_key(custom, key_bits, &key);
-            }
-        }
-
-        // The engine only processes whole blocks. IMG3 payloads leave the trailing partial block unencrypted,
-        // so it has to come out untouched rather than being decrypted as a zero-padded block.
-        uint32_t blocks_size = s->size & ~(AES_BLOCK_SIZE - 1);
-        ipod_touch_aes_cbc(in, out, blocks_size, &key, (uint8_t *)s->ivec, encrypt);
-        memcpy(out + blocks_size, in + blocks_size, s->size - blocks_size);
+        // A key of n bits occupies the last n / 32 key words.
+        key = (const uint8_t *)&s->custkey[8 - key_bits / 32];
+    }
+    if(encrypt) {
+        AES_set_encrypt_key(key, key_bits, &s->key);
+    }
+    else {
+        AES_set_decrypt_key(key, key_bits, &s->key);
     }
 
-    physical_memory_write(dst_addr, out, s->size);
-
-    memset(s->custkey, 0, sizeof(s->custkey));
-    memset(s->ivec, 0, sizeof(s->ivec));
-    g_free(in);
-    g_free(out);
-    s->status = 0xf;
+    s->remaining = s->size;
+    ipod_touch_aes_process(s);
 }
 
 static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
@@ -455,7 +496,28 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
 
     switch(offset) {
         case AES_GO:
-            ipod_touch_aes_run(s);
+            if(value == AES_GO_START) {
+                ipod_touch_aes_start(s);
+            }
+            else if(value == AES_GO_CONTINUE && s->remaining) {
+                ipod_touch_aes_process(s);
+            }
+            ipod_touch_aes_update_irq(s);
+            break;
+        case AES_RESET:
+            if(value & 1) {
+                s->status = 0;
+                s->remaining = 0;
+                ipod_touch_aes_update_irq(s);
+            }
+            break;
+        case AES_STATUS:
+            s->status &= ~value;
+            ipod_touch_aes_update_irq(s);
+            break;
+        case AES_IRQ_ENABLE:
+            s->irq_enable = value;
+            ipod_touch_aes_update_irq(s);
             break;
         case AES_MODE:
             s->mode = value;
@@ -463,11 +525,17 @@ static void ipod_touch_aes_write(void *opaque, hwaddr offset, uint64_t value, un
         case AES_SIZE:
             s->size = value;
             break;
-        case AES_CIPHER_ADDR:
-            s->cipher_addr = value;
+        case AES_OUT_ADDR:
+            s->out_addr = value;
             break;
-        case AES_PLAIN_ADDR:
-            s->plain_addr = value;
+        case AES_OUT_SIZE:
+            s->out_size = value;
+            break;
+        case AES_IN_SIZE:
+            s->in_size = value;
+            break;
+        case AES_IN_ADDR:
+            s->in_addr = value;
             break;
         case AES_TYPE:
             s->keytype = value;
@@ -497,6 +565,7 @@ static void ipod_touch_aes_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &aes_ops, s, "aes", 0x100);
     sysbus_init_mmio(sbd, &s->iomem);
+    sysbus_init_irq(sbd, &s->irq);
 }
 
 static void ipod_touch_aes_reset(DeviceState *dev)
@@ -506,6 +575,9 @@ static void ipod_touch_aes_reset(DeviceState *dev)
     memset(s->custkey, 0, sizeof(s->custkey));
     memset(s->ivec, 0, sizeof(s->ivec));
     s->mode = 0;
+    s->status = 0;
+    s->irq_enable = 0;
+    s->remaining = 0;
 }
 
 static void ipod_touch_aes_class_init(ObjectClass *klass, const void *data)

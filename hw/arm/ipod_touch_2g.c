@@ -730,6 +730,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchAESState *aes_state = IPOD_TOUCH_AES(dev);
     nms->aes_state = aes_state;
     memory_region_add_subregion(sysmem, AES_MEM_BASE, &aes_state->iomem);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, s5l8900_get_irq(nms, S5L8720_AES_IRQ));
     sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init PKE engine

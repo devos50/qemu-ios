@@ -111,7 +111,7 @@ ipod_touch_pmu_send(uint8_t data, uint32_t reg) "0x%02x (reg 0x%02x)"
 
 # ipod_touch_aes.c
 ipod_touch_aes_write(uint64_t addr, uint64_t val) "0x%02" PRIx64 " <- 0x%08" PRIx64
-ipod_touch_aes_op(uint32_t mode, uint32_t keytype, uint32_t cipher, uint32_t plain, uint32_t size) "mode 0x%02x key %u cipher 0x%08x plain 0x%08x size 0x%x"
+ipod_touch_aes_op(uint32_t mode, uint32_t keytype, uint32_t in, uint32_t out, uint32_t size) "mode 0x%02x key %u in 0x%08x out 0x%08x size 0x%x"
 
 # ipod_touch_amc.c
 ipod_touch_amc_read(uint64_t addr, uint64_t val) "0x%04" PRIx64 " -> 0x%08" PRIx64
