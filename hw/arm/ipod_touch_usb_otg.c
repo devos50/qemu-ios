@@ -346,7 +346,9 @@ static uint32_t synopsys_usb_in_ep_read(synopsys_usb_state *_state, uint8_t _ep,
 {
 	if(_ep >= USB_NUM_ENDPOINTS)
 	{
-		hw_error("usb_synopsys: Tried to read from disabled EP %d.\n", _ep);
+		// the register space has room for 16 endpoints; iOS 4 clears the interrupts of one more endpoint than
+		// the core reports, so the registers of the missing ones read as zero and ignore writes
+		qemu_log_mask(LOG_GUEST_ERROR, "usb_synopsys: Tried to read from disabled EP %d.\n", _ep);
 		return 0;
 	}
 
@@ -379,7 +381,9 @@ static uint32_t synopsys_usb_out_ep_read(synopsys_usb_state *_state, int _ep, hw
 {
 	if(_ep >= USB_NUM_ENDPOINTS)
 	{
-		hw_error("usb_synopsys: Tried to read from disabled EP %d.\n", _ep);
+		// the register space has room for 16 endpoints; iOS 4 clears the interrupts of one more endpoint than
+		// the core reports, so the registers of the missing ones read as zero and ignore writes
+		qemu_log_mask(LOG_GUEST_ERROR, "usb_synopsys: Tried to read from disabled EP %d.\n", _ep);
 		return 0;
 	}
 
@@ -526,7 +530,9 @@ static void synopsys_usb_in_ep_write(synopsys_usb_state *_state, int _ep, hwaddr
 {
 	if(_ep >= USB_NUM_ENDPOINTS)
 	{
-		hw_error("usb_synopsys: Wrote to disabled EP %d.\n", _ep);
+		// the register space has room for 16 endpoints; iOS 4 clears the interrupts of one more endpoint than
+		// the core reports, so the registers of the missing ones read as zero and ignore writes
+		qemu_log_mask(LOG_GUEST_ERROR, "usb_synopsys: Wrote to disabled EP %d.\n", _ep);
 		return;
 	}
 
@@ -564,7 +570,9 @@ static void synopsys_usb_out_ep_write(synopsys_usb_state *_state, int _ep, hwadd
 {
 	if(_ep >= USB_NUM_ENDPOINTS)
 	{
-		hw_error("usb_synopsys: Wrote to disabled EP %d.\n", _ep);
+		// the register space has room for 16 endpoints; iOS 4 clears the interrupts of one more endpoint than
+		// the core reports, so the registers of the missing ones read as zero and ignore writes
+		qemu_log_mask(LOG_GUEST_ERROR, "usb_synopsys: Wrote to disabled EP %d.\n", _ep);
 		return;
 	}
 
