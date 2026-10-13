@@ -136,11 +136,33 @@ static void prepare_short_control_response(IPodTouchMultitouchState *s, uint8_t 
     s->out_buffer[15] = (checksum >> 8) & 0xFF;
 }
 
+// Both packets of a frame start with the read command the driver used, which it checks. It reads with 0xEB in its "flip
+// NOP" mode (iPhone OS 3.0 from the first read on, 2.x only after re-reading the device properties) and with 0xEA
+// otherwise.
+static void set_frame_read_command(MTFrame *frame, uint8_t cmd) {
+    uint16_t checksum = 0;
+
+    frame->frame_length.cmd = cmd;
+    for(int i = 0; i < 14; i++) {
+        checksum += ((uint8_t *) &frame->frame_length)[i];
+    }
+    frame->frame_length.checksum1 = (checksum & 0xFF);
+    frame->frame_length.checksum2 = (checksum >> 8) & 0xFF;
+
+    frame->frame_packet.cmd = cmd;
+    checksum = 0;
+    for(int i = 0; i < 4; i++) {
+        checksum += ((uint8_t *) &frame->frame_packet)[i];
+    }
+    // the first five bytes have to sum up to 0.
+    frame->frame_packet.checksum_pad = 0xFF - (checksum & 0xFF) + 1;
+}
+
 // The length packet of a frame read when there's no frame: a zero length tells the driver there's nothing to read.
-static void prepare_empty_frame_length_response(IPodTouchMultitouchState *s) {
+static void prepare_empty_frame_length_response(IPodTouchMultitouchState *s, uint8_t cmd) {
     memset(s->out_buffer, 0, sizeof(MTFrameLengthPacket));
-    s->out_buffer[0] = MT_CMD_FRAME_READ;
-    s->out_buffer[14] = MT_CMD_FRAME_READ;
+    s->out_buffer[0] = cmd;
+    s->out_buffer[14] = cmd; // the checksum
 }
 
 // Forget the command in progress, e.g., when the chip select is deasserted in the middle of a command.
@@ -257,10 +279,11 @@ static uint32_t ipod_touch_multitouch_transfer(SSIPeripheral *dev, uint32_t valu
             // Start with the length packet, the frame packet starts with the same two bytes.
             s->buf_size = sizeof(MTFrameLengthPacket);
             if(s->frame_pending) {
+                set_frame_read_command(&s->frame, value);
                 s->out_buffer = (uint8_t *) &s->frame.frame_length;
             }
             else {
-                prepare_empty_frame_length_response(s);
+                prepare_empty_frame_length_response(s, value);
             }
         }
         else {
@@ -368,32 +391,16 @@ static void build_frame(IPodTouchMultitouchState *s, uint8_t event, float x, flo
     uint16_t data_len = sizeof(MTFrameHeader) + sizeof(FingerData) + 2;
 
     /// create the frame length packet
-    frame->frame_length.cmd = MT_CMD_FRAME_READ;
     frame->frame_length.length1 = (data_len & 0xFF);
     frame->frame_length.length2 = (data_len >> 8) & 0xFF;
-
-    uint16_t checksum = 0;
-    for(int i = 0; i < 14; i++) {
-        checksum += ((uint8_t *) &frame->frame_length)[i];
-    }
-    frame->frame_length.checksum1 = (checksum & 0xFF);
-    frame->frame_length.checksum2 = (checksum >> 8) & 0xFF;
 
     // create the frame packet
     // The driver reads the length packet and the frame packet with the same command and we only know which one it
     // wants after we've sent the first two bytes, so both packets start with the command and the length LSB.
-    frame->frame_packet.cmd = MT_CMD_FRAME_READ;
     frame->frame_packet.length_lsb = (data_len & 0xFF);
     frame->frame_packet.length1 = (data_len & 0xFF);
     frame->frame_packet.length2 = (data_len >> 8) & 0xFF;
-
-    checksum = 0;
-    for(int i = 0; i < 4; i++) {
-        checksum += ((uint8_t *) &frame->frame_packet)[i];
-    }
-
-    // the first five bytes have to sum up to 0.
-    frame->frame_packet.checksum_pad = 0xFF - (checksum & 0xFF) + 1;
+    set_frame_read_command(frame, MT_CMD_FRAME_READ);
 
     frame->frame_packet.header.type = MT_FRAME_TYPE_PATH;
     frame->frame_packet.header.frameNum = s->frame_counter;
@@ -433,7 +440,7 @@ static void build_frame(IPodTouchMultitouchState *s, uint8_t event, float x, flo
     frame->finger_data.contactDensity = contactDensity; // seems to be a medium press
 
     // compute the checksum over the frame data.
-    checksum = 0;
+    uint16_t checksum = 0;
     for(int i = 0; i < data_len - 2; i++) {
         checksum += ((uint8_t *) &frame->frame_packet.header)[i];
     }

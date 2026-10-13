@@ -69,8 +69,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMultitouchState, IPOD_TOUCH_MULTITOUCH)
 #define MT_CMD_SHORT_CONTROL_WRITE   0xE4
 #define MT_CMD_SHORT_CONTROL_READ    0xE6
 #define MT_CMD_FRAME_READ            0xEA
-// The frame read command once the sensor info reports a bcdVersion >= 0x24 (the driver's "flip NOP" mode). The driver
-// only switches to it when it re-reads the device properties, e.g., after resetting the controller.
+// The frame read command once the sensor info reports a bcdVersion >= 0x24 (the driver's "flip NOP" mode). The 2.x
+// driver only switches to it when it re-reads the device properties, e.g., after resetting the controller; the 3.0
+// driver uses it from the start.
 #define MT_CMD_FRAME_READ_FLIP       0xEB
 
 // frame types
