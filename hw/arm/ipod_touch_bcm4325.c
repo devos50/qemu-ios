@@ -19,6 +19,9 @@
 #include "qemu/cutils.h"
 #include "qemu/log.h"
 #include "trace.h"
+#include "migration/qemu-file-types.h"
+#include "migration/vmstate.h"
+#include "qapi/error.h"
 
 static const uint8_t bcm4325_ap_bssid[6] = { 0x02, 0x51, 0x45, 0x4D, 0x55, 0x01 };
 static const uint8_t bcm4325_ap_rates[] = { 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24 };
@@ -979,6 +982,196 @@ void bcm4325_reset(BCM4325State *s)
     s->irq_level = false;
     s->irq_handler(s->irq_opaque, false);
 }
+
+/*
+ * Migration. The frames to the host and the values the driver set are in glib containers, saved by
+ * vmstate_info_bcm4325_queues as counted lists of length-prefixed byte strings.
+ */
+static void bcm4325_save_bytes(QEMUFile *f, const void *data, uint32_t len)
+{
+    qemu_put_be32(f, len);
+    qemu_put_buffer(f, data, len);
+}
+
+static bool bcm4325_load_bytes(QEMUFile *f, uint32_t max_len, GByteArray **out, Error **errp)
+{
+    uint32_t len = qemu_get_be32(f);
+
+    if (len > max_len) {
+        error_setg(errp, "bcm4325: saved length %u exceeds %u", len, max_len);
+        return false;
+    }
+    *out = g_byte_array_sized_new(len);
+    g_byte_array_set_size(*out, len);
+    qemu_get_buffer(f, (*out)->data, len);
+    return true;
+}
+
+static void bcm4325_save_frame(gpointer data, gpointer f)
+{
+    GByteArray *frame = data;
+    bcm4325_save_bytes(f, frame->data, frame->len);
+}
+
+static void bcm4325_save_value(QEMUFile *f, GBytes *value)
+{
+    gsize len;
+    const void *data = g_bytes_get_data(value, &len);
+    bcm4325_save_bytes(f, data, len);
+}
+
+static bool bcm4325_save_queues(QEMUFile *f, void *pv, size_t size, const VMStateField *field,
+                                JSONWriter *vmdesc, Error **errp)
+{
+    BCM4325State *s = pv;
+    GHashTableIter iter;
+    gpointer key, value;
+
+    qemu_put_byte(f, s->rx_cur != NULL);
+    if (s->rx_cur) {
+        bcm4325_save_frame(s->rx_cur, f);
+    }
+    qemu_put_be32(f, g_queue_get_length(s->rx_frames));
+    g_queue_foreach(s->rx_frames, bcm4325_save_frame, f);
+
+    qemu_put_be32(f, g_hash_table_size(s->ioctls));
+    g_hash_table_iter_init(&iter, s->ioctls);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        qemu_put_be32(f, GPOINTER_TO_UINT(key));
+        bcm4325_save_value(f, value);
+    }
+
+    qemu_put_be32(f, g_hash_table_size(s->iovars));
+    g_hash_table_iter_init(&iter, s->iovars);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        bcm4325_save_bytes(f, key, strlen(key));
+        bcm4325_save_value(f, value);
+    }
+    return true;
+}
+
+static bool bcm4325_load_queues(QEMUFile *f, void *pv, size_t size, const VMStateField *field, Error **errp)
+{
+    BCM4325State *s = pv;
+    GByteArray *bytes;
+    uint32_t n;
+
+    if (qemu_get_byte(f)) {
+        if (!bcm4325_load_bytes(f, SDPCM_HDR_LEN + 0x10000, &s->rx_cur, errp)) {
+            return false;
+        }
+    }
+    n = qemu_get_be32(f);
+    if (n > BCM4325_MAX_RX_FRAMES) {
+        error_setg(errp, "bcm4325: %u saved frames", n);
+        return false;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (!bcm4325_load_bytes(f, SDPCM_HDR_LEN + 0x10000, &bytes, errp)) {
+            return false;
+        }
+        g_queue_push_tail(s->rx_frames, bytes);
+    }
+
+    n = qemu_get_be32(f);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t cmd = qemu_get_be32(f);
+        if (!bcm4325_load_bytes(f, 0x10000, &bytes, errp)) {
+            return false;
+        }
+        g_hash_table_replace(s->ioctls, GUINT_TO_POINTER(cmd), g_byte_array_free_to_bytes(bytes));
+    }
+
+    n = qemu_get_be32(f);
+    for (uint32_t i = 0; i < n; i++) {
+        GByteArray *name;
+        if (!bcm4325_load_bytes(f, 0x100, &name, errp)) {
+            return false;
+        }
+        if (!bcm4325_load_bytes(f, 0x10000, &bytes, errp)) {
+            g_byte_array_free(name, true);
+            return false;
+        }
+        g_hash_table_replace(s->iovars, g_strndup((const char *)name->data, name->len),
+                             g_byte_array_free_to_bytes(bytes));
+        g_byte_array_free(name, true);
+    }
+    return true;
+}
+
+static const VMStateInfo vmstate_info_bcm4325_queues = {
+    .name = "bcm4325 queues",
+    .load = bcm4325_load_queues,
+    .save = bcm4325_save_queues,
+};
+
+// Empties the containers before they are loaded.
+static int bcm4325_pre_load(void *opaque)
+{
+    BCM4325State *s = opaque;
+
+    if (s->rx_cur) {
+        g_byte_array_free(s->rx_cur, true);
+        s->rx_cur = NULL;
+    }
+    while (!g_queue_is_empty(s->rx_frames)) {
+        g_byte_array_free(g_queue_pop_head(s->rx_frames), true);
+    }
+    g_hash_table_remove_all(s->ioctls);
+    g_hash_table_remove_all(s->iovars);
+    return 0;
+}
+
+static int bcm4325_post_load(void *opaque, int version_id)
+{
+    BCM4325State *s = opaque;
+
+    if (s->rx_cur && s->rx_pos >= s->rx_cur->len) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+// The MAC address (conf) and the NIC are the board's. The CIS is rebuilt from them, but saved like the SoC RAM.
+const VMStateDescription vmstate_bcm4325 = {
+    .name = "bcm4325",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_load = bcm4325_pre_load,
+    .post_load = bcm4325_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16(rca, BCM4325State),
+        VMSTATE_UINT8(io_enable, BCM4325State),
+        VMSTATE_UINT8(int_enable, BCM4325State),
+        VMSTATE_UINT8(bus_if, BCM4325State),
+        VMSTATE_UINT8(high_speed, BCM4325State),
+        VMSTATE_UINT16_ARRAY(blksize, BCM4325State, BCM4325_NUM_FUNCTIONS + 1),
+        VMSTATE_UINT8_ARRAY(cis, BCM4325State, (BCM4325_NUM_FUNCTIONS + 1) * CIS_SIZE),
+        VMSTATE_UINT32(sb_window, BCM4325State),
+        VMSTATE_UINT8_ARRAY(f1_regs, BCM4325State, SBSDIO_F1_REGS_SIZE),
+        VMSTATE_BUFFER_POINTER_UNSAFE(socram, BCM4325State, 0, BCM4325_SOCRAM_SIZE),
+        VMSTATE_UINT32_2DARRAY(core_regs, BCM4325State, BCM4325_NUM_CORES, BCM4325_CORE_SIZE / 4),
+        VMSTATE_BOOL(fw_running, BCM4325State),
+        VMSTATE_UINT32(rx_pos, BCM4325State),
+        VMSTATE_UINT8(rx_seq, BCM4325State),
+        VMSTATE_UINT8(tx_seq_next, BCM4325State),
+        VMSTATE_UINT8(credit, BCM4325State),
+        VMSTATE_BOOL(irq_level, BCM4325State),
+        VMSTATE_UINT32(bcdc_hdr_len, BCM4325State),
+        VMSTATE_UINT8_ARRAY(bssid.a, BCM4325State, 6),
+        VMSTATE_BOOL(associated, BCM4325State),
+        VMSTATE_TIMER_PTR(scan_timer, BCM4325State),
+        VMSTATE_TIMER_PTR(join_timer, BCM4325State),
+        VMSTATE_BOOL(join_ok, BCM4325State),
+        {
+            .name = "queues",
+            .info = &vmstate_info_bcm4325_queues,
+            .flags = VMS_SINGLE,
+            .offset = 0,
+        },
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 void bcm4325_init(BCM4325State *s, DeviceState *owner, BCM4325IRQHandler handler, void *opaque)
 {

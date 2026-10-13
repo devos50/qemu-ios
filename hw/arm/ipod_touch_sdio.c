@@ -15,6 +15,7 @@
 #include "system/address-spaces.h"
 #include "qemu/log.h"
 #include "trace.h"
+#include "migration/vmstate.h"
 
 static void ipod_touch_sdio_update_irq(IPodTouchSDIOState *s)
 {
@@ -231,10 +232,37 @@ static const Property ipod_touch_sdio_properties[] = {
     DEFINE_NIC_PROPERTIES(IPodTouchSDIOState, card.conf),
 };
 
+static const VMStateDescription vmstate_ipod_touch_sdio = {
+    .name = TYPE_IPOD_TOUCH_SDIO,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(ctrl, IPodTouchSDIOState),
+        VMSTATE_UINT32(dctrl, IPodTouchSDIOState),
+        VMSTATE_UINT32(cmd, IPodTouchSDIOState),
+        VMSTATE_UINT32(arg, IPodTouchSDIOState),
+        VMSTATE_UINT32(stac, IPodTouchSDIOState),
+        VMSTATE_UINT32(dsta, IPodTouchSDIOState),
+        VMSTATE_UINT32_ARRAY(resp, IPodTouchSDIOState, 4),
+        VMSTATE_UINT32(clkdiv, IPodTouchSDIOState),
+        VMSTATE_UINT32(csr, IPodTouchSDIOState),
+        VMSTATE_UINT32(irq_status, IPodTouchSDIOState),
+        VMSTATE_UINT32(irq_mask, IPodTouchSDIOState),
+        VMSTATE_UINT32(baddr, IPodTouchSDIOState),
+        VMSTATE_UINT32(blklen, IPodTouchSDIOState),
+        VMSTATE_UINT32(numblk, IPodTouchSDIOState),
+        VMSTATE_BOOL(data_done, IPodTouchSDIOState),
+        VMSTATE_BOOL(card_irq, IPodTouchSDIOState),
+        VMSTATE_STRUCT(card, IPodTouchSDIOState, 1, vmstate_bcm4325, BCM4325State),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_sdio_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
+    dc->vmsd = &vmstate_ipod_touch_sdio;
     dc->realize = ipod_touch_sdio_realize;
     device_class_set_legacy_reset(dc, ipod_touch_sdio_reset);
     device_class_set_props(dc, ipod_touch_sdio_properties);

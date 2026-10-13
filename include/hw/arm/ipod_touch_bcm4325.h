@@ -4,6 +4,7 @@
 #include "qemu/osdep.h"
 #include "qemu/timer.h"
 #include "net/net.h"
+#include "migration/vmstate.h"
 
 // SDIO card identity, as the AppleBCM4325 personality matches it (from the CIS MANFID tuple)
 #define BCM4325_MANUFACTURER_ID 0x4D50
@@ -218,6 +219,8 @@ typedef struct BCM4325State {
     BCM4325IRQHandler irq_handler;
     void *irq_opaque;
 } BCM4325State;
+
+extern const VMStateDescription vmstate_bcm4325;
 
 void bcm4325_init(BCM4325State *s, DeviceState *owner, BCM4325IRQHandler handler, void *opaque);
 void bcm4325_reset(BCM4325State *s);
