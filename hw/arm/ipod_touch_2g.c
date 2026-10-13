@@ -245,6 +245,19 @@ static void ipod_touch_set_netdev(Object *obj, const char *value, Error **errp)
     nms->netdev = g_strdup(value);
 }
 
+static char *ipod_touch_get_boot_args(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return g_strdup(nms->boot_args);
+}
+
+static void ipod_touch_set_boot_args(Object *obj, const char *value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    g_free(nms->boot_args);
+    nms->boot_args = g_strdup(value);
+}
+
 static bool ipod_touch_get_force_dfu(Object *obj, Error **errp)
 {
     IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
@@ -287,6 +300,11 @@ static void ipod_touch_instance_init(Object *obj)
 
     object_property_add_str(obj, "netdev", ipod_touch_get_netdev, ipod_touch_set_netdev);
     object_property_set_description(obj, "netdev", "ID of the network backend of the Wi-Fi card");
+
+    object_property_add_str(obj, "boot-args", ipod_touch_get_boot_args, ipod_touch_set_boot_args);
+    object_property_set_description(obj, "boot-args", "Kernel boot arguments iBoot passes on a normal boot (default: "
+                                                      "the debug arguments for iPhone OS 2.1.1, none for later "
+                                                      "releases)");
 
     object_property_add_bool(obj, "dfu", ipod_touch_get_force_dfu, ipod_touch_set_force_dfu);
     object_property_set_description(obj, "dfu", "Hold the force-DFU GPIO so the bootrom enters DFU mode");
@@ -676,6 +694,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     } else {
         ipod_touch_nand_open_pages(&fmss_state->nand, nms->nand_path[0] ? nms->nand_path : NULL);
     }
+    fmss_state->boot_args = nms->boot_args;
     nms->fmss_state = fmss_state;
     busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, FMSS_MEM_BASE, &fmss_state->iomem);

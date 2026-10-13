@@ -87,6 +87,7 @@ typedef struct IPodTouchFMSSState
     uint32_t cs_irq;
     uint32_t status;
     bool iboot_patched;
+    char *boot_args; // passed to the kernel by iBoot, NULL for the default of the iBoot build
 
     uint8_t page_buffer[NAND_BYTES_PER_PAGE];
     uint8_t spare_buffer[NAND_BYTES_PER_SPARE];

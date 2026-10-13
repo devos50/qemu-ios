@@ -5,22 +5,44 @@
 #include "qemu/error-report.h"
 #include "exec/cpu-common.h"
 
-// the sequences of iBoot (iBoot-385.22) are part of its image, the kernel's sequences are in kernel memory
+// the sequences of iBoot are part of its image, the kernel's sequences are in kernel memory
 #define IBOOT_BASE 0x0ff00000
 #define IBOOT_SIZE 0x100000
 
-// iBoot looks up the bluetooth node under uart3, but on the device tree we use it is a child of uart1
+// Every iBoot image starts with a header that names the stage and its build at fixed offsets.
+#define IBOOT_STAGE_ADDR (IBOOT_BASE + 0x200)
+#define IBOOT_VERSION_ADDR (IBOOT_BASE + 0x280)
+#define IBOOT_VERSION_SIZE 0x20
+static const char iboot_stage[] = "iBoot for n72ap,"; // iBEC has the same version string as iBoot of its release
+
+// iBoot-385.22 looks up the bluetooth node under uart3, but on the device tree we use it is a child of uart1
 #define IBOOT_BT_NODE_PATH_ADDR 0x0ff2206c
 static const char iboot_bt_node_path_orig[] = "arm-io/uart3/bluetooth";
 static const char iboot_bt_node_path_patched[] = "arm-io/uart1/bluetooth";
 
-// Release iBoot ignores the boot-args variable: after loading the kernel it formats gBootArgs.commandLine as " " (a space
-// and a NUL) and passes it to the kernel. The kernel's parser skips separators including NUL characters, so it also sees
-// whatever follows in the buffer. We put our boot arguments there, behind two characters that iBoot overwrites.
-#define IBOOT_BOOT_ARGS_ADDR 0x0ff2a584
+// Release iBoot ignores the boot-args variable: after loading the kernel it formats gBootArgs.commandLine (0x100 bytes)
+// with snprintf(commandLine, 0x100, "%s ", "") and passes " " to the kernel. We point the format string literal of that
+// call at commandLine itself and fill it with our boot arguments (a '%' doubled), so that snprintf copies them onto
+// themselves. Per build: the format literal, which is next to the literal of commandLine in the same function.
 #define IBOOT_BOOT_ARGS_SIZE 0x100
-static const char boot_args[] = "  debug=0x8 cpus=1 rd=disk0s1 serial=1 pmu-debug=0x1 io=0xffff8fff debug-usb=0xffffffff amfi_allow_any_signature=1 -v zalloc_debug";
-QEMU_BUILD_BUG_ON(sizeof(boot_args) > IBOOT_BOOT_ARGS_SIZE);
+
+typedef struct IBootBuild {
+    const char *version;
+    hwaddr boot_args_addr;
+    hwaddr boot_args_format_literal;
+    uint32_t boot_args_format; // the address of "%s " that the literal holds
+    bool patch_bt_node_path;
+    const char *default_boot_args;
+} IBootBuild;
+
+static const IBootBuild iboot_builds[] = {
+    { "iBoot-385.22", 0x0ff2a584, 0x0ff10b10, 0x0ff1e26c, true, // iPhone OS 2.1.1
+      "debug=0x8 cpus=1 rd=disk0s1 serial=1 pmu-debug=0x1 io=0xffff8fff debug-usb=0xffffffff "
+      "amfi_allow_any_signature=1 -v zalloc_debug" },
+    { "iBoot-385.49", 0x0ff2a584, 0x0ff10b18, 0x0ff1e284 }, // iPhone OS 2.2
+    { "iBoot-596.24", 0x0ff295a4, 0x0ff10fd8, 0x0ff1e07c }, // iPhone OS 3.0
+    { "iBoot-889.24", 0x0ff27924, 0x0ff0a4bc, 0x0ff1dfac }, // iOS 4.0
+};
 
 static uint32_t fmss_ldl(hwaddr addr)
 {
@@ -214,17 +236,71 @@ static uint32_t fmss_erase(IPodTouchFMSSState *s)
     return 0;
 }
 
+static const IBootBuild *fmss_find_iboot(void)
+{
+    char stage[sizeof(iboot_stage) - 1];
+    char version[IBOOT_VERSION_SIZE];
+
+    physical_memory_read(IBOOT_STAGE_ADDR, stage, sizeof(stage));
+    if (memcmp(stage, iboot_stage, sizeof(stage)) != 0) {
+        return NULL;
+    }
+    physical_memory_read(IBOOT_VERSION_ADDR, version, sizeof(version));
+    for (int i = 0; i < ARRAY_SIZE(iboot_builds); i++) {
+        if (strncmp(version, iboot_builds[i].version, sizeof(version)) == 0) {
+            return &iboot_builds[i];
+        }
+    }
+    return NULL;
+}
+
 // Applies our changes to iBoot when it runs its first sequence, once it has been loaded (and decrypted) and cleared its bss.
 static void fmss_patch_iboot(IPodTouchFMSSState *s)
 {
-    char path[sizeof(iboot_bt_node_path_orig)];
+    const IBootBuild *build = fmss_find_iboot();
+    const char *boot_args;
+    char buf[IBOOT_BOOT_ARGS_SIZE];
+    size_t len = 0;
 
-    physical_memory_read(IBOOT_BT_NODE_PATH_ADDR, path, sizeof(path));
-    if (memcmp(path, iboot_bt_node_path_orig, sizeof(path)) == 0) {
-        physical_memory_write(IBOOT_BT_NODE_PATH_ADDR, iboot_bt_node_path_patched, sizeof(iboot_bt_node_path_patched));
-        physical_memory_write(IBOOT_BOOT_ARGS_ADDR, boot_args, sizeof(boot_args));
-        s->iboot_patched = true;
+    s->iboot_patched = true;
+    if (!build) {
+        if (s->boot_args) {
+            warn_report("boot-args ignored: unknown iBoot build");
+        }
+        return;
     }
+
+    if (build->patch_bt_node_path) {
+        char path[sizeof(iboot_bt_node_path_orig)];
+
+        physical_memory_read(IBOOT_BT_NODE_PATH_ADDR, path, sizeof(path));
+        if (memcmp(path, iboot_bt_node_path_orig, sizeof(path)) == 0) {
+            physical_memory_write(IBOOT_BT_NODE_PATH_ADDR, iboot_bt_node_path_patched,
+                                  sizeof(iboot_bt_node_path_patched));
+        }
+    }
+
+    boot_args = s->boot_args ? s->boot_args : build->default_boot_args;
+    if (!boot_args || !*boot_args) {
+        return;
+    }
+    if (fmss_ldl(build->boot_args_format_literal) != build->boot_args_format) {
+        warn_report("boot-args ignored: unexpected boot arguments format literal in %s", build->version);
+        return;
+    }
+
+    for (const char *c = boot_args; *c; c++) {
+        size_t n = *c == '%' ? 2 : 1;
+        if (len + n >= sizeof(buf)) {
+            warn_report("boot-args truncated to %zu characters", len);
+            break;
+        }
+        memset(buf + len, *c, n);
+        len += n;
+    }
+    buf[len] = '\0';
+    physical_memory_write(build->boot_args_addr, buf, len + 1);
+    fmss_stl(build->boot_args_format_literal, build->boot_args_addr);
 }
 
 static void fmss_run_sequence(IPodTouchFMSSState *s, bool irq_enabled)

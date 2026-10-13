@@ -207,6 +207,7 @@ typedef struct {
 	uint32_t nand_epoch;
 	char *usb_chardev;
 	char *netdev;
+	char *boot_args;
 	LIS302DLState *accelerometer;
 	bool force_dfu;
 	IT2G_CPREG_VAR_DEF(REG0);
