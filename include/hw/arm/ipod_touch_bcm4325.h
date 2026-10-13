@@ -106,10 +106,12 @@
 #define SDPCM_TX_WINDOW    32 // frames the host may send ahead of the last one we consumed
 
 // BCDC protocol
-#define BCDC_HDR_LEN    12
+#define BCDC_HDR_LEN    12 // cmd, len, flags (iPhone OS 2.x)
+#define BCDC_HDR_LEN_V2 16 // cmd, len, flags, status (iPhone OS 3.x)
 #define BCDC_FLAG_ERROR (1 << 0)
 #define BCDC_FLAG_SET   (1 << 1)
 #define BCDC_ID_SHIFT   16
+#define BCME_UNSUPPORTED (-23) // the status of an ioctl the dongle doesn't support
 #define BDC_HDR_LEN     4
 #define BDC_FLAG_VER2   0x20
 #define BDC_RX_PAD      2 // the driver expects the Ethernet header 6 bytes into a received data frame
@@ -199,6 +201,7 @@ typedef struct BCM4325State {
     uint8_t tx_seq_next; // the sequence number the host will send next
     uint8_t credit;      // the last credit given to the host
     bool irq_level;
+    uint32_t bcdc_hdr_len; // the control header length the driver uses
 
     // dongle state
     GHashTable *ioctls; // set values by the GET ioctl number

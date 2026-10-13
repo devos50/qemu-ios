@@ -424,10 +424,12 @@ static bool bcm4325_ioctl(BCM4325State *s, uint32_t cmd, bool set, const uint8_t
     return true;
 }
 
-// A BCDC message on the control channel: answers it with the command, length and transaction id echoed.
+// A BCDC message on the control channel: answers it with the command, length and transaction id echoed. The 2.x
+// driver uses a 12-byte header, the 3.x driver adds a status word. The host sends the buffer it wants back, so the
+// header length is what the message has beyond that buffer.
 static void bcm4325_handle_control(BCM4325State *s, const uint8_t *msg, uint32_t len)
 {
-    uint32_t cmd, outlen, flags;
+    uint32_t cmd, outlen, flags, hdr;
     g_autofree uint8_t *resp = NULL;
     bool ok;
 
@@ -442,16 +444,22 @@ static void bcm4325_handle_control(BCM4325State *s, const uint8_t *msg, uint32_t
         qemu_log_mask(LOG_GUEST_ERROR, "%s: ioctl %u wants %u bytes back\n", __func__, cmd, outlen);
         return;
     }
+    if (len == outlen + BCDC_HDR_LEN || len == outlen + BCDC_HDR_LEN_V2) {
+        s->bcdc_hdr_len = len - outlen;
+    }
+    hdr = MIN(s->bcdc_hdr_len, len);
 
-    resp = g_malloc0(BCDC_HDR_LEN + outlen);
-    memcpy(resp + BCDC_HDR_LEN, msg + BCDC_HDR_LEN, MIN(len - BCDC_HDR_LEN, outlen));
-    ok = bcm4325_ioctl(s, cmd, flags & BCDC_FLAG_SET, msg + BCDC_HDR_LEN, len - BCDC_HDR_LEN,
-                       resp + BCDC_HDR_LEN, outlen);
+    resp = g_malloc0(hdr + outlen);
+    memcpy(resp + hdr, msg + hdr, MIN(len - hdr, outlen));
+    ok = bcm4325_ioctl(s, cmd, flags & BCDC_FLAG_SET, msg + hdr, len - hdr, resp + hdr, outlen);
 
     stl_le_p(resp, cmd);
     stl_le_p(resp + 4, outlen);
     stl_le_p(resp + 8, (flags & ~BCDC_FLAG_ERROR) | (ok ? 0 : BCDC_FLAG_ERROR));
-    bcm4325_queue_frame(s, SDPCM_CHAN_CONTROL, resp, BCDC_HDR_LEN + outlen);
+    if (hdr == BCDC_HDR_LEN_V2 && !ok) {
+        stl_le_p(resp + 12, (uint32_t)BCME_UNSUPPORTED);
+    }
+    bcm4325_queue_frame(s, SDPCM_CHAN_CONTROL, resp, hdr + outlen);
 }
 
 // A BDC-framed Ethernet frame on the data channel: sends it to the network.
@@ -964,6 +972,7 @@ void bcm4325_reset(BCM4325State *s)
     s->high_speed = 0x1; // supports high speed
     memset(s->blksize, 0, sizeof(s->blksize));
     s->sb_window = 0;
+    s->bcdc_hdr_len = BCDC_HDR_LEN;
     memset(s->f1_regs, 0, sizeof(s->f1_regs));
     memset(s->socram, 0, BCM4325_SOCRAM_SIZE);
     bcm4325_reset_backplane(s);
