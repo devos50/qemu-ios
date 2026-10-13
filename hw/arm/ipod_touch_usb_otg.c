@@ -28,6 +28,7 @@
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "trace.h"
+#include "migration/vmstate.h"
 
 static inline size_t synopsys_usb_tx_fifo_start(synopsys_usb_state *_state, uint32_t _fifo)
 {
@@ -838,9 +839,80 @@ DeviceState *ipod_touch_init_usb_otg(qemu_irq _irq, uint32_t _hwcfg[4])
     return dev;
 }
 
+/*
+ * The link is not saved: the requests belong to the host connection of the saving QEMU. A host that connected to this
+ * QEMU before the state was loaded may have queued requests already, and its bus reset was overwritten by the load,
+ * so it is signalled again.
+ */
+static int s5l8900_usb_otg_post_load(void *opaque, int version_id)
+{
+	synopsys_usb_state *s = opaque;
+
+	if(s->link_reset_phase > USB_LINK_RESET_RECOVERY)
+		return -EINVAL;
+
+	if(s->link_reset_phase == USB_LINK_RESET_IDLE && usb_link_reset_head(&s->link))
+		synopsys_usb_link_bus_reset(s);
+	else
+		synopsys_usb_service_all(s);
+	return 0;
+}
+
+static const VMStateDescription vmstate_synopsys_usb_ep = {
+	.name = "synopsys_usb_ep",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = (const VMStateField[]) {
+		VMSTATE_UINT32(control, synopsys_usb_ep_state),
+		VMSTATE_UINT32(tx_size, synopsys_usb_ep_state),
+		VMSTATE_UINT32(fifo, synopsys_usb_ep_state),
+		VMSTATE_UINT32(interrupt_status, synopsys_usb_ep_state),
+		VMSTATE_UINT64(dma_address, synopsys_usb_ep_state),
+		VMSTATE_UINT64(dma_buffer, synopsys_usb_ep_state),
+		VMSTATE_END_OF_LIST()
+	}
+};
+
+// The hardware configuration registers (ghwcfg*) are the board's.
+static const VMStateDescription vmstate_s5l8900_usb_otg = {
+	.name = TYPE_S5L8900USBOTG,
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.post_load = s5l8900_usb_otg_post_load,
+	.fields = (const VMStateField[]) {
+		VMSTATE_UINT32(link_reset_phase, synopsys_usb_state),
+		VMSTATE_TIMER_PTR(link_reset_timer, synopsys_usb_state),
+		VMSTATE_UINT32(pcgcctl, synopsys_usb_state),
+		VMSTATE_UINT32(gahbcfg, synopsys_usb_state),
+		VMSTATE_UINT32(gusbcfg, synopsys_usb_state),
+		VMSTATE_UINT32(grxfsiz, synopsys_usb_state),
+		VMSTATE_UINT32(gnptxfsiz, synopsys_usb_state),
+		VMSTATE_UINT32(gotgctl, synopsys_usb_state),
+		VMSTATE_UINT32(gotgint, synopsys_usb_state),
+		VMSTATE_UINT32(grstctl, synopsys_usb_state),
+		VMSTATE_UINT32(gintmsk, synopsys_usb_state),
+		VMSTATE_UINT32(gintsts, synopsys_usb_state),
+		VMSTATE_UINT32_ARRAY(dptxfsiz, synopsys_usb_state, USB_NUM_FIFOS),
+		VMSTATE_UINT32(dctl, synopsys_usb_state),
+		VMSTATE_UINT32(dcfg, synopsys_usb_state),
+		VMSTATE_UINT32(dsts, synopsys_usb_state),
+		VMSTATE_UINT32(daintmsk, synopsys_usb_state),
+		VMSTATE_UINT32(daintsts, synopsys_usb_state),
+		VMSTATE_UINT32(diepmsk, synopsys_usb_state),
+		VMSTATE_UINT32(doepmsk, synopsys_usb_state),
+		VMSTATE_STRUCT_ARRAY(in_eps, synopsys_usb_state, USB_NUM_ENDPOINTS, 1,
+							 vmstate_synopsys_usb_ep, synopsys_usb_ep_state),
+		VMSTATE_STRUCT_ARRAY(out_eps, synopsys_usb_state, USB_NUM_ENDPOINTS, 1,
+							 vmstate_synopsys_usb_ep, synopsys_usb_ep_state),
+		VMSTATE_UINT8_ARRAY(fifos, synopsys_usb_state, USB_FIFO_SIZE),
+		VMSTATE_END_OF_LIST()
+	}
+};
+
 static void s5l8900_usb_otg_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->vmsd = &vmstate_s5l8900_usb_otg;
     device_class_set_legacy_reset(dc, s5l8900_usb_otg_reset);
     dc->realize = s5l8900_usb_otg_realize;
     device_class_set_props(dc, s5l8900_usb_otg_properties);
