@@ -61,7 +61,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchFMSSState, IPOD_TOUCH_FMSS)
 #define FMSS_SEQ_OP_STORE_IMM     0x01  // reg = imm
 #define FMSS_SEQ_OP_STORE_REG     0x02  // reg = r[arg]
 #define FMSS_SEQ_OP_LOAD          0x04  // r[arg] = reg & imm
+#define FMSS_SEQ_OP_STORE_MEM     0x0C  // stores a word read from the NAND bus at r[arg], then r[arg] += imm
 #define FMSS_FMCMD                0x8   // the command register of the NAND bus
+#define FMSS_MAX_ID_WORDS         2
 
 #define FMSS_META_SIZE            12    // the part of the spare area that is visible to the driver
 #define FMSS_MAX_PAGES_PER_OP     1024

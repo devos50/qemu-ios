@@ -50,12 +50,15 @@ static int fmss_ce_from_mask(uint32_t mask)
 }
 
 // Determines the NAND operation that a sequence performs, from the NAND commands and parameters that it uses.
-static FMSSOperation fmss_classify_sequence(hwaddr addr)
+// id_words is set to the number of words the sequence stores per CE, which is the size of a chip ID in words.
+static FMSSOperation fmss_classify_sequence(hwaddr addr, int *id_words)
 {
     g_autofree uint8_t *seq = g_malloc(FMSS_SEQ_MAX_SIZE);
     bool cmds[256] = { false };
     bool reg_cmd = false;
     uint32_t params = 0; // bit n is set if the sequence reads parameter register FMSS_PARAM_BASE + 4 * n
+
+    *id_words = 0;
 
     physical_memory_read(addr, seq, FMSS_SEQ_MAX_SIZE);
     for (int i = 0; i < FMSS_SEQ_MAX_SIZE; i += FMSS_SEQ_INSN_SIZE) {
@@ -71,6 +74,8 @@ static FMSSOperation fmss_classify_sequence(hwaddr addr)
             reg_cmd = true; // the program sequence takes its commands from the command list
         } else if (op == FMSS_SEQ_OP_LOAD && reg >= FMSS_PARAM_BASE && reg < FMSS_PARAM_BASE + FMSS_PARAM_SIZE) {
             params |= 1 << ((reg - FMSS_PARAM_BASE) / 4);
+        } else if (op == FMSS_SEQ_OP_STORE_MEM) {
+            (*id_words)++;
         }
     }
 
@@ -95,11 +100,21 @@ static bool fmss_valid_chunks(uint32_t chunks)
     return chunks != 0 && chunks <= NAND_BYTES_PER_PAGE && NAND_BYTES_PER_PAGE % chunks == 0;
 }
 
-static uint32_t fmss_read_id(IPodTouchFMSSState *s)
+// Stores the chip ID of every CE. The ID is as long as the sequence reads: one word up to iPhone OS 3.x, two words
+// (an 8-byte ID, of which our chip only uses the first four bytes) from iOS 4.0 on.
+static uint32_t fmss_read_id(IPodTouchFMSSState *s, int id_words)
 {
     hwaddr out = fmss_reg(s, FMSS_PARAM_ID_OUT_ADDR);
+
+    if (id_words < 1 || id_words > FMSS_MAX_ID_WORDS) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: unexpected chip ID size of %d words\n", __func__, id_words);
+        return FMSS_STATUS_ERROR;
+    }
     for (int ce = 0; ce < NAND_NUM_CE; ce++) {
-        fmss_stl(out + ce * 4, NAND_CHIP_ID);
+        fmss_stl(out + ce * id_words * 4, NAND_CHIP_ID);
+        for (int i = 1; i < id_words; i++) {
+            fmss_stl(out + (ce * id_words + i) * 4, 0);
+        }
     }
     return 0;
 }
@@ -220,12 +235,14 @@ static void fmss_run_sequence(IPodTouchFMSSState *s, bool irq_enabled)
         fmss_patch_iboot(s);
     }
 
-    switch (fmss_classify_sequence(seq)) {
+    int id_words;
+
+    switch (fmss_classify_sequence(seq, &id_words)) {
         case FMSS_OP_RESET:
             s->status = 0;
             break;
         case FMSS_OP_READ_ID:
-            s->status = fmss_read_id(s);
+            s->status = fmss_read_id(s, id_words);
             break;
         case FMSS_OP_READ:
             s->status = fmss_read(s);
