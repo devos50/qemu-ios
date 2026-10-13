@@ -184,6 +184,7 @@ typedef struct IPodTouchMultitouchState {
     int16_t last_frame_x;
     int16_t last_frame_y;
     uint32_t last_frame_timestamp;
+    uint8_t out_buffer_src; // for migration: which buffer out_buffer points into (MTOutBufferSource)
 } IPodTouchMultitouchState;
 
 void ipod_touch_multitouch_on_touch(IPodTouchMultitouchState *s);

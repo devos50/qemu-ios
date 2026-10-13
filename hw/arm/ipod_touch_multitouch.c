@@ -1,6 +1,7 @@
 #include "hw/arm/ipod_touch_multitouch.h"
 #include "hw/core/irq.h"
 #include "qemu/log.h"
+#include "migration/vmstate.h"
 
 #define MT_IO_BUFFER_SIZE 0x100
 
@@ -546,9 +547,108 @@ static void ipod_touch_multitouch_realize(SSIPeripheral *d, Error **errp)
     ensure_io_capacity(s, MT_IO_BUFFER_SIZE);
 }
 
+// The buffer a response is read from
+typedef enum MTOutBufferSource {
+    MT_OUT_STORAGE,
+    MT_OUT_FRAME_LENGTH,
+    MT_OUT_FRAME_PACKET,
+} MTOutBufferSource;
+
+static int ipod_touch_multitouch_pre_save(void *opaque)
+{
+    IPodTouchMultitouchState *s = opaque;
+
+    if (s->out_buffer == (uint8_t *) &s->frame.frame_length) {
+        s->out_buffer_src = MT_OUT_FRAME_LENGTH;
+    } else if (s->out_buffer == (uint8_t *) &s->frame.frame_packet) {
+        s->out_buffer_src = MT_OUT_FRAME_PACKET;
+    } else {
+        s->out_buffer_src = MT_OUT_STORAGE;
+    }
+    return 0;
+}
+
+static int ipod_touch_multitouch_pre_load(void *opaque)
+{
+    IPodTouchMultitouchState *s = opaque;
+
+    // reallocated at the saved capacity
+    g_free(s->in_buffer);
+    g_free(s->out_storage);
+    s->in_buffer = s->out_storage = s->out_buffer = NULL;
+    return 0;
+}
+
+static int ipod_touch_multitouch_post_load(void *opaque, int version_id)
+{
+    IPodTouchMultitouchState *s = opaque;
+
+    switch (s->out_buffer_src) {
+    case MT_OUT_STORAGE:
+        s->out_buffer = s->out_storage;
+        break;
+    case MT_OUT_FRAME_LENGTH:
+        s->out_buffer = (uint8_t *) &s->frame.frame_length;
+        break;
+    case MT_OUT_FRAME_PACKET:
+        s->out_buffer = (uint8_t *) &s->frame.frame_packet;
+        break;
+    default:
+        return -EINVAL;
+    }
+    if (s->buf_ind > s->buf_size || s->in_buffer_ind > s->io_capacity) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+// The frame and the touch position are saved as their bytes. The button handler's sysic and gpio_state are board
+// wiring.
+static const VMStateDescription vmstate_ipod_touch_multitouch = {
+    .name = TYPE_IPOD_TOUCH_MULTITOUCH,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = ipod_touch_multitouch_pre_save,
+    .pre_load = ipod_touch_multitouch_pre_load,
+    .post_load = ipod_touch_multitouch_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_SSI_PERIPHERAL(ssidev, IPodTouchMultitouchState),
+        VMSTATE_UINT8(cur_cmd, IPodTouchMultitouchState),
+        VMSTATE_UINT32(io_capacity, IPodTouchMultitouchState),
+        VMSTATE_VBUFFER_ALLOC_UINT32(in_buffer, IPodTouchMultitouchState, 0, NULL, io_capacity),
+        VMSTATE_VBUFFER_ALLOC_UINT32(out_storage, IPodTouchMultitouchState, 0, NULL, io_capacity),
+        VMSTATE_UINT8(out_buffer_src, IPodTouchMultitouchState),
+        VMSTATE_UINT32(buf_size, IPodTouchMultitouchState),
+        VMSTATE_UINT32(buf_ind, IPodTouchMultitouchState),
+        VMSTATE_UINT32(in_buffer_ind, IPodTouchMultitouchState),
+        VMSTATE_UINT8_ARRAY(hbpp_atn_ack_response, IPodTouchMultitouchState, 2),
+        VMSTATE_BOOL(frame_data_read, IPodTouchMultitouchState),
+        VMSTATE_BOOL(firmware_running, IPodTouchMultitouchState),
+        VMSTATE_INT32(reset_level, IPodTouchMultitouchState),
+        VMSTATE_BUFFER_UNSAFE(frame, IPodTouchMultitouchState, 0, sizeof(MTFrame)),
+        VMSTATE_BOOL(frame_pending, IPodTouchMultitouchState),
+        VMSTATE_INT64(frame_sent_ns, IPodTouchMultitouchState),
+        VMSTATE_UINT32(frame_counter, IPodTouchMultitouchState),
+        VMSTATE_BOOL(touch_down, IPodTouchMultitouchState),
+        VMSTATE_BOOL(press_latched, IPodTouchMultitouchState),
+        VMSTATE_BOOL(reported_down, IPodTouchMultitouchState),
+        VMSTATE_BOOL(end_pending, IPodTouchMultitouchState),
+        VMSTATE_TIMER_PTR(touch_timer, IPodTouchMultitouchState),
+        VMSTATE_BUFFER_UNSAFE(touch_x, IPodTouchMultitouchState, 0, sizeof(float)),
+        VMSTATE_BUFFER_UNSAFE(touch_y, IPodTouchMultitouchState, 0, sizeof(float)),
+        VMSTATE_INT16(last_frame_x, IPodTouchMultitouchState),
+        VMSTATE_INT16(last_frame_y, IPodTouchMultitouchState),
+        VMSTATE_UINT32(last_frame_timestamp, IPodTouchMultitouchState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_multitouch_class_init(ObjectClass *klass, const void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(klass);
     SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
+
+    dc->vmsd = &vmstate_ipod_touch_multitouch;
     k->realize = ipod_touch_multitouch_realize;
     k->transfer = ipod_touch_multitouch_transfer;
     k->set_cs = ipod_touch_multitouch_set_cs;
