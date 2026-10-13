@@ -58,7 +58,8 @@ static void lis302dl_write_reg(LIS302DLState *s, uint8_t reg, uint8_t val)
             s->ctrl_reg1 = val;
             break;
         case ACCEL_CTRL_REG2:
-            s->ctrl_reg2 = val;
+            // the reboot of the memory content completes instantly (iPhone OS 3.0 waits for the bit to clear)
+            s->ctrl_reg2 = val & ~ACCEL_CTRL2_BOOT;
             break;
         case ACCEL_CTRL_REG3:
             s->ctrl_reg3 = val;

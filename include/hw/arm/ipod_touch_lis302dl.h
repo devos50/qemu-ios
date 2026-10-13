@@ -29,6 +29,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(LIS302DLState, LIS302DL)
 #define ACCEL_CTRL1_PD  0x40 // power up (0 = power-down mode)
 #define ACCEL_CTRL1_RESET_VALUE (ACCEL_CTRL1_XEN | ACCEL_CTRL1_YEN | ACCEL_CTRL1_ZEN)
 
+#define ACCEL_CTRL2_BOOT 0x40 // reload the trimming values from flash; clears itself when done
+
 // STATUS_REG bits
 #define ACCEL_STATUS_ZYXDA 0x08 // new X, Y and Z data available
 
