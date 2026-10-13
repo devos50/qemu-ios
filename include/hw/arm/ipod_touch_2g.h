@@ -101,9 +101,6 @@
 
 const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L8900_GPIO_G2_IRQ, S5L8900_GPIO_G3_IRQ, S5L8900_GPIO_G4_IRQ };
 
-#define IT2G_CPREG_VAR_NAME(name) cpreg_##name
-#define IT2G_CPREG_VAR_DEF(name) uint64_t IT2G_CPREG_VAR_NAME(name)
-
 #define TYPE_IPOD_TOUCH_MACHINE   MACHINE_TYPE_NAME(TYPE_IPOD_TOUCH)
 #define IPOD_TOUCH_MACHINE(obj) \
     OBJECT_CHECK(IPodTouchMachineState, (obj), TYPE_IPOD_TOUCH_MACHINE)
@@ -210,8 +207,7 @@ typedef struct {
 	char *boot_args;
 	LIS302DLState *accelerometer;
 	bool force_dfu;
-	IT2G_CPREG_VAR_DEF(REG0);
-	IT2G_CPREG_VAR_DEF(REG1);
+	uint32_t periph_port_remap; // cp15 c15 c2 4
 } IPodTouchMachineState;
 
 #endif

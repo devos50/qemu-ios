@@ -20,19 +20,6 @@
 #include "hw/core/qdev-properties-system.h"
 #include "net/net.h"
 
-#define VMSTATE_IT2G_CPREG(name) \
-        VMSTATE_UINT64(IT2G_CPREG_VAR_NAME(name), IPodTouchMachineState)
-
-#define IT2G_CPREG_DEF(p_name, p_op0, p_op1, p_crn, p_crm, p_op2, p_access, p_reset) \
-    {                                                                              \
-        .cp = 15,                                              \
-        .name = #p_name, .opc0 = p_op0, .crn = p_crn, .crm = p_crm,                \
-        .opc1 = p_op1, .opc2 = p_op2, .access = p_access, .resetvalue = p_reset,   \
-        .state = ARM_CP_STATE_AA32, .type = ARM_CP_OVERRIDE,                       \
-        .fieldoffset = offsetof(IPodTouchMachineState, IT2G_CPREG_VAR_NAME(p_name))           \
-                       - offsetof(ARMCPU, env)                                     \
-    }
-
 static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uint32_t size)
 {
     MemoryRegion *sec = g_new(MemoryRegion, 1);
@@ -40,11 +27,30 @@ static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uin
     memory_region_add_subregion(top, addr, sec);
 }
 
+static uint64_t it2g_periph_remap_read(CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    return IPOD_TOUCH_MACHINE(qdev_get_machine())->periph_port_remap;
+}
+
+static void it2g_periph_remap_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    IPOD_TOUCH_MACHINE(qdev_get_machine())->periph_port_remap = value;
+}
+
+/*
+ * The cache operations of the bootloaders, and the ARM1176 peripheral port memory remap register, which the machine
+ * keeps since the register is not part of the CPU's state.
+ */
 static const ARMCPRegInfo it2g_cp_reginfo_tcg[] = {
-    IT2G_CPREG_DEF(REG0, 0, 0, 7, 6, 0, PL1_RW, 0),
-    IT2G_CPREG_DEF(REG1, 0, 0, 15, 2, 4, PL1_RW, 0),
-    IT2G_CPREG_DEF(REG1, 0, 0, 7, 14, 0, PL1_RW, 0),
-    IT2G_CPREG_DEF(REG1, 0, 0, 7, 10, 0, PL1_RW, 0),
+    { .cp = 15, .name = "INVALIDATE_DCACHE", .crn = 7, .crm = 6, .opc1 = 0, .opc2 = 0,
+      .access = PL1_W, .state = ARM_CP_STATE_AA32, .type = ARM_CP_NOP | ARM_CP_OVERRIDE },
+    { .cp = 15, .name = "CLEAN_INVALIDATE_DCACHE", .crn = 7, .crm = 14, .opc1 = 0, .opc2 = 0,
+      .access = PL1_W, .state = ARM_CP_STATE_AA32, .type = ARM_CP_NOP | ARM_CP_OVERRIDE },
+    { .cp = 15, .name = "CLEAN_DCACHE", .crn = 7, .crm = 10, .opc1 = 0, .opc2 = 0,
+      .access = PL1_W, .state = ARM_CP_STATE_AA32, .type = ARM_CP_NOP | ARM_CP_OVERRIDE },
+    { .cp = 15, .name = "PERIPH_PORT_REMAP", .crn = 15, .crm = 2, .opc1 = 0, .opc2 = 4,
+      .access = PL1_RW, .state = ARM_CP_STATE_AA32, .type = ARM_CP_NO_RAW | ARM_CP_OVERRIDE,
+      .readfn = it2g_periph_remap_read, .writefn = it2g_periph_remap_write },
 };
 
 static void ipod_touch_cpu_setup(MachineState *machine, MemoryRegion **sysmem, ARMCPU **cpu, AddressSpace **nsas)
