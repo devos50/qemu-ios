@@ -111,10 +111,21 @@ static void mipi_dsi_send_packet(IPodTouchMIPIDSIState *s, uint32_t header)
 static uint32_t mipi_dsi_status(IPodTouchMIPIDSIState *s)
 {
     uint32_t lanes = (REG(s, REG_CONFIG) >> rDSIM_CONFIG_LaneEnShift) & 0xf;
-    uint32_t status = lanes;
+    uint32_t escmode = REG(s, REG_ESCMODE);
+    // The software reset completes instantly
+    uint32_t status = rDSIM_STATUS_SwRstRls;
 
-    // The clock lane leaves the stop state while it runs in high speed
-    if (REG(s, REG_CLKCTRL) & rDSIM_CLKCTRL_TxRequestHsClk) {
+    // Lanes enter ultra-low power state on request (iBoot 3.x does so while it changes the lane configuration) and
+    // leave it on the exit request; they are in the stop state otherwise
+    if ((escmode & (rDSIM_ESCMODE_TxUlpsDat | rDSIM_ESCMODE_TxUlpsExit)) == rDSIM_ESCMODE_TxUlpsDat) {
+        status |= lanes << rDSIM_STATUS_UlpsDatShift;
+    } else {
+        status |= lanes;
+    }
+    if ((escmode & (rDSIM_ESCMODE_TxUlpsClk | rDSIM_ESCMODE_TxUlpsClkExit)) == rDSIM_ESCMODE_TxUlpsClk) {
+        status |= rDSIM_STATUS_UlpsClk;
+    } else if (REG(s, REG_CLKCTRL) & rDSIM_CLKCTRL_TxRequestHsClk) {
+        // The clock lane leaves the stop state while it runs in high speed
         status |= rDSIM_STATUS_TxReadyHsClk;
     } else {
         status |= rDSIM_STATUS_StopstateClk;

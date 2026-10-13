@@ -33,8 +33,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMIPIDSIState, IPOD_TOUCH_MIPI_DSI)
 #define REG_PHYACCHR1 0x58
 #define MIPI_DSI_NUM_REGS ((REG_PHYACCHR1 + 4) / 4)
 
+#define rDSIM_STATUS_UlpsDatShift     4
 #define rDSIM_STATUS_StopstateClk     0x100
+#define rDSIM_STATUS_UlpsClk          0x200
 #define rDSIM_STATUS_TxReadyHsClk     0x400
+#define rDSIM_STATUS_SwRstRls         0x100000
 #define rDSIM_STATUS_PllStable        0x80000000
 #define rDSIM_SWRST_SwRst             0x1
 #define rDSIM_CLKCTRL_TxRequestHsClk  0x80000000
@@ -42,6 +45,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMIPIDSIState, IPOD_TOUCH_MIPI_DSI)
 #define rDSIM_INTSRC_PllStable        0x80000000
 #define rDSIM_INTSRC_SwRstRelease     0x40000000
 #define rDSIM_INTSRC_RxDatDone        0x00040000
+#define rDSIM_ESCMODE_TxUlpsExit      0x1
+#define rDSIM_ESCMODE_TxUlpsDat       0x2
+#define rDSIM_ESCMODE_TxUlpsClkExit   0x4
+#define rDSIM_ESCMODE_TxUlpsClk       0x8
 #define rDSIM_FIFOCTRL_nInitMask      0x1F
 #define rDSIM_FIFOCTRL_EmptyRx        0x1000000
 #define rDSIM_FIFOCTRL_EmptyHSfr      0x400000
