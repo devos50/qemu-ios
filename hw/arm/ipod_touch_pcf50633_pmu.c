@@ -1,6 +1,8 @@
 #include "hw/arm/ipod_touch_pcf50633_pmu.h"
 #include "hw/arm/ipod_touch_lcd.h"
 #include "trace.h"
+#include "qemu/cutils.h"
+#include "system/rtc.h"
 
 static void pcf50633_update_backlight(Pcf50633State *s)
 {
@@ -38,9 +40,12 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
             res = 3; // battery charge voltage
             break;
         case PMU_RTC_COUNT ... PMU_RTC_COUNT + 3:
-            // The kernel reads the counter as one 4-byte block.
-            if (s->cmd == PMU_RTC_COUNT)
-                s->rtc_count = time(NULL);
+            // The kernel reads the counter as one 4-byte block. The time follows -rtc base=... (default: the host's).
+            if (s->cmd == PMU_RTC_COUNT) {
+                struct tm tm;
+                qemu_get_timedate(&tm, 0);
+                s->rtc_count = mktimegm(&tm);
+            }
             res = (s->rtc_count >> (8 * (s->cmd - PMU_RTC_COUNT))) & 0xff;
             break;
         case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
