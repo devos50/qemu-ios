@@ -22,6 +22,7 @@
 
 #include "hw/i2c/ipod_touch_i2c.h"
 #include "trace.h"
+#include "migration/vmstate.h"
 
 static void s5l8900_i2c_update(IPodTouchI2CState *s)
 {
@@ -244,10 +245,29 @@ static void ipod_touch_i2c_reset(DeviceState *d)
     
 }
 
+static const VMStateDescription vmstate_ipod_touch_i2c = {
+    .name = TYPE_IPOD_TOUCH_I2C,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8(control, IPodTouchI2CState),
+        VMSTATE_UINT8(status, IPodTouchI2CState),
+        VMSTATE_UINT8(address, IPodTouchI2CState),
+        VMSTATE_UINT8(datashift, IPodTouchI2CState),
+        VMSTATE_UINT8(line_ctrl, IPodTouchI2CState),
+        VMSTATE_UINT32(iicreg20, IPodTouchI2CState),
+        VMSTATE_UINT8(active, IPodTouchI2CState),
+        VMSTATE_UINT8(ibmr, IPodTouchI2CState),
+        VMSTATE_UINT8(data, IPodTouchI2CState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_i2c_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     device_class_set_legacy_reset(dc, ipod_touch_i2c_reset);
+    dc->vmsd = &vmstate_ipod_touch_i2c;
 }
 
 static const TypeInfo ipod_touch_i2c_type_info = {

@@ -19,6 +19,7 @@
 #include "chardev/char.h"
 #include "hw/core/qdev-properties-system.h"
 #include "net/net.h"
+#include "migration/vmstate.h"
 
 static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uint32_t size)
 {
@@ -39,7 +40,7 @@ static void it2g_periph_remap_write(CPUARMState *env, const ARMCPRegInfo *ri, ui
 
 /*
  * The cache operations of the bootloaders, and the ARM1176 peripheral port memory remap register, which the machine
- * keeps since the register is not part of the CPU's state.
+ * keeps (and saves) since the register is not part of the CPU's state.
  */
 static const ARMCPRegInfo it2g_cp_reginfo_tcg[] = {
     { .cp = 15, .name = "INVALIDATE_DCACHE", .crn = 7, .crm = 6, .opc1 = 0, .opc2 = 0,
@@ -419,6 +420,17 @@ static const QemuInputHandler ipod_touch_key_handler = {
     .event = ipod_touch_key_input_event,
 };
 
+// The machine's own state: the cp15 register the CPU model lacks
+static const VMStateDescription vmstate_ipod_touch_machine = {
+    .name = "ipodtouch.machine",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(periph_port_remap, IPodTouchMachineState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_machine_init(MachineState *machine)
 {
 	IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(machine);
@@ -487,6 +499,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchGPIOState *gpio_state = IPOD_TOUCH_GPIO(dev);
     nms->gpio_state = gpio_state;
     memory_region_add_subregion(sysmem, GPIO_MEM_BASE, &gpio_state->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init SDIO, with the Wi-Fi card on the netdev= backend or on the first -nic
     dev = qdev_new("ipodtouch.sdio");
@@ -569,6 +582,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchChipIDState *chipid_state = IPOD_TOUCH_CHIPID(dev);
     nms->chipid_state = chipid_state;
     memory_region_add_subregion(sysmem, CHIPID_MEM_BASE, &chipid_state->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init the TVOut instance
     dev = qdev_new("ipodtouch.tvout");
@@ -585,6 +599,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = qdev_new(TYPE_IPOD_TOUCH_MIU);
     IPodTouchMIUState *miu_state = IPOD_TOUCH_MIU(dev);
     memory_region_add_subregion(sysmem, MIU_MEM_BASE, &miu_state->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init USB OTG
     dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8720_USB_OTG_IRQ), s5l8720_usb_hwcfg);
@@ -714,6 +729,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->usb_phys_state = usb_phys_state;
     usb_phys_state->cable_connected = nms->usb_chardev != NULL;
     memory_region_add_subregion(sysmem, USBPHYS_MEM_BASE, &usb_phys_state->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     ipod_touch_memory_setup(machine, sysmem, nsas);
 
@@ -764,6 +780,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     IPodTouchPKEState *pke_state = IPOD_TOUCH_PKE(dev);
     nms->pke_state = pke_state;
     memory_region_add_subregion(sysmem, PKE_MEM_BASE, &pke_state->iomem);
+    sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init the MBX
     dev = qdev_new("ipodtouch.mbx");
@@ -776,6 +793,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_MBX_IRQ));
 
     qemu_register_reset(ipod_touch_cpu_reset, nms);
+    vmstate_register(NULL, 0, &vmstate_ipod_touch_machine, nms);
 
     QemuInputHandlerState *key_handler =
         qemu_input_handler_register(DEVICE(spi4_state->mt), &ipod_touch_key_handler);

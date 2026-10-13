@@ -3,6 +3,7 @@
 #include "trace.h"
 #include "qemu/cutils.h"
 #include "system/rtc.h"
+#include "migration/vmstate.h"
 
 static void pcf50633_update_backlight(Pcf50633State *s)
 {
@@ -111,10 +112,36 @@ static void pcf50633_init(Object *obj)
     s->backlight_ctrl = PMU_BACKLIGHT_CTRL_ON;
 }
 
+static int pcf50633_post_load(void *opaque, int version_id)
+{
+    pcf50633_update_backlight(opaque);
+    return 0;
+}
+
+// usb_present is board wiring. The RTC counter is reread from the QEMU RTC.
+static const VMStateDescription vmstate_pcf50633 = {
+    .name = TYPE_PCF50633,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = pcf50633_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_I2C_SLAVE(i2c, Pcf50633State),
+        VMSTATE_UINT32(cmd, Pcf50633State),
+        VMSTATE_BOOL(pointer_set, Pcf50633State),
+        VMSTATE_UINT32(rtc_count, Pcf50633State),
+        VMSTATE_UINT8_ARRAY(rtc_offset, Pcf50633State, 4),
+        VMSTATE_UINT8(backlight_level, Pcf50633State),
+        VMSTATE_UINT8(backlight_ctrl, Pcf50633State),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void pcf50633_class_init(ObjectClass *klass, const void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
+    dc->vmsd = &vmstate_pcf50633;
     k->event = pcf50633_event;
     k->recv = pcf50633_recv;
     k->send = pcf50633_send;

@@ -2,6 +2,7 @@
 #include "ui/pixel_ops.h"
 #include "ui/console.h"
 #include "hw/display/framebuffer.h"
+#include "migration/vmstate.h"
 
 int lcd_brightness = 255;
 
@@ -253,11 +254,37 @@ static void ipod_touch_lcd_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 }
 
+static int ipod_touch_lcd_post_load(void *opaque, int version_id)
+{
+    lcd_invalidate(opaque);
+    return 0;
+}
+
+// The brightness comes from the PMU. The touch axes and button are the host pointer's.
+static const VMStateDescription vmstate_ipod_touch_lcd = {
+    .name = TYPE_IPOD_TOUCH_LCD,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = ipod_touch_lcd_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(lcd_con, IPodTouchLCDState),
+        VMSTATE_UINT32(w1_display_resolution_info, IPodTouchLCDState),
+        VMSTATE_UINT32(w1_framebuffer_base, IPodTouchLCDState),
+        VMSTATE_UINT32(w1_hspan, IPodTouchLCDState),
+        VMSTATE_UINT32(w1_display_depth_info, IPodTouchLCDState),
+        VMSTATE_UINT32(int_enable, IPodTouchLCDState),
+        VMSTATE_UINT32(int_status, IPodTouchLCDState),
+        VMSTATE_TIMER_PTR(refresh_timer, IPodTouchLCDState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_lcd_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = ipod_touch_lcd_realize;
+    dc->vmsd = &vmstate_ipod_touch_lcd;
 }
 
 static const TypeInfo ipod_touch_lcd_info = {

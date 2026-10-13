@@ -2,6 +2,7 @@
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "hw/core/qdev.h"
+#include "migration/vmstate.h"
 
 // full-scale lux range for each range setting, with the nominal 100 kOhm external scaling resistor
 static const uint32_t range_fs_lux[4] = { 1000, 4000, 16000, 64000 };
@@ -170,11 +171,27 @@ static void isl29003dl_finalize(Object *obj)
     timer_free(s->timer);
 }
 
+static const VMStateDescription vmstate_isl29003dl = {
+    .name = TYPE_ISL29003DL,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_I2C_SLAVE(i2c, ISL29003DLState),
+        VMSTATE_TIMER_PTR(timer, ISL29003DLState),
+        VMSTATE_UINT8(reg, ISL29003DLState),
+        VMSTATE_BOOL(reg_written, ISL29003DLState),
+        VMSTATE_UINT8_ARRAY(regs, ISL29003DLState, LIGHTSENSOR_NUM_REGS),
+        VMSTATE_UINT32(lux, ISL29003DLState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void isl29003dl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
+    dc->vmsd = &vmstate_isl29003dl;
     k->event = isl29003dl_event;
     k->recv = isl29003dl_recv;
     k->send = isl29003dl_send;

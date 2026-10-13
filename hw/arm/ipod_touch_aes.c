@@ -2,6 +2,7 @@
 #include "system/physmem.h"
 #include "qemu/log.h"
 #include "trace.h"
+#include "migration/vmstate.h"
 
 /*
  * We don't have the GID key, so GID operations are answered from a table of the known image keys of the supported
@@ -580,9 +581,34 @@ static void ipod_touch_aes_reset(DeviceState *dev)
     s->remaining = 0;
 }
 
+// key is the expanded key of the operation in progress, saved as its bytes
+static const VMStateDescription vmstate_ipod_touch_aes = {
+    .name = TYPE_IPOD_TOUCH_AES,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(ivec, IPodTouchAESState, 4),
+        VMSTATE_UINT32(size, IPodTouchAESState),
+        VMSTATE_UINT32(out_addr, IPodTouchAESState),
+        VMSTATE_UINT32(out_size, IPodTouchAESState),
+        VMSTATE_UINT32(in_addr, IPodTouchAESState),
+        VMSTATE_UINT32(in_size, IPodTouchAESState),
+        VMSTATE_UINT32(keytype, IPodTouchAESState),
+        VMSTATE_UINT32(status, IPodTouchAESState),
+        VMSTATE_UINT32(irq_enable, IPodTouchAESState),
+        VMSTATE_UINT32(mode, IPodTouchAESState),
+        VMSTATE_UINT32_ARRAY(custkey, IPodTouchAESState, 8),
+        VMSTATE_UINT32(remaining, IPodTouchAESState),
+        VMSTATE_BUFFER_UNSAFE(key, IPodTouchAESState, 0, sizeof(AES_KEY)),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_aes_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->vmsd = &vmstate_ipod_touch_aes;
     device_class_set_legacy_reset(dc, ipod_touch_aes_reset);
 }
 

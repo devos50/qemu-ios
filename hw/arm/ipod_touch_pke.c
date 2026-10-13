@@ -1,6 +1,7 @@
 #include "hw/arm/ipod_touch_pke.h"
 #include "qemu/bswap.h"
 #include "qemu/host-utils.h"
+#include "migration/vmstate.h"
 
 /*
  * Modular arithmetic on little-endian numbers of n 32-bit limbs, enough for the RSA signature check the engine is
@@ -169,9 +170,24 @@ static void ipod_touch_pke_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
+static const VMStateDescription vmstate_ipod_touch_pke = {
+    .name = TYPE_IPOD_TOUCH_PKE,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(segments, IPodTouchPKEState, 1024),
+        VMSTATE_UINT32(seg_size_reg, IPodTouchPKEState),
+        VMSTATE_UINT32(segment_size, IPodTouchPKEState),
+        VMSTATE_UINT8(num_started, IPodTouchPKEState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_pke_class_init(ObjectClass *klass, const void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(klass);
 
+    dc->vmsd = &vmstate_ipod_touch_pke;
 }
 
 static const TypeInfo ipod_touch_pke_info = {

@@ -5,6 +5,7 @@
  */
 
 #include "hw/arm/ipod_touch_spi.h"
+#include "migration/vmstate.h"
 
 static int apple_spi_word_size(IPodTouchSPIState *s)
 {
@@ -306,10 +307,24 @@ static void ipod_touch_spi_realize(DeviceState *dev, struct Error **errp)
     }
 }
 
+static const VMStateDescription vmstate_ipod_touch_spi = {
+    .name = TYPE_IPOD_TOUCH_SPI,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(last_irq, IPodTouchSPIState),
+        VMSTATE_UINT32_ARRAY(regs, IPodTouchSPIState, MMIO_SIZE >> 2),
+        VMSTATE_FIFO8(rx_fifo, IPodTouchSPIState),
+        VMSTATE_FIFO8(tx_fifo, IPodTouchSPIState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_spi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = ipod_touch_spi_realize;
+    dc->vmsd = &vmstate_ipod_touch_spi;
     device_class_set_legacy_reset(dc, ipod_touch_spi_reset);
 }
 

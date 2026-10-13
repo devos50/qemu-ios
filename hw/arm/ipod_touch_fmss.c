@@ -4,6 +4,7 @@
 #include "qemu/bswap.h"
 #include "qemu/error-report.h"
 #include "exec/cpu-common.h"
+#include "migration/vmstate.h"
 
 // the sequences of iBoot are part of its image, the kernel's sequences are in kernel memory
 #define IBOOT_BASE 0x0ff00000
@@ -411,10 +412,31 @@ static void ipod_touch_fmss_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 }
 
+/*
+ * The NAND contents are not saved: like a disk, the disk image and its overlay have to be in the state they were in
+ * when the snapshot was taken. The guest's FTL keeps the physical layout in memory, so the overlay must not be folded
+ * into the disk image between saving and loading.
+ */
+static const VMStateDescription vmstate_ipod_touch_fmss = {
+    .name = TYPE_IPOD_TOUCH_FMSS,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(regs, IPodTouchFMSSState, FMSS_REG_SIZE / 4),
+        VMSTATE_UINT32(cs_irq, IPodTouchFMSSState),
+        VMSTATE_UINT32(status, IPodTouchFMSSState),
+        VMSTATE_BOOL(iboot_patched, IPodTouchFMSSState),
+        VMSTATE_UINT8_ARRAY(page_buffer, IPodTouchFMSSState, NAND_BYTES_PER_PAGE),
+        VMSTATE_UINT8_ARRAY(spare_buffer, IPodTouchFMSSState, NAND_BYTES_PER_SPARE),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_fmss_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
+    dc->vmsd = &vmstate_ipod_touch_fmss;
     device_class_set_legacy_reset(dc, ipod_touch_fmss_reset);
 }
 

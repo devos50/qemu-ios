@@ -1,4 +1,5 @@
 #include "hw/arm/ipod_touch_sysic.h"
+#include "migration/vmstate.h"
 
 static uint64_t ipod_touch_sysic_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -138,9 +139,27 @@ static void ipod_touch_sysic_init(Object *obj)
     qdev_init_gpio_in(DEVICE(obj), ipod_touch_sysic_gpio_irq, GPIO_NUMINTGROUPS * GPIO_NUMINTSPERGROUP);
 }
 
+static const VMStateDescription vmstate_ipod_touch_sysic = {
+    .name = TYPE_IPOD_TOUCH_SYSIC,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(power_id, IPodTouchSYSICState),
+        VMSTATE_UINT32(power_state, IPodTouchSYSICState),
+        VMSTATE_UINT32_ARRAY(gpio_int_level, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_status, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_enabled, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_type, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_line, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_sysic_class_init(ObjectClass *klass, const void *data)
 {
-    
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->vmsd = &vmstate_ipod_touch_sysic;
 }
 
 static const TypeInfo ipod_touch_sysic_type_info = {

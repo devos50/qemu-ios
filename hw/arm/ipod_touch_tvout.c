@@ -1,5 +1,6 @@
 #include "hw/arm/ipod_touch_tvout.h"
 #include "qapi/error.h"
+#include "migration/vmstate.h"
 
 static void ipod_touch_tvout_update_irq(IPodTouchTVOutState *s)
 {
@@ -178,9 +179,30 @@ static void ipod_touch_tvout_init(Object *obj)
     timer_mod(s->vsync_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / TVOUT_REFRESH_RATE);
 }
 
+static const VMStateDescription vmstate_ipod_touch_tvout = {
+    .name = TYPE_IPOD_TOUCH_TVOUT,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(mixer1_status, IPodTouchTVOutState),
+        VMSTATE_UINT32(mixer1_cfg, IPodTouchTVOutState),
+        VMSTATE_UINT32(mixer2_status, IPodTouchTVOutState),
+        VMSTATE_UINT32(mixer2_cfg, IPodTouchTVOutState),
+        VMSTATE_UINT32(sdo_clkcon, IPodTouchTVOutState),
+        VMSTATE_UINT32(sdo_config, IPodTouchTVOutState),
+        VMSTATE_UINT32(sdo_irq, IPodTouchTVOutState),
+        VMSTATE_UINT32(sdo_irq_mask, IPodTouchTVOutState),
+        VMSTATE_BOOL(mixer_enabled, IPodTouchTVOutState),
+        VMSTATE_TIMER_PTR(vsync_timer, IPodTouchTVOutState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_tvout_class_init(ObjectClass *klass, const void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(klass);
 
+    dc->vmsd = &vmstate_ipod_touch_tvout;
 }
 
 static const TypeInfo ipod_touch_tvout_type_info = {

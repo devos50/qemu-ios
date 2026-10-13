@@ -1,4 +1,5 @@
 #include "hw/arm/ipod_touch_usb_phys.h"
+#include "migration/vmstate.h"
 
 static uint64_t ipod_touch_usb_phys_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -68,9 +69,25 @@ static void ipod_touch_usb_phys_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
+static const VMStateDescription vmstate_ipod_touch_usb_phys = {
+    .name = TYPE_IPOD_TOUCH_USB_PHYS,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(usb_ophypwr, IPodTouchUSBPhysState),
+        VMSTATE_UINT32(usb_ophyclk, IPodTouchUSBPhysState),
+        VMSTATE_UINT32(usb_orstcon, IPodTouchUSBPhysState),
+        VMSTATE_UINT32(usb_unknown1, IPodTouchUSBPhysState),
+        VMSTATE_UINT32(usb_ophytune, IPodTouchUSBPhysState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_usb_phys_class_init(ObjectClass *klass, const void *data)
 {
-    
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->vmsd = &vmstate_ipod_touch_usb_phys;
 }
 
 static const TypeInfo ipod_touch_usb_phys_type_info = {

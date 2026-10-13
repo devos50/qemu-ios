@@ -2,6 +2,7 @@
 #include "qapi/error.h"
 #include "qapi/visitor.h"
 #include "qemu/log.h"
+#include "migration/vmstate.h"
 
 static const char *axis_names[3] = { "x", "y", "z" };
 
@@ -168,11 +169,31 @@ static void lis302dl_init(Object *obj)
     }
 }
 
+static const VMStateDescription vmstate_lis302dl = {
+    .name = TYPE_LIS302DL,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_I2C_SLAVE(i2c, LIS302DLState),
+        VMSTATE_UINT8(reg, LIS302DLState),
+        VMSTATE_BOOL(autoinc, LIS302DLState),
+        VMSTATE_BOOL(reg_written, LIS302DLState),
+        VMSTATE_UINT8(ctrl_reg1, LIS302DLState),
+        VMSTATE_UINT8(ctrl_reg2, LIS302DLState),
+        VMSTATE_UINT8(ctrl_reg3, LIS302DLState),
+        VMSTATE_INT32_ARRAY(accel_mg, LIS302DLState, 3),
+        VMSTATE_UINT32(noise_seed, LIS302DLState),
+        VMSTATE_INT32(orientation, LIS302DLState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void lis302dl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
+    dc->vmsd = &vmstate_lis302dl;
     k->event = lis302dl_event;
     k->recv = lis302dl_recv;
     k->send = lis302dl_send;

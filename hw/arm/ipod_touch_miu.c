@@ -7,6 +7,7 @@
  * happy: the DLL reports locked and direct commands complete immediately.
  */
 #include "hw/arm/ipod_touch_miu.h"
+#include "migration/vmstate.h"
 
 static uint64_t ipod_touch_miu_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -47,11 +48,29 @@ static void ipod_touch_miu_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
+static const VMStateDescription vmstate_ipod_touch_miu = {
+    .name = TYPE_IPOD_TOUCH_MIU,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(regs, IPodTouchMIUState, MIU_REG_SIZE / 4),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void ipod_touch_miu_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->vmsd = &vmstate_ipod_touch_miu;
+}
+
 static const TypeInfo ipod_touch_miu_type_info = {
     .name = TYPE_IPOD_TOUCH_MIU,
     .parent = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(IPodTouchMIUState),
     .instance_init = ipod_touch_miu_init,
+    .class_init = ipod_touch_miu_class_init,
 };
 
 static void ipod_touch_miu_register_types(void)
