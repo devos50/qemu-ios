@@ -1,6 +1,27 @@
 #include "hw/arm/ipod_touch_tvout.h"
 #include "qapi/error.h"
 
+static void ipod_touch_tvout_update_irq(IPodTouchTVOutState *s)
+{
+    // a set bit in the mask register masks the interrupt
+    qemu_set_irq(s->irq, (s->sdo_irq & ~s->sdo_irq_mask) != 0);
+}
+
+/*
+ * While the mixer runs, the SDO signals every frame, which completes the swaps of the TV out framebuffer. The handler
+ * reprograms the mixer, so signalling right when the mixer is (re)enabled would storm.
+ */
+static void ipod_touch_tvout_vsync(void *opaque)
+{
+    IPodTouchTVOutState *s = opaque;
+
+    if (s->mixer_enabled) {
+        s->sdo_irq |= SDO_IRQ_VSYNC;
+        ipod_touch_tvout_update_irq(s);
+    }
+    timer_mod(s->vsync_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / TVOUT_REFRESH_RATE);
+}
+
 static uint64_t ipod_touch_tvout_sdo_read(void *opaque, hwaddr offset, unsigned size)
 {
     IPodTouchTVOutState *s = (IPodTouchTVOutState *)opaque;
@@ -37,11 +58,12 @@ static void ipod_touch_tvout_sdo_write(void *opaque, hwaddr offset, uint64_t val
             s->sdo_config = value;
             return;
         case SDO_IRQ:
-            s->sdo_irq = 0x0;
-            qemu_irq_lower(s->irq);
+            s->sdo_irq &= ~value;
+            ipod_touch_tvout_update_irq(s);
             return;
         case SDO_IRQMASK:
             s->sdo_irq_mask = value;
+            ipod_touch_tvout_update_irq(s);
             return;
     }
 }
@@ -72,11 +94,7 @@ static void ipod_touch_tvout_mixer1_write(void *opaque, hwaddr offset, uint64_t 
 
     switch(offset) {
         case MXR_STATUS:
-            if((value & 0x1) && (s->sdo_irq_mask & 1) == 0 && s->irq_count < 2) {
-                s->sdo_irq = 0x1;
-                s->irq_count += 1; // ugly hack for now
-                qemu_irq_raise(s->irq);
-            }
+            s->mixer_enabled = value & MXR_STATUS_ENABLE;
             break;
         case MXR_CFG:
             s->mixer1_cfg = value;
@@ -155,6 +173,9 @@ static void ipod_touch_tvout_init(Object *obj)
     sysbus_init_mmio(sbd, &s->sdo_iomem);
 
     sysbus_init_irq(sbd, &s->irq);
+
+    s->vsync_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipod_touch_tvout_vsync, s);
+    timer_mod(s->vsync_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / TVOUT_REFRESH_RATE);
 }
 
 static void ipod_touch_tvout_class_init(ObjectClass *klass, const void *data)

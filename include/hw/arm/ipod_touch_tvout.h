@@ -16,6 +16,10 @@
 #define MXR_STATUS 0x0
 #define MXR_CFG 0x4
 
+#define MXR_STATUS_ENABLE 0x1
+#define SDO_IRQ_VSYNC 0x1
+#define TVOUT_REFRESH_RATE 60
+
 #define TYPE_IPOD_TOUCH_TVOUT                "ipodtouch.tvout"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchTVOutState, IPOD_TOUCH_TVOUT)
 
@@ -38,7 +42,8 @@ typedef struct IPodTouchTVOutState {
     uint32_t sdo_irq;
     uint32_t sdo_irq_mask;
 
-    uint32_t irq_count;
+    bool mixer_enabled;
+    QEMUTimer *vsync_timer;
 } IPodTouchTVOutState;
 
 #endif
