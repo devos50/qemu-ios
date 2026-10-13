@@ -1,8 +1,46 @@
 #include "hw/arm/ipod_touch_nor_spi.h"
 #include "qemu/log.h"
 #include "qemu/error-report.h"
+#include "migration/vmstate.h"
 
 static const uint8_t nor_jedec_id[] = { 0x1F, 0x45, 0x02 }; // vendor: atmel, device: 0x02 -> AT25DF081A
+
+static bool nor_image_write(IPodTouchNORImage *img, uint32_t start, uint32_t len)
+{
+    int fd = open(img->path, O_WRONLY);
+    if (fd < 0) {
+        error_report("%s: unable to open %s: %s", __func__, img->path, strerror(errno));
+        return false;
+    }
+    bool ok = pwrite(fd, img->data + start, len, start) == len;
+    if (!ok) {
+        error_report("%s: unable to write %s: %s", __func__, img->path, strerror(errno));
+    }
+    close(fd);
+    return ok;
+}
+
+// A snapshot carries the NOR contents, which go back into the image file when it is loaded.
+static int nor_image_post_load(void *opaque, int version_id)
+{
+    IPodTouchNORImage *img = opaque;
+    if (img->path && !nor_image_write(img, 0, img->size)) {
+        return -EIO;
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_ipod_touch_nor_image = {
+    .name = "ipodtouch.norimage",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = nor_image_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_EQUAL(size, IPodTouchNORImage),
+        VMSTATE_VBUFFER_UINT32(data, IPodTouchNORImage, 0, NULL, size),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 IPodTouchNORImage *ipod_touch_nor_image_load(const char *path)
 {
@@ -22,6 +60,7 @@ IPodTouchNORImage *ipod_touch_nor_image_load(const char *path)
         img->data = g_malloc(img->size);
         memset(img->data, 0xFF, img->size);
     }
+    vmstate_register(NULL, 0, &vmstate_ipod_touch_nor_image, img);
     return img;
 }
 
@@ -46,16 +85,7 @@ static void nor_flush(IPodTouchNORSPIState *s)
     if (len == 0 || !img->path) {
         return;
     }
-
-    int fd = open(img->path, O_WRONLY);
-    if (fd < 0) {
-        error_report("%s: unable to open %s: %s", __func__, img->path, strerror(errno));
-        return;
-    }
-    if (pwrite(fd, img->data + start, len, start) != len) {
-        error_report("%s: unable to write %s: %s", __func__, img->path, strerror(errno));
-    }
-    close(fd);
+    nor_image_write(img, start, len);
 }
 
 static void nor_erase(IPodTouchNORSPIState *s, uint32_t block_size)
@@ -211,9 +241,29 @@ static void ipod_touch_nor_spi_realize(SSIPeripheral *d, Error **errp)
     s->status = 0;
 }
 
+// The image is shared by both NOR devices and saved on its own (vmstate_ipod_touch_nor_image).
+static const VMStateDescription vmstate_ipod_touch_nor_spi = {
+    .name = TYPE_IPOD_TOUCH_NOR_SPI,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_SSI_PERIPHERAL(ssidev, IPodTouchNORSPIState),
+        VMSTATE_UINT8(cur_cmd, IPodTouchNORSPIState),
+        VMSTATE_UINT32(cmd_pos, IPodTouchNORSPIState),
+        VMSTATE_UINT32(addr, IPodTouchNORSPIState),
+        VMSTATE_UINT8(status, IPodTouchNORSPIState),
+        VMSTATE_UINT32(dirty_start, IPodTouchNORSPIState),
+        VMSTATE_UINT32(dirty_end, IPodTouchNORSPIState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ipod_touch_nor_spi_class_init(ObjectClass *klass, const void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(klass);
     SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
+
+    dc->vmsd = &vmstate_ipod_touch_nor_spi;
     k->realize = ipod_touch_nor_spi_realize;
     k->transfer = ipod_touch_nor_spi_transfer;
     k->set_cs = ipod_touch_nor_spi_set_cs;
