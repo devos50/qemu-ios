@@ -111,25 +111,62 @@ static int lis302dl_send(I2CSlave *i2c, uint8_t data)
     return 0;
 }
 
+// The orientations the device can be held in, in the order of quarter turns counter-clockwise from upright
+// portrait. id is the name of the "orientation" property.
+static const struct {
+    int32_t x, y;
+    const char *id;
+    const char *name;
+} orientations[] = {
+    { 0, -1000, "portrait", "portrait" },
+    { 1000, 0, "landscape-right", "landscape, home button right" },
+    { 0, 1000, "portrait-upside-down", "portrait upside down" },
+    { -1000, 0, "landscape-left", "landscape, home button left" },
+};
+
+static void lis302dl_set_orientation(LIS302DLState *s, int orientation)
+{
+    s->orientation = orientation;
+    s->accel_mg[0] = orientations[orientation].x;
+    s->accel_mg[1] = orientations[orientation].y;
+    s->accel_mg[2] = 0;
+}
+
 // Turns the device a quarter turn counter-clockwise, starting from upright portrait; returns the new
 // orientation. iOS keeps its orientation while the device lies flat, which is where it starts.
 const char *lis302dl_rotate(LIS302DLState *s)
 {
-    static const struct {
-        int32_t x, y;
-        const char *name;
-    } orientations[] = {
-        { 0, -1000, "portrait" },
-        { 1000, 0, "landscape, home button right" },
-        { 0, 1000, "portrait upside down" },
-        { -1000, 0, "landscape, home button left" },
-    };
-
-    s->orientation = (s->orientation + 1) % ARRAY_SIZE(orientations);
-    s->accel_mg[0] = orientations[s->orientation].x;
-    s->accel_mg[1] = orientations[s->orientation].y;
-    s->accel_mg[2] = 0;
+    lis302dl_set_orientation(s, (s->orientation + 1) % ARRAY_SIZE(orientations));
     return orientations[s->orientation].name;
+}
+
+// The "orientation" property: "flat" (lying face-up, as at power-on) or one of the ids above. Setting it holds the
+// device that way, so that a front end can rotate it to an orientation it shows, and read it back after a resume.
+static char *lis302dl_get_orientation(Object *obj, Error **errp)
+{
+    LIS302DLState *s = LIS302DL(obj);
+
+    return g_strdup(s->orientation < 0 ? "flat" : orientations[s->orientation].id);
+}
+
+static void lis302dl_set_orientation_prop(Object *obj, const char *value, Error **errp)
+{
+    LIS302DLState *s = LIS302DL(obj);
+
+    if (!strcmp(value, "flat")) {
+        s->orientation = -1;
+        s->accel_mg[0] = 0;
+        s->accel_mg[1] = 0;
+        s->accel_mg[2] = 1000;
+        return;
+    }
+    for (int i = 0; i < ARRAY_SIZE(orientations); i++) {
+        if (!strcmp(value, orientations[i].id)) {
+            lis302dl_set_orientation(s, i);
+            return;
+        }
+    }
+    error_setg(errp, "unknown orientation '%s'", value);
 }
 
 // getter and setter of the acceleration properties
@@ -167,6 +204,7 @@ static void lis302dl_init(Object *obj)
     for (int i = 0; i < 3; i++) {
         object_property_add(obj, axis_names[i], "int32", lis302dl_visit_accel, lis302dl_visit_accel, NULL, &s->accel_mg[i]);
     }
+    object_property_add_str(obj, "orientation", lis302dl_get_orientation, lis302dl_set_orientation_prop);
 }
 
 static const VMStateDescription vmstate_lis302dl = {
