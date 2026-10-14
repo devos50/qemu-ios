@@ -197,6 +197,10 @@ typedef struct {
 	IPodTouchSDIOState *sdio_state;
 	IPodTouchTVOutState *tvout_state;
 	char bootrom_path[1024];
+	char *boot_image_path;
+	uint8_t *boot_image;   // the first boot stage given with boot-image (an IMG3 image), started without a bootrom
+	gsize boot_image_size;
+	IPodTouchNORImage *nor_image;
 	char nor_path[1024];
 	char nand_path[1024];
 	char *nand_disk;

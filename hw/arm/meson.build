@@ -113,6 +113,7 @@ arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_2g.c',
   'ipod_touch_aes.c',
+  'ipod_touch_boot.c',
   'ipod_touch_alac.c',
   'ipod_touch_amc.c',
   'ipod_touch_bcm4325.c',

@@ -13,6 +13,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/arm/exynos4210.h"
 #include "hw/arm/ipod_touch_2g.h"
+#include "hw/arm/ipod_touch_boot.h"
 #include "hw/arm/ipod_touch_pcf50633_pmu.h"
 #include "target/arm/cpregs.h"
 #include "qemu/error-report.h"
@@ -77,20 +78,47 @@ static void ipod_touch_cpu_setup(MachineState *machine, MemoryRegion **sysmem, A
     object_unref(cpuobj);
 }
 
+/*
+ * Without a bootrom the machine does its job: it loads the first boot stage (the boot-image, or LLB from the NOR as it
+ * is now, which a restore may have rewritten) to SRAM and starts it like the bootrom does, with r0 = 0. The CPU's reset
+ * state is what the bootrom leaves behind (SVC mode, interrupts masked, MMU and caches off).
+ */
+static bool ipod_touch_load_first_stage(IPodTouchMachineState *nms, Error **errp)
+{
+    const uint8_t *image = nms->boot_image;
+    size_t size = nms->boot_image_size;
+
+    if (!image && !ipod_touch_boot_find_nor_image(nms->nor_image->data, nms->nor_image->size, IMG3_TAG_LLB,
+                                                  &image, &size)) {
+        error_setg(errp, "the NOR has no LLB image to boot");
+        return false;
+    }
+    if (!ipod_touch_boot_load_img3(image, size, errp)) {
+        error_prepend(errp, nms->boot_image ? "boot-image: " : "LLB in the NOR: ");
+        return false;
+    }
+    return true;
+}
+
 static void ipod_touch_cpu_reset(void *opaque)
 {
     IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE((MachineState *)opaque);
     ARMCPU *cpu = nms->cpu;
     CPUState *cs = CPU(cpu);
+    Error *err = NULL;
 
     cpu_reset(cs);
 
-    //env->regs[0] = nms->kbootargs_pa;
-    //cpu_set_pc(CPU(cpu), 0xc00607ec);
-    cpu_set_pc(CPU(cpu), VROM_MEM_BASE);
-    //env->regs[0] = 0x9000000;
-    //cpu_set_pc(CPU(cpu), LLB_BASE + 0x100);
-    //cpu_set_pc(CPU(cpu), VROM_MEM_BASE);
+    if (nms->bootrom_path[0]) {
+        cpu_set_pc(cs, VROM_MEM_BASE);
+    } else if (ipod_touch_load_first_stage(nms, &err)) {
+        cpu->env.regs[0] = 0;
+        cpu_set_pc(cs, IPOD_TOUCH_BOOT_ADDR);
+    } else {
+        // the NOR was valid at start-up, so the guest has broken it; the empty ROM area doesn't boot either
+        error_report_err(err);
+        cpu_set_pc(cs, VROM_MEM_BASE);
+    }
 }
 
 static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem, AddressSpace *nsas)
@@ -137,12 +165,16 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
         create_unimplemented_device(unimp_regions[i].name, unimp_regions[i].base, unimp_regions[i].size);
     }
 
-    // load the bootrom (vrom)
-    uint8_t *file_data = NULL;
-    gsize fsize;
-    if (g_file_get_contents(nms->bootrom_path, (char **)&file_data, &fsize, NULL)) {
-        allocate_ram(sysmem, "vrom", 0x0, 0x20000);
-        address_space_rw(nsas, VROM_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)file_data, fsize, 1);
+    // the bootrom (vrom), empty without one, so the RAM layout (and with it a saved state) doesn't depend on it
+    allocate_ram(sysmem, "vrom", VROM_MEM_BASE, 0x20000);
+    if (nms->bootrom_path[0]) {
+        g_autofree uint8_t *file_data = NULL;
+        gsize fsize;
+        if (!g_file_get_contents(nms->bootrom_path, (char **)&file_data, &fsize, NULL)) {
+            error_report("unable to read the bootrom at %s", nms->bootrom_path);
+            exit(1);
+        }
+        address_space_rw(nsas, VROM_MEM_BASE, MEMTXATTRS_UNSPECIFIED, file_data, MIN(fsize, 0x20000), 1);
     }
 }
 
@@ -277,12 +309,30 @@ static void ipod_touch_set_force_dfu(Object *obj, bool value, Error **errp)
     nms->force_dfu = value;
 }
 
+static char *ipod_touch_get_boot_image(Object *obj, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    return g_strdup(nms->boot_image_path);
+}
+
+static void ipod_touch_set_boot_image(Object *obj, const char *value, Error **errp)
+{
+    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    g_free(nms->boot_image_path);
+    nms->boot_image_path = g_strdup(value);
+}
+
 static void ipod_touch_instance_init(Object *obj)
 {
     IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
 
     object_property_add_str(obj, "bootrom", ipod_touch_get_bootrom_path, ipod_touch_set_bootrom_path);
-    object_property_set_description(obj, "bootrom", "Path to the S5L8720 bootrom binary");
+    object_property_set_description(obj, "bootrom", "Path to the S5L8720 bootrom binary (optional: without it the "
+                                                    "machine starts LLB from the NOR, or boot-image, itself)");
+
+    object_property_add_str(obj, "boot-image", ipod_touch_get_boot_image, ipod_touch_set_boot_image);
+    object_property_set_description(obj, "boot-image", "IMG3 image to start instead of LLB from the NOR, e.g. iBSS "
+                                                       "for a restore (without a bootrom only)");
 
 	object_property_add_str(obj, "nor", ipod_touch_get_nor_path, ipod_touch_set_nor_path);
     object_property_set_description(obj, "nor", "Path to the S5L8720 NOR image");
@@ -314,7 +364,7 @@ static void ipod_touch_instance_init(Object *obj)
                                                       "releases)");
 
     object_property_add_bool(obj, "dfu", ipod_touch_get_force_dfu, ipod_touch_set_force_dfu);
-    object_property_set_description(obj, "dfu", "Hold the force-DFU GPIO so the bootrom enters DFU mode");
+    object_property_set_description(obj, "dfu", "Hold the force-DFU GPIO so the bootrom enters DFU mode (with bootrom only)");
 }
 
 static inline qemu_irq s5l8900_get_irq(IPodTouchMachineState *s, int n)
@@ -556,6 +606,7 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     // both SPI buses are connected to the same NOR, selected through GPIOs
     IPodTouchNORImage *nor_image = ipod_touch_nor_image_load(nms->nor_path);
+    nms->nor_image = nor_image;
     spi0_state->nor->image = nor_image;
     spi1_state->nor->image = nor_image;
     qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI0), qdev_get_gpio_in_named(DEVICE(spi0_state->nor), SSI_GPIO_CS, 0));
@@ -791,6 +842,29 @@ static void ipod_touch_machine_init(MachineState *machine)
     memory_region_add_subregion(sysmem, MBX2_MEM_BASE, &mbx_state->iomem2);
     sysbus_realize(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_MBX_IRQ));
+
+    if (nms->bootrom_path[0]) {
+        if (nms->boot_image_path) {
+            error_report("boot-image starts a boot stage without the bootrom; it can't be combined with bootrom");
+            exit(1);
+        }
+    } else {
+        if (nms->force_dfu) {
+            error_report("dfu needs the bootrom (to start iBSS without one, pass it as boot-image)");
+            exit(1);
+        }
+        if (nms->boot_image_path &&
+            !g_file_get_contents(nms->boot_image_path, (char **)&nms->boot_image, &nms->boot_image_size, NULL)) {
+            error_report("unable to read the boot image at %s", nms->boot_image_path);
+            exit(1);
+        }
+        // check the image now rather than at reset
+        Error *err = NULL;
+        if (!ipod_touch_load_first_stage(nms, &err)) {
+            error_report_err(err);
+            exit(1);
+        }
+    }
 
     qemu_register_reset(ipod_touch_cpu_reset, nms);
     vmstate_register(NULL, 0, &vmstate_ipod_touch_machine, nms);

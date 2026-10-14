@@ -326,7 +326,7 @@ static const IPodTouchGIDKey gid_keys[] = {
         0xa8, 0xe4, 0x9b, 0xdf, 0x43, 0x65, 0x1b, 0x0a, 0xcf, 0x44, 0xba, 0x9e, 0xd7, 0xba, 0x8e, 0x0d } }, // key
 };
 
-static bool ipod_touch_aes_gid_decrypt(const uint8_t *in, uint8_t *out, uint32_t size)
+bool ipod_touch_aes_gid_decrypt(const uint8_t *in, uint8_t *out, uint32_t size)
 {
     for(int i = 0; i < ARRAY_SIZE(gid_keys); i++) {
         if(size == sizeof(gid_keys[i].kbag) && memcmp(in, gid_keys[i].kbag, size) == 0) {

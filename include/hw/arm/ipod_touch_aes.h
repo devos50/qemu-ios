@@ -83,4 +83,10 @@ typedef struct IPodTouchAESState
     AES_KEY key;
 } IPodTouchAESState;
 
+/*
+ * Answers a GID decryption of a KBAG from the table of known image keys: writes the IV and key to out and returns
+ * true if the KBAG is known.
+ */
+bool ipod_touch_aes_gid_decrypt(const uint8_t *in, uint8_t *out, uint32_t size);
+
 #endif
