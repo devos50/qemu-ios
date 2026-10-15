@@ -328,6 +328,7 @@ static void it1g_machine_init(MachineState *machine)
     dev = qdev_new(TYPE_S5L_TIMER);
     qdev_prop_set_uint32(dev, "irqstat-offset", 0x10000);
     qdev_prop_set_uint32(dev, "irqlatch-offset", 0xf8);
+    qdev_prop_set_uint32(dev, "timers", 7);
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, IT1G_TIMER1_MEM_BASE);

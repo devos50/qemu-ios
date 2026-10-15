@@ -1,7 +1,7 @@
 /*
- * S5L8720 timer block.
+ * S5L8720 and S5L8900 timer block.
  *
- * It contains a 64-bit free running counter and eight timers, all clocked from the 24 MHz fixed-frequency clock.
+ * It contains a 64-bit free running counter and eight timers (seven on the S5L8900), all clocked from the 24 MHz fixed-frequency clock.
  *  - iBoot runs the counter at 12 MHz (CFG 0x00018010) and uses timer 4 at 12 MHz for its deadlines.
  *  - The kernel reprograms the counter to the 6 MHz timebase-frequency (CFG 0x10018030) and uses it for
  *    mach_absolute_time. Timer 4 is the decrementer: it runs at 6 MHz (CONFIG 0x1150), gets the number of ticks until
@@ -12,6 +12,7 @@
  */
 #include "hw/arm/s5l_timer.h"
 #include "hw/core/qdev-properties.h"
+#include "qapi/error.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 
@@ -75,9 +76,9 @@ static void s5l_timer_fold(S5LTimerChannel *ch, int64_t now)
 static void s5l_timer_update_irq(S5LTimerState *s)
 {
     uint32_t pending = 0;
-    for (int n = 4; n < NUM_TIMERS; n++) {
+    for (int n = 4; n < s->timers; n++) {
         uint32_t enabled = (s->channels[n].config >> TIMER_CONFIG_IE_SHIFT) & TIMER_CONFIG_IE_MASK;
-        pending |= (s->irqstat >> TIMER_IRQSTAT_SHIFT(n)) & enabled;
+        pending |= (s->irqstat >> TIMER_IRQSTAT_SHIFT(s, n)) & enabled;
     }
     qemu_set_irq(s->irq, pending != 0);
 }
@@ -98,7 +99,7 @@ static void s5l_timer_expired(S5LTimerState *s, int n)
     s5l_timer_schedule(ch);
 
     if (n >= 4) {
-        s->irqstat |= TIMER_IRQ_COUNT_REACHED << TIMER_IRQSTAT_SHIFT(n);
+        s->irqstat |= TIMER_IRQ_COUNT_REACHED << TIMER_IRQSTAT_SHIFT(s, n);
         s5l_timer_update_irq(s);
     } else {
         qemu_log_mask(LOG_UNIMP, "%s: interrupt of timer %d is not modelled\n", __func__, n);
@@ -129,9 +130,9 @@ static uint64_t s5l_timer_ticks(S5LTimerState *s, int64_t now)
 }
 
 // returns the timer that owns the register at addr, and the offset of the register within it
-static int s5l_timer_decode(hwaddr addr, hwaddr *reg)
+static int s5l_timer_decode(S5LTimerState *s, hwaddr addr, hwaddr *reg)
 {
-    for (int n = 0; n < NUM_TIMERS; n++) {
+    for (int n = 0; n < s->timers; n++) {
         if (addr >= TIMER_BASE(n) && addr < TIMER_BASE(n) + TIMER_REG_SIZE) {
             *reg = addr - TIMER_BASE(n);
             return n;
@@ -200,7 +201,7 @@ static void s5l_timer_write(void *opaque, hwaddr addr, uint64_t value, unsigned 
         return;
     }
 
-    n = s5l_timer_decode(addr, &reg);
+    n = s5l_timer_decode(s, addr, &reg);
     if (n < 0) {
         qemu_log_mask(LOG_UNIMP, "%s: unknown register 0x%03" HWADDR_PRIx " (value 0x%08" PRIx64 ")\n",
                       __func__, addr, value);
@@ -235,7 +236,7 @@ static uint64_t s5l_timer_read(void *opaque, hwaddr addr, unsigned size)
         return s->ticks_regs[(addr - TIMER_TICKS_CFG - 4) / 4];
     }
 
-    n = s5l_timer_decode(addr, &reg);
+    n = s5l_timer_decode(s, addr, &reg);
     if (n < 0) {
         qemu_log_mask(LOG_UNIMP, "%s: unknown register 0x%03" HWADDR_PRIx "\n", __func__, addr);
         return 0;
@@ -346,6 +347,10 @@ static void s5l_timer_realize(DeviceState *dev, Error **errp)
 {
     S5LTimerState *s = S5L_TIMER(dev);
 
+    if (s->timers < 5 || s->timers > NUM_TIMERS) {
+        error_setg(errp, "timers must be between 5 and %d", NUM_TIMERS);
+        return;
+    }
     memory_region_init_io(&s->iomem, OBJECT(dev), &timer1_ops, s, "timer1",
                           MAX(0x1000, ROUND_UP(s->irqstat_offset + 4, 0x1000)));
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
@@ -353,11 +358,14 @@ static void s5l_timer_realize(DeviceState *dev, Error **errp)
 
 /*
  * Where the chips keep the interrupt status: the S5L8720 at 0x118, the S5L8900 at 0x10000, with a latch at 0xf8 that
- * reads and acknowledges like the status (LLB polls it).
+ * reads and acknowledges like the status (LLB polls it). The S5L8900 has seven timers, which moves each timer's
+ * status bits down by 8 (iBoot 1.1.5's handler reads timer 4 at bit 16, and the kernel's FIQ handler acknowledges
+ * its decrementer, timer 4, with 0x30000).
  */
 static const Property s5l_timer_properties[] = {
     DEFINE_PROP_UINT32("irqstat-offset", S5LTimerState, irqstat_offset, TIMER_IRQSTAT),
     DEFINE_PROP_UINT32("irqlatch-offset", S5LTimerState, irqlatch_offset, 0),
+    DEFINE_PROP_UINT32("timers", S5LTimerState, timers, NUM_TIMERS),
 };
 
 static void s5l_timer_class_init(ObjectClass *klass, const void *data)
