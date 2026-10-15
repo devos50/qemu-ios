@@ -11,6 +11,7 @@
  * from the interrupt handler, so the model reloads.
  */
 #include "hw/arm/s5l_timer.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 
@@ -180,11 +181,13 @@ static void s5l_timer_write(void *opaque, hwaddr addr, uint64_t value, unsigned 
     hwaddr reg;
     int n;
 
-    switch (addr) {
-    case TIMER_IRQSTAT:
+    if (addr == s->irqstat_offset || (s->irqlatch_offset && addr == s->irqlatch_offset)) {
         s->irqstat &= ~value;
         s5l_timer_update_irq(s);
         return;
+    }
+
+    switch (addr) {
     case TIMER_TICKS_CFG: {
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         s->ticks_base = s5l_timer_ticks(s, now);
@@ -213,6 +216,10 @@ static uint64_t s5l_timer_read(void *opaque, hwaddr addr, unsigned size)
     hwaddr reg;
     int n;
 
+    if (addr == s->irqstat_offset || (s->irqlatch_offset && addr == s->irqlatch_offset)) {
+        return s->irqstat;
+    }
+
     switch (addr) {
     case TIMER_TICKSHIGH: {
         // both iBoot and the kernel read the high word first
@@ -226,8 +233,6 @@ static uint64_t s5l_timer_read(void *opaque, hwaddr addr, unsigned size)
         return s->ticks_cfg;
     case TIMER_TICKS_CFG + 4 ... TIMER_TICKS_CFG + 0x10:
         return s->ticks_regs[(addr - TIMER_TICKS_CFG - 4) / 4];
-    case TIMER_IRQSTAT:
-        return s->irqstat;
     }
 
     n = s5l_timer_decode(addr, &reg);
@@ -287,8 +292,6 @@ static void s5l_timer_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     S5LTimerState *s = S5L_TIMER(obj);
 
-    memory_region_init_io(&s->iomem, obj, &timer1_ops, s, "timer1", 0x1000);
-    sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
     for (int n = 0; n < NUM_TIMERS; n++) {
@@ -339,9 +342,30 @@ static const VMStateDescription vmstate_s5l_timer = {
     }
 };
 
+static void s5l_timer_realize(DeviceState *dev, Error **errp)
+{
+    S5LTimerState *s = S5L_TIMER(dev);
+
+    memory_region_init_io(&s->iomem, OBJECT(dev), &timer1_ops, s, "timer1",
+                          MAX(0x1000, ROUND_UP(s->irqstat_offset + 4, 0x1000)));
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
+}
+
+/*
+ * Where the chips keep the interrupt status: the S5L8720 at 0x118, the S5L8900 at 0x10000, with a latch at 0xf8 that
+ * reads and acknowledges like the status (LLB polls it).
+ */
+static const Property s5l_timer_properties[] = {
+    DEFINE_PROP_UINT32("irqstat-offset", S5LTimerState, irqstat_offset, TIMER_IRQSTAT),
+    DEFINE_PROP_UINT32("irqlatch-offset", S5LTimerState, irqlatch_offset, 0),
+};
+
 static void s5l_timer_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->realize = s5l_timer_realize;
+    device_class_set_props(dc, s5l_timer_properties);
 
     device_class_set_legacy_reset(dc, s5l_timer_reset);
     dc->vmsd = &vmstate_s5l_timer;

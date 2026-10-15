@@ -66,6 +66,8 @@ typedef struct S5LTimerState
 
     S5LTimerChannel channels[NUM_TIMERS];
     uint32_t irqstat;
+    uint32_t irqstat_offset;
+    uint32_t irqlatch_offset;  // 0: none
 
     // free running counter
     uint32_t ticks_cfg;
