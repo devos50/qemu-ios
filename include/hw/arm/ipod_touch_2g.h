@@ -17,6 +17,8 @@
 #include "hw/arm/s5l_usb_otg.h"
 #include "hw/arm/s5l_usb_phys.h"
 #include "hw/arm/s5l_spi.h"
+#include "hw/arm/ipod_touch_nor_spi.h"
+#include "hw/arm/ipod_touch_multitouch.h"
 #include "hw/arm/s5l_sha1.h"
 #include "hw/arm/ipod_touch_aes.h"
 #include "hw/arm/ipod_touch_pke.h"

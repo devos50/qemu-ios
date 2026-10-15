@@ -604,13 +604,17 @@ static void ipod_touch_machine_init(MachineState *machine)
     S5LSPIState *spi1_state = S5L_SPI(dev);
     nms->spi1_state = spi1_state;
 
+    // the bootrom and iBoot reach the NOR through SPI0, the kernel through SPI1
+    IPodTouchNORSPIState *nor0 = IPOD_TOUCH_NOR_SPI(ssi_create_peripheral(spi0_state->spi, TYPE_IPOD_TOUCH_NOR_SPI));
+    IPodTouchNORSPIState *nor1 = IPOD_TOUCH_NOR_SPI(ssi_create_peripheral(spi1_state->spi, TYPE_IPOD_TOUCH_NOR_SPI));
+
     // both SPI buses are connected to the same NOR, selected through GPIOs
     IPodTouchNORImage *nor_image = ipod_touch_nor_image_load(nms->nor_path);
     nms->nor_image = nor_image;
-    spi0_state->nor->image = nor_image;
-    spi1_state->nor->image = nor_image;
-    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI0), qdev_get_gpio_in_named(DEVICE(spi0_state->nor), SSI_GPIO_CS, 0));
-    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI1), qdev_get_gpio_in_named(DEVICE(spi1_state->nor), SSI_GPIO_CS, 0));
+    nor0->image = nor_image;
+    nor1->image = nor_image;
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI0), qdev_get_gpio_in_named(DEVICE(nor0), SSI_GPIO_CS, 0));
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI1), qdev_get_gpio_in_named(DEVICE(nor1), SSI_GPIO_CS, 0));
 
     set_spi_base(2);
     sysbus_create_simple("s5l.spi", SPI2_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI2_IRQ));
@@ -621,11 +625,12 @@ static void ipod_touch_machine_init(MachineState *machine)
     set_spi_base(4);
     dev = sysbus_create_simple("s5l.spi", SPI4_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI4_IRQ));
     S5LSPIState *spi4_state = S5L_SPI(dev);
-    spi4_state->mt->sysic = sysic_state;
-    spi4_state->mt->gpio_state = gpio_state;
-    qdev_connect_gpio_out_named(DEVICE(spi4_state->mt), "irq", 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_MULTITOUCH_IRQ));
-    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_MULTITOUCH_CS), qdev_get_gpio_in_named(DEVICE(spi4_state->mt), SSI_GPIO_CS, 0));
-    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_MULTITOUCH_RESET), qdev_get_gpio_in_named(DEVICE(spi4_state->mt), "reset", 0));
+    IPodTouchMultitouchState *mt = IPOD_TOUCH_MULTITOUCH(ssi_create_peripheral(spi4_state->spi, TYPE_IPOD_TOUCH_MULTITOUCH));
+    mt->sysic = sysic_state;
+    mt->gpio_state = gpio_state;
+    qdev_connect_gpio_out_named(DEVICE(mt), "irq", 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_MULTITOUCH_IRQ));
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_MULTITOUCH_CS), qdev_get_gpio_in_named(DEVICE(mt), SSI_GPIO_CS, 0));
+    qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_MULTITOUCH_RESET), qdev_get_gpio_in_named(DEVICE(mt), "reset", 0));
     nms->spi4_state = spi4_state;
 
     // init the chip ID module
@@ -794,7 +799,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     dev = qdev_new("ipodtouch.lcd");
     IPodTouchLCDState *lcd_state = IPOD_TOUCH_LCD(dev);
     lcd_state->sysmem = sysmem;
-    lcd_state->mt = spi4_state->mt;
+    lcd_state->mt = mt;
     nms->lcd_state = lcd_state;
     busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, DISPLAY_MEM_BASE, &lcd_state->iomem);
@@ -870,7 +875,7 @@ static void ipod_touch_machine_init(MachineState *machine)
     vmstate_register(NULL, 0, &vmstate_ipod_touch_machine, nms);
 
     QemuInputHandlerState *key_handler =
-        qemu_input_handler_register(DEVICE(spi4_state->mt), &ipod_touch_key_handler);
+        qemu_input_handler_register(DEVICE(mt), &ipod_touch_key_handler);
     qemu_input_handler_activate(key_handler);
 
     if (nms->force_dfu) {

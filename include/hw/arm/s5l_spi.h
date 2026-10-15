@@ -8,8 +8,6 @@
 #include "hw/core/hw-error.h"
 #include "hw/core/irq.h"
 #include "hw/ssi/ssi.h"
-#include "hw/arm/ipod_touch_nor_spi.h"
-#include "hw/arm/ipod_touch_multitouch.h"
 
 #define TYPE_S5L_SPI "s5l.spi"
 OBJECT_DECLARE_SIMPLE_TYPE(S5LSPIState, S5L_SPI)
@@ -62,8 +60,6 @@ typedef struct S5LSPIState {
 
     MemoryRegion iomem;
     SSIBus *spi;
-    IPodTouchMultitouchState *mt;
-    IPodTouchNORSPIState *nor;
 
     qemu_irq irq;
     uint32_t last_irq;
