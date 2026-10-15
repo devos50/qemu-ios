@@ -55,6 +55,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LMBXState, S5L_MBX)
 #define MBX_SCENE_SETUP1       0x818 // likewise
 #define MBX_REGION_START       0x81c // before a scene's TA stream -> MBX_INT_REGION_DONE
 #define MBX_PB_INIT            0x838 // parameter buffer setup -> MBX_INT_RENDER_DONE
+// The 1.1.5 kernel (S5L8900) ends a core reset with 0x80 here and 0 in REGION_START, then spins until
+// MBX_INT_REGION_DONE, without a timeout
+#define MBX_REGION_INIT        0x85c
+#define MBX_REGION_INIT_START  (1 << 7)
 
 // MMU: eight directory registers hold the physical addresses of page-table pages that each map 4 MB of the 32 MB GPU
 // address space with one word (a page's physical address) per 4 KB page. The kernel enables the MMU through ENABLE

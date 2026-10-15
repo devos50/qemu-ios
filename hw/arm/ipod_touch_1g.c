@@ -29,6 +29,7 @@
 #include "hw/dma/pl080.h"
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
+#include "hw/arm/s5l_mbx.h"
 #include "hw/arm/ipod_touch_aes.h"
 #include "hw/arm/ipod_touch_1g_lcd_panel.h"
 #include "hw/arm/s5l_spi.h"
@@ -252,7 +253,6 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         { "tvout3",     IT1G_TVOUT3_MEM_BASE,   0x1000 },
         { "mpvd",       IT1G_MPVD_MEM_BASE,     0x70000 },
         { "h264bpd",    IT1G_H264BPD_MEM_BASE,  0x1000 },
-        { "mbx",        IT1G_MBX_MEM_BASE,      0x1000000 },
         { "usb-phys",   IT1G_USBPHYS_MEM_BASE,  0x1000 },
         { "iis2",       IT1G_IIS2_MEM_BASE,     0x1000 },
         { "iis1",       IT1G_IIS1_MEM_BASE,     0x1000 },
@@ -309,6 +309,13 @@ static void it1g_machine_init(MachineState *machine)
 
     sysbus_create_simple(TYPE_S5L8900_CLOCK, IT1G_CLOCK1_MEM_BASE, NULL);
     sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE, NULL);
+
+    // the same MBX Lite as the S5L8720's, without the wrapper
+    dev = qdev_new(TYPE_S5L_MBX);
+    busdev = SYS_BUS_DEVICE(dev);
+    memory_region_add_subregion(sysmem, IT1G_MBX_MEM_BASE, &S5L_MBX(dev)->iomem1);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8900_MBX_IRQ));
 
     // in place of the bootrom, what iBoot calls in it (the machine itself does the bootrom's loading of LLB)
     sysbus_create_simple(TYPE_S5L8900_BOOTROM, IT1G_VROM_MEM_BASE, NULL);

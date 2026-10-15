@@ -1,5 +1,6 @@
 /*
- * S5L8720 PowerVR MBX Lite graphics core, as used by AppleMBX (com.apple.driver.AppleMBX) and MBX2D.
+ * S5L8720 and S5L8900 PowerVR MBX Lite graphics core, as used by AppleMBX (com.apple.driver.AppleMBX) and MBX2D.
+ * The addresses below are the 2.1.1 kernel's for the S5L8720; the S5L8900 has no wrapper (MBX2).
  *
  * The model emulates what the driver submits rather than the GPU's microarchitecture:
  *  - Interrupts. The driver (AppleMBXDevice::handleInterrupt, 0xc04ea478) handles STATUS & MASK, clears those bits
@@ -861,6 +862,11 @@ static void s5l_mbx1_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
     case MBX_PB_INIT:
         if (val & 1) {
             s->int_status |= MBX_INT_RENDER_DONE;
+        }
+        break;
+    case MBX_REGION_INIT:
+        if (val & MBX_REGION_INIT_START) {
+            s->int_status |= MBX_INT_REGION_DONE;
         }
         break;
     }

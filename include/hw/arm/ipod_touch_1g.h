@@ -27,6 +27,7 @@
 #define S5L8900_SPI0_IRQ        0x09
 #define S5L8900_SPI1_IRQ        0x0A
 #define S5L8900_SPI2_IRQ        0x0B
+#define S5L8900_MBX_IRQ         0x0C
 #define S5L8900_LCD_IRQ         0x0D
 #define S5L8900_DMAC0_IRQ       0x10
 #define S5L8900_DMAC1_IRQ       0x11
