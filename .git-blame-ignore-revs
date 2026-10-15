@@ -19,3 +19,6 @@ ad9e4585b3c7425759d3eea697afbca71d2c2082
 
 # replace TABs with spaces
 48805df9c22a0700fba4b3b548fafaa21726ca68
+
+# hw/arm: Name the S5L blocks after the chip family
+2243fff218066c3274cf062e3f6a9b45ec382481
