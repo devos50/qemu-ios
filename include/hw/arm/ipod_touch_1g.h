@@ -113,6 +113,9 @@ typedef struct {
     char *nor_path;
     char *boot_image_path;
     char *bootrom_path;
+    char *nand_disk;
+    char *nand_overlay;
+    char *nand_epoch;
 } IPodTouch1GMachineState;
 
 #endif

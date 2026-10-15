@@ -26,6 +26,9 @@ Options (``-M <machine>,<option>=<value>,...``):
   The NAND, presented as a freshly formatted NAND holding ``nand-disk`` (a raw disk image, as the restore
   ramdisk partitions it), with the pages the guest writes kept in ``nand-overlay`` on top of it.
   ``nand-epoch`` is the security epoch of the NAND driver the disk was formatted for.
+  On the iPod touch 1G the disk is presented in Whimory 2.1's legacy format (the one iPhone OS 1.1.x reads,
+  logical pages of 2048 bytes, so the MBR's LBAs count 2048 bytes), and ``nand-epoch`` is refused: that NAND
+  driver has no security epoch. The 1G doesn't write the overlay yet (iBoot only reads).
 
 ``nand=<dir>``
   A NAND kept as one file per page, the older layout. Superseded by ``nand-disk``.

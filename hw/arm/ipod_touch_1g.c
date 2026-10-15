@@ -394,7 +394,20 @@ static void it1g_machine_init(MachineState *machine)
     }
 
     // the NAND and its ECC engine
-    sysbus_create_simple(TYPE_S5L8900_NAND, IT1G_NAND_MEM_BASE, NULL);
+    if (nms->nand_epoch) {
+        error_report("nand-epoch: the iPod touch 1G's NAND driver has no security epoch; leave it out");
+        exit(1);
+    }
+    if (!nms->nand_disk != !nms->nand_overlay) {
+        error_report("nand-disk and nand-overlay go together");
+        exit(1);
+    }
+    dev = qdev_new(TYPE_S5L8900_NAND);
+    qdev_prop_set_string(dev, "disk", nms->nand_disk);
+    qdev_prop_set_string(dev, "overlay", nms->nand_overlay);
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_mmio_map(busdev, 0, IT1G_NAND_MEM_BASE);
     sysbus_create_simple(TYPE_S5L8900_NAND_ECC, IT1G_NAND_ECC_MEM_BASE, s5l8900_get_irq(nms, S5L8900_NAND_ECC_IRQ));
 
     // Samsung UARTs, like the Exynos one
@@ -466,6 +479,22 @@ static void it1g_set_bootrom(Object *obj, const char *value, Error **errp)
     nms->bootrom_path = g_strdup(value);
 }
 
+#define IT1G_STR_PROPERTY(field)                                                \
+static char *it1g_get_##field(Object *obj, Error **errp)                        \
+{                                                                               \
+    return g_strdup(IPOD_TOUCH_1G_MACHINE(obj)->field);                         \
+}                                                                               \
+static void it1g_set_##field(Object *obj, const char *value, Error **errp)      \
+{                                                                               \
+    IPodTouch1GMachineState *nms = IPOD_TOUCH_1G_MACHINE(obj);                  \
+    g_free(nms->field);                                                         \
+    nms->field = g_strdup(value);                                               \
+}
+
+IT1G_STR_PROPERTY(nand_disk)
+IT1G_STR_PROPERTY(nand_overlay)
+IT1G_STR_PROPERTY(nand_epoch)
+
 static void it1g_instance_init(Object *obj)
 {
     object_property_add_str(obj, "nor", it1g_get_nor, it1g_set_nor);
@@ -475,6 +504,12 @@ static void it1g_instance_init(Object *obj)
                                     "from the NOR");
     object_property_add_str(obj, "bootrom", it1g_get_bootrom, it1g_set_bootrom);
     object_property_set_description(obj, "bootrom", "Not supported on the iPod touch 1G yet");
+    object_property_add_str(obj, "nand-disk", it1g_get_nand_disk, it1g_set_nand_disk);
+    object_property_set_description(obj, "nand-disk", "Disk image presented as a freshly formatted NAND");
+    object_property_add_str(obj, "nand-overlay", it1g_get_nand_overlay, it1g_set_nand_overlay);
+    object_property_set_description(obj, "nand-overlay", "Directory for the NAND pages written on top of nand-disk");
+    object_property_add_str(obj, "nand-epoch", it1g_get_nand_epoch, it1g_set_nand_epoch);
+    object_property_set_description(obj, "nand-epoch", "Not supported on the iPod touch 1G (no NAND security epoch)");
 }
 
 static void it1g_machine_class_init(ObjectClass *klass, const void *data)
