@@ -81,6 +81,8 @@ typedef struct IPodTouchAESState
     // the operation in progress, which waits for the next segment while remaining != 0
     uint32_t remaining;
     AES_KEY key;
+    uint32_t dma_mask;      // applied to the segment addresses
+    bool big_endian_words;  // the key and IV registers hold big-endian words
 } IPodTouchAESState;
 
 /*

@@ -3,6 +3,7 @@
 #include "qemu/log.h"
 #include "trace.h"
 #include "migration/vmstate.h"
+#include "hw/core/qdev-properties.h"
 
 /*
  * We don't have the GID key, so GID operations are answered from a table of the known image keys of the supported
@@ -373,6 +374,13 @@ static uint64_t ipod_touch_aes_read(void *opaque, hwaddr offset, unsigned size)
         case AES_MODE:
             // iBoot sets the fields of the mode register one at a time with read-modify-write.
             return s->mode;
+        case AES_TYPE:
+            return s->keytype;
+        // the S5L8900's boot chain also builds the key and IV words a byte at a time
+        case AES_KEY_REG ... ((AES_KEY_REG + AES_KEYSIZE) - 1):
+            return s->custkey[(offset - AES_KEY_REG) / 4];
+        case AES_IV_REG ... ((AES_IV_REG + AES_IVSIZE) - 1):
+            return s->ivec[(offset - AES_IV_REG) / 4];
         default:
             break;
     }
@@ -429,9 +437,9 @@ static void ipod_touch_aes_process(IPodTouchAESState *s)
         }
 
         uint8_t *buf = g_malloc(len);
-        physical_memory_read(s->in_addr, buf, len);
+        physical_memory_read(s->in_addr & s->dma_mask, buf, len);
         ipod_touch_aes_cbc(buf, buf, blocks_len, &s->key, (uint8_t *)s->ivec, encrypt);
-        physical_memory_write(s->out_addr, buf, len);
+        physical_memory_write(s->out_addr & s->dma_mask, buf, len);
         g_free(buf);
 
         s->in_addr += len;
@@ -451,16 +459,26 @@ static void ipod_touch_aes_start(IPodTouchAESState *s)
 
     trace_ipod_touch_aes_op(s->mode, s->keytype, s->in_addr, s->out_addr, s->size);
 
+    if(s->big_endian_words) {
+        // from here on the key and IV words are used as the bytes they hold in memory
+        for(int i = 0; i < ARRAY_SIZE(s->custkey); i++) {
+            s->custkey[i] = bswap32(s->custkey[i]);
+        }
+        for(int i = 0; i < ARRAY_SIZE(s->ivec); i++) {
+            s->ivec[i] = bswap32(s->ivec[i]);
+        }
+    }
+
     if(s->keytype == AESGID) {
         // answered as a whole from the table, so the KBAG has to be in a single segment (it always is)
         uint8_t *in = g_malloc(s->size);
         uint8_t *out = g_malloc0(s->size);
-        physical_memory_read(s->in_addr, in, s->size);
+        physical_memory_read(s->in_addr & s->dma_mask, in, s->size);
         if(encrypt || !ipod_touch_aes_gid_decrypt(in, out, s->size)) {
             qemu_log_mask(LOG_UNIMP, "%s: no known GID %s result for this input (size %d)\n", __func__,
                           encrypt ? "encryption" : "decryption", s->size);
         }
-        physical_memory_write(s->out_addr, out, s->size);
+        physical_memory_write(s->out_addr & s->dma_mask, out, s->size);
         g_free(in);
         g_free(out);
         s->in_size -= MIN(s->in_size, s->size);
@@ -604,9 +622,21 @@ static const VMStateDescription vmstate_ipod_touch_aes = {
     }
 };
 
+/*
+ * Where the S5L8900's engine differs: its boot chain gives the engine SRAM buffers at an alias with bit 31 set
+ * (0xa2000000 for 0x22000000), which the machine masks off with dma-mask, and it writes the key and IV as big-endian
+ * words (the S5L8720's as little-endian ones).
+ */
+static const Property ipod_touch_aes_properties[] = {
+    DEFINE_PROP_UINT32("dma-mask", IPodTouchAESState, dma_mask, 0xffffffff),
+    DEFINE_PROP_BOOL("big-endian-words", IPodTouchAESState, big_endian_words, false),
+};
+
 static void ipod_touch_aes_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+
+    device_class_set_props(dc, ipod_touch_aes_properties);
 
     dc->vmsd = &vmstate_ipod_touch_aes;
     device_class_set_legacy_reset(dc, ipod_touch_aes_reset);
