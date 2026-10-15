@@ -9,6 +9,7 @@
 #include "hw/arm/s5l_timer.h"
 #include "hw/arm/s5l_gpio.h"
 #include "hw/arm/s5l_sysic.h"
+#include "hw/arm/s5l_spi.h"
 
 #define TYPE_IPOD_TOUCH_1G "iPod-Touch-1G"
 #define TYPE_IPOD_TOUCH_1G_MACHINE MACHINE_TYPE_NAME(TYPE_IPOD_TOUCH_1G)
@@ -88,6 +89,9 @@
 #define IT1G_GPIO_MEM_BASE       0x3E400000
 #define IT1G_CHIPID_MEM_BASE     0x3E500000
 
+#define IT1G_GPIO_FSEL           0x320         // the pin configuration register (0x1e0 on the S5L8720)
+#define IT1G_GPIO_LCD_CS         0x1800        // the LCD panel's chip select, on SPI1
+
 #define IT1G_UART_COUNT          5
 #define IT1G_UART_STRIDE         0x4000
 
@@ -103,6 +107,7 @@ typedef struct {
     PL192State *vic1;
     S5LTimerState *timer1;
     S5LGPIOState *gpio_state;
+    S5LSPIState *spi[3];
     struct PFlashCFI02 *nor;
     uint32_t periph_port_remap;
     char *nor_path;

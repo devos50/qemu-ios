@@ -26,6 +26,8 @@
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
 #include "hw/arm/ipod_touch_aes.h"
+#include "hw/arm/ipod_touch_1g_lcd_panel.h"
+#include "hw/arm/s5l_spi.h"
 #include "hw/i2c/ipod_touch_i2c.h"
 #include "hw/i2c/i2c.h"
 #include "hw/block/flash.h"
@@ -295,12 +297,9 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         { "h264bpd",    IT1G_H264BPD_MEM_BASE,  0x1000 },
         { "dmac1",      IT1G_DMAC1_MEM_BASE,    0x1000 },
         { "mbx",        IT1G_MBX_MEM_BASE,      0x1000000 },
-        { "spi0",       IT1G_SPI0_MEM_BASE,     0x1000 },
         { "usb-phys",   IT1G_USBPHYS_MEM_BASE,  0x1000 },
         { "iis2",       IT1G_IIS2_MEM_BASE,     0x1000 },
         { "iis1",       IT1G_IIS1_MEM_BASE,     0x1000 },
-        { "spi1",       IT1G_SPI1_MEM_BASE,     0x1000 },
-        { "spi2",       IT1G_SPI2_MEM_BASE,     0x1000 },
         { "iis0",       IT1G_IIS0_MEM_BASE,     0x1000 },
         { "watchdog",   IT1G_WATCHDOG_MEM_BASE, 0x1000 },
     };
@@ -389,8 +388,38 @@ static void it1g_machine_init(MachineState *machine)
 
     dev = qdev_new(TYPE_S5L_GPIO);
     nms->gpio_state = S5L_GPIO(dev);
+    qdev_prop_set_uint32(dev, "fsel-offset", IT1G_GPIO_FSEL);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     memory_region_add_subregion(sysmem, IT1G_GPIO_MEM_BASE, &nms->gpio_state->iomem);
+
+    /*
+     * The SPI controllers: the same as the S5L8720's but with 8-byte FIFOs, the word size and the FIFO levels at
+     * other bits, and no TX count (see iBoot's driver). The LCD panel is on SPI1, the multi-touch controller on SPI2
+     * (not modelled yet); iBoot also writes to something on SPI0.
+     */
+    static const struct { hwaddr base; int irq; } spis[] = {
+        { IT1G_SPI0_MEM_BASE, S5L8900_SPI0_IRQ },
+        { IT1G_SPI1_MEM_BASE, S5L8900_SPI1_IRQ },
+        { IT1G_SPI2_MEM_BASE, S5L8900_SPI2_IRQ },
+    };
+    for (int i = 0; i < ARRAY_SIZE(spis); i++) {
+        set_spi_base(i);
+        dev = qdev_new(TYPE_S5L_SPI);
+        qdev_prop_set_uint8(dev, "cfg-word-size-shift", 13);
+        qdev_prop_set_uint8(dev, "status-tx-level-shift", 4);
+        qdev_prop_set_uint8(dev, "status-rx-level-shift", 8);
+        qdev_prop_set_uint8(dev, "status-level-width", 4);
+        qdev_prop_set_uint32(dev, "rx-fifo-depth", 8);
+        qdev_prop_set_bit(dev, "tx-count", false);
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_fatal);
+        sysbus_mmio_map(busdev, 0, spis[i].base);
+        sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, spis[i].irq));
+        nms->spi[i] = S5L_SPI(dev);
+    }
+    dev = ssi_create_peripheral(nms->spi[1]->spi, TYPE_IPOD_TOUCH_1G_LCD_PANEL);
+    qdev_connect_gpio_out(DEVICE(nms->gpio_state), GPIO_OUT_INDEX(IT1G_GPIO_LCD_CS),
+                          qdev_get_gpio_in_named(dev, SSI_GPIO_CS, 0));
 
     // Samsung UARTs, like the Exynos one
     for (int i = 0; i < IT1G_UART_COUNT; i++) {
