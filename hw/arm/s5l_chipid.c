@@ -1,8 +1,14 @@
 #include "hw/arm/s5l_chipid.h"
+#include "hw/core/qdev-properties.h"
 
 static uint64_t s5l_chipid_read(void *opaque, hwaddr addr, unsigned size)
 {
-    //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
+    S5LChipIDState *s = opaque;
+
+    if (s->chip == 0x8900) {
+        // the S5L8900 only has its revision, at the top of 0x4 (from the ipod_touch_1g branch)
+        return addr == CHIPID_UNKNOWN1 ? S5L8900_CHIP_REVISION << 24 : 0;
+    }
 
     switch (addr) {
         case CHIPID_UNKNOWN1:
@@ -41,9 +47,13 @@ static void s5l_chipid_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
+static const Property s5l_chipid_properties[] = {
+    DEFINE_PROP_UINT32("chip", S5LChipIDState, chip, 0x8720),
+};
+
 static void s5l_chipid_class_init(ObjectClass *klass, const void *data)
 {
-    
+    device_class_set_props(DEVICE_CLASS(klass), s5l_chipid_properties);
 }
 
 static const TypeInfo s5l_chipid_type_info = {

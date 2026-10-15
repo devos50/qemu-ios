@@ -13,9 +13,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LChipIDState, S5L_CHIPID)
 #define CHIPID_UNKNOWN2 0xC
 #define CHIPID_UNKNOWN3 0x10
 
+#define S5L8900_CHIP_REVISION 0x2
+
 typedef struct S5LChipIDState {
     SysBusDevice busdev;
     MemoryRegion iomem;
+    uint32_t chip;  // 0x8720 or 0x8900
 } S5LChipIDState;
 
 #endif
