@@ -27,9 +27,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LGPIOState, S5L_GPIO)
 #define NUM_GPIO_PADS 0xD // pads 0-12, read at 0x24 + 0x20 * pad
 #define NUM_GPIO_PINS 0x20
 
-// Output lines, indexed by (pad << 3) | pin, driven through the pin configuration register
-#define GPIO_FSEL           0x1E0
-#define NUM_GPIO_OUT_PADS   0x10
+// Output lines, indexed by (pad << 3) | pin, driven through the pin configuration register (fsel-offset)
+#define GPIO_FSEL           0x1E0       // on the S5L8720; 0x320 on the S5L8900
+#define NUM_GPIO_OUT_PADS   0x20
 #define GPIO_OUT_INDEX(gpio) ((GPIO2PAD(gpio) << 3) | GPIO2PIN(gpio))
 
 #define GPIO_NOR_CS_SPI0    0x000
@@ -47,6 +47,7 @@ typedef struct S5LGPIOState
     MemoryRegion iomem;
     uint32_t gpio_state[NUM_GPIO_PADS];
     qemu_irq outputs[NUM_GPIO_OUT_PADS * 8];
+    uint32_t fsel_offset;
 } S5LGPIOState;
 
 bool gpio_is_on(uint32_t *state, uint32_t gpio);

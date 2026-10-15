@@ -1,5 +1,6 @@
 #include "hw/arm/s5l_gpio.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 
 static void s5l_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
@@ -7,8 +8,7 @@ static void s5l_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned s
     //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
     S5LGPIOState *s = (struct S5LGPIOState *) opaque;
 
-    switch(addr) {
-      case GPIO_FSEL: {
+    if (addr == s->fsel_offset) {
         // bits 16-23: pad, bits 8-10: pin, bits 0-3: function, where 0xE/0xF configure the pin as an output driving 0/1
         uint32_t pad = (value >> 16) & 0xFF;
         uint32_t pin = (value >> 8) & 7;
@@ -16,10 +16,6 @@ static void s5l_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned s
         if (pad < NUM_GPIO_OUT_PADS && (function == 0xE || function == 0xF)) {
             qemu_set_irq(s->outputs[(pad << 3) | pin], function & 1);
         }
-        break;
-      }
-      default:
-        break;
     }
 }
 
@@ -86,11 +82,16 @@ static const VMStateDescription vmstate_s5l_gpio = {
     }
 };
 
+static const Property s5l_gpio_properties[] = {
+    DEFINE_PROP_UINT32("fsel-offset", S5LGPIOState, fsel_offset, GPIO_FSEL),
+};
+
 static void s5l_gpio_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_s5l_gpio;
+    device_class_set_props(dc, s5l_gpio_properties);
 }
 
 static const TypeInfo s5l_gpio_info = {
