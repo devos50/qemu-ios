@@ -1,5 +1,5 @@
-#ifndef HW_ARM_IPOD_TOUCH_MBX_H
-#define HW_ARM_IPOD_TOUCH_MBX_H
+#ifndef HW_ARM_S5L_MBX_H
+#define HW_ARM_S5L_MBX_H
 
 #include "qemu/osdep.h"
 #include "qemu/timer.h"
@@ -7,8 +7,8 @@
 #include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 
-#define TYPE_IPOD_TOUCH_MBX "ipodtouch.mbx"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMBXState, IPOD_TOUCH_MBX)
+#define TYPE_S5L_MBX "s5l.mbx"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LMBXState, S5L_MBX)
 
 #define MBX1_SIZE              0x1000000
 #define MBX2_SIZE              0x1000
@@ -115,7 +115,7 @@ typedef struct MBX2DSurface {
     uint32_t format;
 } MBX2DSurface;
 
-typedef struct IPodTouchMBXState {
+typedef struct S5LMBXState {
     SysBusDevice busdev;
     MemoryRegion iomem1;
     MemoryRegion iomem2;
@@ -140,6 +140,6 @@ typedef struct IPodTouchMBXState {
     uint32_t clip_x0, clip_x1, clip_y0, clip_y1;
     uint32_t scale_x;
     uint32_t scale_y;
-} IPodTouchMBXState;
+} S5LMBXState;
 
 #endif

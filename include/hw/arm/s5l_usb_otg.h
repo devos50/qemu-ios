@@ -1,5 +1,5 @@
-#ifndef HW_ARM_IPOD_TOUCH_USB_OTG_H
-#define HW_ARM_IPOD_TOUCH_USB_OTG_H
+#ifndef HW_ARM_S5L_USB_OTG_H
+#define HW_ARM_S5L_USB_OTG_H
 
 #include "hw/core/irq.h"
 #include "hw/usb/usb.h"
@@ -9,8 +9,8 @@
 
 #define DEVICE_NAME		"usb_synopsys"
 
-#define TYPE_S5L8900USBOTG "s5l8900usbotg"
-OBJECT_DECLARE_SIMPLE_TYPE(synopsys_usb_state, S5L8900USBOTG)
+#define TYPE_S5L_USB_OTG "s5l.usbotg"
+OBJECT_DECLARE_SIMPLE_TYPE(synopsys_usb_state, S5L_USB_OTG)
 
 // Maximums supported by OIB
 #define USB_NUM_ENDPOINTS	8

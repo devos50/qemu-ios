@@ -1,5 +1,5 @@
-#ifndef IPOD_TOUCH_GPIO_H
-#define IPOD_TOUCH_GPIO_H
+#ifndef S5L_GPIO_H
+#define S5L_GPIO_H
 
 #include <math.h>
 #include "qemu/osdep.h"
@@ -7,8 +7,8 @@
 #include "qemu/timer.h"
 #include "hw/core/sysbus.h"
 
-#define TYPE_IPOD_TOUCH_GPIO                "ipodtouch.gpio"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchGPIOState, IPOD_TOUCH_GPIO)
+#define TYPE_S5L_GPIO                "s5l.gpio"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LGPIOState, S5L_GPIO)
 
 #define GPIO_BUTTON_POWER   0xC02
 #define GPIO_BUTTON_HOME    0xC01
@@ -41,13 +41,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchGPIOState, IPOD_TOUCH_GPIO)
 #define GPIO2PAD(gpio)       (((gpio) >> 8) & 0xFF)
 #define GPIOADDR2PAD(addr)   (addr - 0x4) / 0x20
 
-typedef struct IPodTouchGPIOState
+typedef struct S5LGPIOState
 {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     uint32_t gpio_state[NUM_GPIO_PADS];
     qemu_irq outputs[NUM_GPIO_OUT_PADS * 8];
-} IPodTouchGPIOState;
+} S5LGPIOState;
 
 bool gpio_is_on(uint32_t *state, uint32_t gpio);
 bool gpio_is_off(uint32_t *state, uint32_t gpio);

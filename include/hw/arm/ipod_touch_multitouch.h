@@ -7,8 +7,8 @@
 #include "qapi/error.h"
 #include "hw/core/hw-error.h"
 #include "hw/ssi/ssi.h"
-#include "hw/arm/ipod_touch_sysic.h"
-#include "hw/arm/ipod_touch_gpio.h"
+#include "hw/arm/s5l_sysic.h"
+#include "hw/arm/s5l_gpio.h"
 
 #define TYPE_IPOD_TOUCH_MULTITOUCH                "ipodtouch.multitouch"
 OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchMultitouchState, IPOD_TOUCH_MULTITOUCH)
@@ -177,8 +177,8 @@ typedef struct IPodTouchMultitouchState {
     bool end_pending;    // a touch end still has to be followed by a full end
     QEMUTimer *touch_timer;
     qemu_irq irq;
-    IPodTouchSYSICState *sysic; // used by the button handler
-    IPodTouchGPIOState *gpio_state;
+    S5LSYSICState *sysic; // used by the button handler
+    S5LGPIOState *gpio_state;
     float touch_x;
     float touch_y;
     int16_t last_frame_x;

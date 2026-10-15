@@ -1,6 +1,6 @@
-#include "hw/arm/ipod_touch_chipid.h"
+#include "hw/arm/s5l_chipid.h"
 
-static uint64_t ipod_touch_chipid_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t s5l_chipid_read(void *opaque, hwaddr addr, unsigned size)
 {
     //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
 
@@ -27,36 +27,36 @@ static uint64_t ipod_touch_chipid_read(void *opaque, hwaddr addr, unsigned size)
     return 0;
 }
 
-static const MemoryRegionOps ipod_touch_chipid_ops = {
-    .read = ipod_touch_chipid_read,
+static const MemoryRegionOps s5l_chipid_ops = {
+    .read = s5l_chipid_read,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void ipod_touch_chipid_init(Object *obj)
+static void s5l_chipid_init(Object *obj)
 {
-    IPodTouchChipIDState *s = IPOD_TOUCH_CHIPID(obj);
+    S5LChipIDState *s = S5L_CHIPID(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomem, obj, &ipod_touch_chipid_ops, s, TYPE_IPOD_TOUCH_CHIPID, 0x14);
+    memory_region_init_io(&s->iomem, obj, &s5l_chipid_ops, s, TYPE_S5L_CHIPID, 0x14);
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
-static void ipod_touch_chipid_class_init(ObjectClass *klass, const void *data)
+static void s5l_chipid_class_init(ObjectClass *klass, const void *data)
 {
     
 }
 
-static const TypeInfo ipod_touch_chipid_type_info = {
-    .name = TYPE_IPOD_TOUCH_CHIPID,
+static const TypeInfo s5l_chipid_type_info = {
+    .name = TYPE_S5L_CHIPID,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(IPodTouchChipIDState),
-    .instance_init = ipod_touch_chipid_init,
-    .class_init = ipod_touch_chipid_class_init,
+    .instance_size = sizeof(S5LChipIDState),
+    .instance_init = s5l_chipid_init,
+    .class_init = s5l_chipid_class_init,
 };
 
-static void ipod_touch_chipid_register_types(void)
+static void s5l_chipid_register_types(void)
 {
-    type_register_static(&ipod_touch_chipid_type_info);
+    type_register_static(&s5l_chipid_type_info);
 }
 
-type_init(ipod_touch_chipid_register_types)
+type_init(s5l_chipid_register_types)

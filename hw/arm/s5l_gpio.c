@@ -1,11 +1,11 @@
-#include "hw/arm/ipod_touch_gpio.h"
+#include "hw/arm/s5l_gpio.h"
 #include "hw/core/irq.h"
 #include "migration/vmstate.h"
 
-static void s5l8900_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+static void s5l_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
 {
     //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, value, addr);
-    IPodTouchGPIOState *s = (struct IPodTouchGPIOState *) opaque;
+    S5LGPIOState *s = (struct S5LGPIOState *) opaque;
 
     switch(addr) {
       case GPIO_FSEL: {
@@ -23,10 +23,10 @@ static void s5l8900_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsign
     }
 }
 
-static uint64_t s5l8900_gpio_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t s5l_gpio_read(void *opaque, hwaddr addr, unsigned size)
 {
     //printf("%s: read from location 0x%08x\n", __func__, addr);
-    IPodTouchGPIOState *s = (struct IPodTouchGPIOState *) opaque;
+    S5LGPIOState *s = (struct S5LGPIOState *) opaque;
 
     switch(addr) {
         case 0x4:
@@ -61,49 +61,49 @@ void gpio_set_off(uint32_t *state, uint32_t gpio)
 }
 
 static const MemoryRegionOps gpio_ops = {
-    .read = s5l8900_gpio_read,
-    .write = s5l8900_gpio_write,
+    .read = s5l_gpio_read,
+    .write = s5l_gpio_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void s5l8900_gpio_init(Object *obj)
+static void s5l_gpio_init(Object *obj)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     DeviceState *dev = DEVICE(sbd);
-    IPodTouchGPIOState *s = IPOD_TOUCH_GPIO(dev);
+    S5LGPIOState *s = S5L_GPIO(dev);
 
     memory_region_init_io(&s->iomem, obj, &gpio_ops, s, "gpio", 0x1000);
     qdev_init_gpio_out(dev, s->outputs, ARRAY_SIZE(s->outputs));
 }
 
-static const VMStateDescription vmstate_ipod_touch_gpio = {
-    .name = TYPE_IPOD_TOUCH_GPIO,
+static const VMStateDescription vmstate_s5l_gpio = {
+    .name = TYPE_S5L_GPIO,
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32_ARRAY(gpio_state, IPodTouchGPIOState, NUM_GPIO_PADS),
+        VMSTATE_UINT32_ARRAY(gpio_state, S5LGPIOState, NUM_GPIO_PADS),
         VMSTATE_END_OF_LIST()
     }
 };
 
-static void s5l8900_gpio_class_init(ObjectClass *klass, const void *data)
+static void s5l_gpio_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->vmsd = &vmstate_ipod_touch_gpio;
+    dc->vmsd = &vmstate_s5l_gpio;
 }
 
-static const TypeInfo ipod_touch_gpio_info = {
-    .name          = TYPE_IPOD_TOUCH_GPIO,
+static const TypeInfo s5l_gpio_info = {
+    .name          = TYPE_S5L_GPIO,
     .parent        = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(IPodTouchGPIOState),
-    .instance_init = s5l8900_gpio_init,
-    .class_init    = s5l8900_gpio_class_init,
+    .instance_size = sizeof(S5LGPIOState),
+    .instance_init = s5l_gpio_init,
+    .class_init    = s5l_gpio_class_init,
 };
 
-static void ipod_touch_machine_types(void)
+static void s5l_gpio_register_types(void)
 {
-    type_register_static(&ipod_touch_gpio_info);
+    type_register_static(&s5l_gpio_info);
 }
 
-type_init(ipod_touch_machine_types)
+type_init(s5l_gpio_register_types)

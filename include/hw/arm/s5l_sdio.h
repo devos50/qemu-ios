@@ -1,5 +1,5 @@
-#ifndef IPOD_TOUCH_SDIO_H
-#define IPOD_TOUCH_SDIO_H
+#ifndef S5L_SDIO_H
+#define S5L_SDIO_H
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
@@ -7,8 +7,8 @@
 #include "hw/core/irq.h"
 #include "hw/arm/ipod_touch_bcm4325.h"
 
-#define TYPE_IPOD_TOUCH_SDIO                "ipodtouch.sdio"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSDIOState, IPOD_TOUCH_SDIO)
+#define TYPE_S5L_SDIO                "s5l.sdio"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LSDIOState, S5L_SDIO)
 
 #define SDIO_CTRL       0x00
 #define SDIO_DCTRL      0x04
@@ -50,7 +50,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSDIOState, IPOD_TOUCH_SDIO)
 #define SDIO_IRQ_DAT_DONE  (1 << 0)
 #define SDIO_IRQ_CARD      (1 << 1)
 
-typedef struct IPodTouchSDIOState
+typedef struct S5LSDIOState
 {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
@@ -74,6 +74,6 @@ typedef struct IPodTouchSDIOState
     bool card_irq;  // level of the card interrupt line
 
     BCM4325State card;
-} IPodTouchSDIOState;
+} S5LSDIOState;
 
 #endif

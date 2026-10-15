@@ -1,21 +1,21 @@
-#ifndef HW_ARM_IPOD_TOUCH_CHIPID_H
-#define HW_ARM_IPOD_TOUCH_CHIPID_H
+#ifndef HW_ARM_S5L_CHIPID_H
+#define HW_ARM_S5L_CHIPID_H
 
 #include "qemu/osdep.h"
 #include "hw/core/hw-error.h"
 #include "hw/core/sysbus.h"
 
-#define TYPE_IPOD_TOUCH_CHIPID "ipodtouch.chipid"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchChipIDState, IPOD_TOUCH_CHIPID)
+#define TYPE_S5L_CHIPID "s5l.chipid"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LChipIDState, S5L_CHIPID)
 
 #define CHIPID_UNKNOWN1 0x4
 #define CHIPID_INFO     0x8
 #define CHIPID_UNKNOWN2 0xC
 #define CHIPID_UNKNOWN3 0x10
 
-typedef struct IPodTouchChipIDState {
+typedef struct S5LChipIDState {
     SysBusDevice busdev;
     MemoryRegion iomem;
-} IPodTouchChipIDState;
+} S5LChipIDState;
 
 #endif

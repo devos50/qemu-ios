@@ -1,4 +1,4 @@
-#include "hw/arm/ipod_touch_sha1.h"
+#include "hw/arm/s5l_sha1.h"
 #include "system/physmem.h"
 #include "qemu/bitops.h"
 #include "migration/vmstate.h"
@@ -54,7 +54,7 @@ static void sha1_compress(uint32_t state[5], const uint8_t *block)
     state[4] += e;
 }
 
-static void sha1_process(IPodTouchSHA1State *s, const uint8_t *data, size_t len)
+static void sha1_process(S5LSHA1State *s, const uint8_t *data, size_t len)
 {
     // the engine only takes whole blocks: hardware buffer flushes and memory mode lengths are multiples of 64
     for(size_t off = 0; off + 64 <= len; off += 64) {
@@ -63,18 +63,18 @@ static void sha1_process(IPodTouchSHA1State *s, const uint8_t *data, size_t len)
     s->hash_computed = false;
 }
 
-static void flush_hw_buffer(IPodTouchSHA1State *s) {
+static void flush_hw_buffer(S5LSHA1State *s) {
     sha1_process(s, (const uint8_t *)s->hw_buffer, 0x40);
     memset(s->hw_buffer, 0, 0x40);
     s->hw_buffer_dirty = false;
 }
 
-static void sha1_update_irq(IPodTouchSHA1State *s)
+static void sha1_update_irq(S5LSHA1State *s)
 {
     qemu_set_irq(s->irq, s->irq_status && s->irq_enable);
 }
 
-static void sha1_reset(IPodTouchSHA1State *s)
+static void sha1_reset(S5LSHA1State *s)
 {
 	s->config = 0;
 	s->memory_start = 0;
@@ -91,9 +91,9 @@ static void sha1_reset(IPodTouchSHA1State *s)
 	s->state[4] = 0xc3d2e1f0;
 }
 
-static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
+static uint64_t s5l_sha1_read(void *opaque, hwaddr offset, unsigned size)
 {
-	IPodTouchSHA1State *s = (IPodTouchSHA1State *)opaque;
+	S5LSHA1State *s = (S5LSHA1State *)opaque;
 
 	switch(offset) {
 		case SHA_CONFIG:
@@ -126,9 +126,9 @@ static uint64_t ipod_touch_sha1_read(void *opaque, hwaddr offset, unsigned size)
     return 0;
 }
 
-static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
+static void s5l_sha1_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
 {
-    IPodTouchSHA1State *s = (IPodTouchSHA1State *)opaque;
+    S5LSHA1State *s = (S5LSHA1State *)opaque;
 
 	switch(offset) {
 		case SHA_CONFIG:
@@ -195,16 +195,16 @@ static void ipod_touch_sha1_write(void *opaque, hwaddr offset, uint64_t value, u
 }
 
 static const MemoryRegionOps sha1_ops = {
-    .read = ipod_touch_sha1_read,
-    .write = ipod_touch_sha1_write,
+    .read = s5l_sha1_read,
+    .write = s5l_sha1_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void ipod_touch_sha1_init(Object *obj)
+static void s5l_sha1_init(Object *obj)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     DeviceState *dev = DEVICE(sbd);
-    IPodTouchSHA1State *s = IPOD_TOUCH_SHA1(dev);
+    S5LSHA1State *s = S5L_SHA1(dev);
 
     memory_region_init_io(&s->iomem, obj, &sha1_ops, s, "sha1", 0x100);
     sysbus_init_mmio(sbd, &s->iomem);
@@ -213,44 +213,44 @@ static void ipod_touch_sha1_init(Object *obj)
     sha1_reset(s);
 }
 
-static const VMStateDescription vmstate_ipod_touch_sha1 = {
-    .name = TYPE_IPOD_TOUCH_SHA1,
+static const VMStateDescription vmstate_s5l_sha1 = {
+    .name = TYPE_S5L_SHA1,
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(config, IPodTouchSHA1State),
-        VMSTATE_UINT32(irq_status, IPodTouchSHA1State),
-        VMSTATE_UINT32(irq_enable, IPodTouchSHA1State),
-        VMSTATE_UINT32(memory_start, IPodTouchSHA1State),
-        VMSTATE_UINT32(memory_mode, IPodTouchSHA1State),
-        VMSTATE_UINT32(insize, IPodTouchSHA1State),
-        VMSTATE_UINT32_ARRAY(hw_buffer, IPodTouchSHA1State, 0x10),
-        VMSTATE_UINT8_ARRAY(hashout, IPodTouchSHA1State, 0x14),
-        VMSTATE_BOOL(hw_buffer_dirty, IPodTouchSHA1State),
-        VMSTATE_BOOL(hash_computed, IPodTouchSHA1State),
-        VMSTATE_UINT32_ARRAY(state, IPodTouchSHA1State, 5),
+        VMSTATE_UINT32(config, S5LSHA1State),
+        VMSTATE_UINT32(irq_status, S5LSHA1State),
+        VMSTATE_UINT32(irq_enable, S5LSHA1State),
+        VMSTATE_UINT32(memory_start, S5LSHA1State),
+        VMSTATE_UINT32(memory_mode, S5LSHA1State),
+        VMSTATE_UINT32(insize, S5LSHA1State),
+        VMSTATE_UINT32_ARRAY(hw_buffer, S5LSHA1State, 0x10),
+        VMSTATE_UINT8_ARRAY(hashout, S5LSHA1State, 0x14),
+        VMSTATE_BOOL(hw_buffer_dirty, S5LSHA1State),
+        VMSTATE_BOOL(hash_computed, S5LSHA1State),
+        VMSTATE_UINT32_ARRAY(state, S5LSHA1State, 5),
         VMSTATE_END_OF_LIST()
     }
 };
 
-static void ipod_touch_sha1_class_init(ObjectClass *klass, const void *data)
+static void s5l_sha1_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->vmsd = &vmstate_ipod_touch_sha1;
+    dc->vmsd = &vmstate_s5l_sha1;
 }
 
-static const TypeInfo ipod_touch_sha1_info = {
-    .name          = TYPE_IPOD_TOUCH_SHA1,
+static const TypeInfo s5l_sha1_info = {
+    .name          = TYPE_S5L_SHA1,
     .parent        = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(IPodTouchSHA1State),
-    .instance_init = ipod_touch_sha1_init,
-    .class_init    = ipod_touch_sha1_class_init,
+    .instance_size = sizeof(S5LSHA1State),
+    .instance_init = s5l_sha1_init,
+    .class_init    = s5l_sha1_class_init,
 };
 
-static void ipod_touch_machine_types(void)
+static void s5l_sha1_register_types(void)
 {
-    type_register_static(&ipod_touch_sha1_info);
+    type_register_static(&s5l_sha1_info);
 }
 
-type_init(ipod_touch_machine_types)
+type_init(s5l_sha1_register_types)

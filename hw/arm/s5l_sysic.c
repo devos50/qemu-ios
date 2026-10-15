@@ -1,9 +1,9 @@
-#include "hw/arm/ipod_touch_sysic.h"
+#include "hw/arm/s5l_sysic.h"
 #include "migration/vmstate.h"
 
-static uint64_t ipod_touch_sysic_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t s5l_sysic_read(void *opaque, hwaddr addr, unsigned size)
 {
-    IPodTouchSYSICState *s = (IPodTouchSYSICState *) opaque;
+    S5LSYSICState *s = (S5LSYSICState *) opaque;
 
     //fprintf(stderr, "%s: offset = 0x%08x\n", __func__, addr);
 
@@ -45,15 +45,15 @@ static uint64_t ipod_touch_sysic_read(void *opaque, hwaddr addr, unsigned size)
 // Drives the interrupt line of a GPIO interrupt group, which is asserted while any of its enabled interrupts is pending.
 // Enabled level-triggered interrupts remain pending as long as their input line is asserted. Note that the kernel keeps
 // handling interrupts until the status register reads zero, so disabled interrupts must not become pending again.
-static void ipod_touch_sysic_update_gpio_irq(IPodTouchSYSICState *s, int group)
+static void s5l_sysic_update_gpio_irq(S5LSYSICState *s, int group)
 {
     s->gpio_int_status[group] |= s->gpio_int_line[group] & s->gpio_int_type[group] & s->gpio_int_enabled[group];
     qemu_set_irq(s->gpio_irqs[group], (s->gpio_int_status[group] & s->gpio_int_enabled[group]) != 0);
 }
 
-static void ipod_touch_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+static void s5l_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
-    IPodTouchSYSICState *s = (IPodTouchSYSICState *) opaque;
+    S5LSYSICState *s = (S5LSYSICState *) opaque;
 
     //fprintf(stderr, "%s: writing 0x%08x to 0x%08x\n", __func__, val, addr);
 
@@ -79,7 +79,7 @@ static void ipod_touch_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsi
             // acknowledge the interrupts and clear the corresponding bits
             s->gpio_int_status[group] = s->gpio_int_status[group] & ~val;
 
-            ipod_touch_sysic_update_gpio_irq(s, group);
+            s5l_sysic_update_gpio_irq(s, group);
 
             break;
         }
@@ -87,7 +87,7 @@ static void ipod_touch_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsi
         {
             uint8_t group = (addr - GPIO_INTEN) / 4;
             s->gpio_int_enabled[group] = val;
-            ipod_touch_sysic_update_gpio_irq(s, group);
+            s5l_sysic_update_gpio_irq(s, group);
             break;
         }
         case GPIO_INTTYPE ... (GPIO_INTTYPE + GPIO_NUMINTGROUPS * 4):
@@ -101,16 +101,16 @@ static void ipod_touch_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsi
     }
 }
 
-static const MemoryRegionOps ipod_touch_sysic_ops = {
-    .read = ipod_touch_sysic_read,
-    .write = ipod_touch_sysic_write,
+static const MemoryRegionOps s5l_sysic_ops = {
+    .read = s5l_sysic_read,
+    .write = s5l_sysic_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
 // Sets the input line of GPIO interrupt n, e.g., when a peripheral asserts or deasserts its interrupt line.
-static void ipod_touch_sysic_gpio_irq(void *opaque, int n, int level)
+static void s5l_sysic_gpio_irq(void *opaque, int n, int level)
 {
-    IPodTouchSYSICState *s = IPOD_TOUCH_SYSIC(opaque);
+    S5LSYSICState *s = S5L_SYSIC(opaque);
     int group = n / GPIO_NUMINTSPERGROUP;
     uint32_t bit = 1 << (n % GPIO_NUMINTSPERGROUP);
 
@@ -120,59 +120,59 @@ static void ipod_touch_sysic_gpio_irq(void *opaque, int n, int level)
             // edge-triggered interrupts are latched
             s->gpio_int_status[group] |= bit;
         }
-        ipod_touch_sysic_update_gpio_irq(s, group);
+        s5l_sysic_update_gpio_irq(s, group);
     } else {
         s->gpio_int_line[group] &= ~bit;
     }
 }
 
-static void ipod_touch_sysic_init(Object *obj)
+static void s5l_sysic_init(Object *obj)
 {
-    IPodTouchSYSICState *s = IPOD_TOUCH_SYSIC(obj);
+    S5LSYSICState *s = S5L_SYSIC(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomem, obj, &ipod_touch_sysic_ops, s, TYPE_IPOD_TOUCH_SYSIC, 0x1000);
+    memory_region_init_io(&s->iomem, obj, &s5l_sysic_ops, s, TYPE_S5L_SYSIC, 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
     for(int grp = 0; grp < GPIO_NUMINTGROUPS; grp++) {
         sysbus_init_irq(sbd, &s->gpio_irqs[grp]);
     }
-    qdev_init_gpio_in(DEVICE(obj), ipod_touch_sysic_gpio_irq, GPIO_NUMINTGROUPS * GPIO_NUMINTSPERGROUP);
+    qdev_init_gpio_in(DEVICE(obj), s5l_sysic_gpio_irq, GPIO_NUMINTGROUPS * GPIO_NUMINTSPERGROUP);
 }
 
-static const VMStateDescription vmstate_ipod_touch_sysic = {
-    .name = TYPE_IPOD_TOUCH_SYSIC,
+static const VMStateDescription vmstate_s5l_sysic = {
+    .name = TYPE_S5L_SYSIC,
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(power_id, IPodTouchSYSICState),
-        VMSTATE_UINT32(power_state, IPodTouchSYSICState),
-        VMSTATE_UINT32_ARRAY(gpio_int_level, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
-        VMSTATE_UINT32_ARRAY(gpio_int_status, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
-        VMSTATE_UINT32_ARRAY(gpio_int_enabled, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
-        VMSTATE_UINT32_ARRAY(gpio_int_type, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
-        VMSTATE_UINT32_ARRAY(gpio_int_line, IPodTouchSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32(power_id, S5LSYSICState),
+        VMSTATE_UINT32(power_state, S5LSYSICState),
+        VMSTATE_UINT32_ARRAY(gpio_int_level, S5LSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_status, S5LSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_enabled, S5LSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_type, S5LSYSICState, GPIO_NUMINTGROUPS),
+        VMSTATE_UINT32_ARRAY(gpio_int_line, S5LSYSICState, GPIO_NUMINTGROUPS),
         VMSTATE_END_OF_LIST()
     }
 };
 
-static void ipod_touch_sysic_class_init(ObjectClass *klass, const void *data)
+static void s5l_sysic_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->vmsd = &vmstate_ipod_touch_sysic;
+    dc->vmsd = &vmstate_s5l_sysic;
 }
 
-static const TypeInfo ipod_touch_sysic_type_info = {
-    .name = TYPE_IPOD_TOUCH_SYSIC,
+static const TypeInfo s5l_sysic_type_info = {
+    .name = TYPE_S5L_SYSIC,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(IPodTouchSYSICState),
-    .instance_init = ipod_touch_sysic_init,
-    .class_init = ipod_touch_sysic_class_init,
+    .instance_size = sizeof(S5LSYSICState),
+    .instance_init = s5l_sysic_init,
+    .class_init = s5l_sysic_class_init,
 };
 
-static void ipod_touch_sysic_register_types(void)
+static void s5l_sysic_register_types(void)
 {
-    type_register_static(&ipod_touch_sysic_type_info);
+    type_register_static(&s5l_sysic_type_info);
 }
 
-type_init(ipod_touch_sysic_register_types)
+type_init(s5l_sysic_register_types)

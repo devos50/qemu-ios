@@ -1,4 +1,4 @@
-#include "hw/arm/ipod_touch_lis302dl.h"
+#include "hw/arm/lis302dl.h"
 #include "qapi/error.h"
 #include "qapi/visitor.h"
 #include "qemu/log.h"

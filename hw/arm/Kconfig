@@ -729,10 +729,14 @@ config ARMSSE
     select SSE_COUNTER
     select SSE_TIMER
 
+config S5L
+    bool
+
 config IPOD_TOUCH_2G
     bool
     default y
     depends on TCG && ARM
+    select S5L
     select EXYNOS4210_UART
     select FRAMEBUFFER
     select I2C

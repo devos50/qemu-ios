@@ -10,21 +10,21 @@
  * The card interrupt follows the card's level. On the S5L8720 the driver acknowledges it and then toggles CSR bit 1 to
  * re-arm it, which latches it again if the card still asserts it.
  */
-#include "hw/arm/ipod_touch_sdio.h"
+#include "hw/arm/s5l_sdio.h"
 #include "hw/core/qdev-properties.h"
 #include "system/address-spaces.h"
 #include "qemu/log.h"
 #include "trace.h"
 #include "migration/vmstate.h"
 
-static void ipod_touch_sdio_update_irq(IPodTouchSDIOState *s)
+static void s5l_sdio_update_irq(S5LSDIOState *s)
 {
     qemu_set_irq(s->irq, (s->irq_status & s->irq_mask) != 0);
 }
 
-static void ipod_touch_sdio_card_irq(void *opaque, bool level)
+static void s5l_sdio_card_irq(void *opaque, bool level)
 {
-    IPodTouchSDIOState *s = opaque;
+    S5LSDIOState *s = opaque;
 
     s->card_irq = level;
     if (level) {
@@ -32,10 +32,10 @@ static void ipod_touch_sdio_card_irq(void *opaque, bool level)
     } else {
         s->irq_status &= ~SDIO_IRQ_CARD;
     }
-    ipod_touch_sdio_update_irq(s);
+    s5l_sdio_update_irq(s);
 }
 
-static void ipod_touch_sdio_transfer(IPodTouchSDIOState *s)
+static void s5l_sdio_transfer(S5LSDIOState *s)
 {
     bool write = s->arg & SDIO_ARG_WRITE;
     uint32_t blklen = s->blklen ? s->blklen : 512;
@@ -52,25 +52,25 @@ static void ipod_touch_sdio_transfer(IPodTouchSDIOState *s)
     s->data_done = true;
 }
 
-static void ipod_touch_sdio_exec_cmd(IPodTouchSDIOState *s)
+static void s5l_sdio_exec_cmd(S5LSDIOState *s)
 {
     uint8_t index = s->cmd & SDIO_CMD_INDEX;
     uint32_t resp = 0;
     bool ok = bcm4325_command(&s->card, index, s->arg, &resp);
 
-    trace_ipod_touch_sdio_cmd(index, s->arg, ok, resp);
+    trace_s5l_sdio_cmd(index, s->arg, ok, resp);
     s->cmd &= ~SDIO_CMD_START;
     memset(s->resp, 0, sizeof(s->resp));
     s->resp[0] = resp;
     s->dsta = SDIO_DSTA_CMD_RDY | SDIO_DSTA_CMD_DONE | (ok ? 0 : SDIO_DSTA_TIMEOUT);
     if (ok && index == SD_CMD_IO_RW_EXTENDED) {
-        ipod_touch_sdio_transfer(s);
+        s5l_sdio_transfer(s);
     }
 }
 
-static void ipod_touch_sdio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+static void s5l_sdio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
 {
-    IPodTouchSDIOState *s = opaque;
+    S5LSDIOState *s = opaque;
 
     switch (addr) {
     case SDIO_CTRL:
@@ -81,13 +81,13 @@ static void ipod_touch_sdio_write(void *opaque, hwaddr addr, uint64_t value, uns
         if ((value & SDIO_DCTRL_START) && s->data_done) {
             s->data_done = false;
             s->irq_status |= SDIO_IRQ_DAT_DONE;
-            ipod_touch_sdio_update_irq(s);
+            s5l_sdio_update_irq(s);
         }
         break;
     case SDIO_CMD:
         s->cmd = value;
         if (value & SDIO_CMD_START) {
-            ipod_touch_sdio_exec_cmd(s);
+            s5l_sdio_exec_cmd(s);
         }
         break;
     case SDIO_ARGU:
@@ -106,17 +106,17 @@ static void ipod_touch_sdio_write(void *opaque, hwaddr addr, uint64_t value, uns
         s->csr = value;
         if (!(old & SDIO_CSR_CARD_INT) && (value & SDIO_CSR_CARD_INT) && s->card_irq) {
             s->irq_status |= SDIO_IRQ_CARD;
-            ipod_touch_sdio_update_irq(s);
+            s5l_sdio_update_irq(s);
         }
         break;
     }
     case SDIO_IRQ:
         s->irq_status &= ~value;
-        ipod_touch_sdio_update_irq(s);
+        s5l_sdio_update_irq(s);
         break;
     case SDIO_IRQMASK:
         s->irq_mask = value;
-        ipod_touch_sdio_update_irq(s);
+        s5l_sdio_update_irq(s);
         break;
     case SDIO_BADDR:
         s->baddr = value;
@@ -134,9 +134,9 @@ static void ipod_touch_sdio_write(void *opaque, hwaddr addr, uint64_t value, uns
     }
 }
 
-static uint64_t ipod_touch_sdio_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t s5l_sdio_read(void *opaque, hwaddr addr, unsigned size)
 {
-    IPodTouchSDIOState *s = opaque;
+    S5LSDIOState *s = opaque;
 
     switch (addr) {
     case SDIO_CTRL:
@@ -182,15 +182,15 @@ static uint64_t ipod_touch_sdio_read(void *opaque, hwaddr addr, unsigned size)
     }
 }
 
-static const MemoryRegionOps ipod_touch_sdio_ops = {
-    .read = ipod_touch_sdio_read,
-    .write = ipod_touch_sdio_write,
+static const MemoryRegionOps s5l_sdio_ops = {
+    .read = s5l_sdio_read,
+    .write = s5l_sdio_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void ipod_touch_sdio_reset(DeviceState *dev)
+static void s5l_sdio_reset(DeviceState *dev)
 {
-    IPodTouchSDIOState *s = IPOD_TOUCH_SDIO(dev);
+    S5LSDIOState *s = S5L_SDIO(dev);
 
     s->ctrl = 0;
     s->dctrl = 0;
@@ -208,77 +208,77 @@ static void ipod_touch_sdio_reset(DeviceState *dev)
     s->numblk = 0;
     s->data_done = false;
     bcm4325_reset(&s->card);
-    ipod_touch_sdio_update_irq(s);
+    s5l_sdio_update_irq(s);
 }
 
-static void ipod_touch_sdio_init(Object *obj)
+static void s5l_sdio_init(Object *obj)
 {
-    IPodTouchSDIOState *s = IPOD_TOUCH_SDIO(obj);
+    S5LSDIOState *s = S5L_SDIO(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomem, obj, &ipod_touch_sdio_ops, s, TYPE_IPOD_TOUCH_SDIO, 0x1000);
+    memory_region_init_io(&s->iomem, obj, &s5l_sdio_ops, s, TYPE_S5L_SDIO, 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 }
 
-static void ipod_touch_sdio_realize(DeviceState *dev, Error **errp)
+static void s5l_sdio_realize(DeviceState *dev, Error **errp)
 {
-    IPodTouchSDIOState *s = IPOD_TOUCH_SDIO(dev);
+    S5LSDIOState *s = S5L_SDIO(dev);
 
-    bcm4325_init(&s->card, dev, ipod_touch_sdio_card_irq, s);
+    bcm4325_init(&s->card, dev, s5l_sdio_card_irq, s);
 }
 
-static const Property ipod_touch_sdio_properties[] = {
-    DEFINE_NIC_PROPERTIES(IPodTouchSDIOState, card.conf),
+static const Property s5l_sdio_properties[] = {
+    DEFINE_NIC_PROPERTIES(S5LSDIOState, card.conf),
 };
 
-static const VMStateDescription vmstate_ipod_touch_sdio = {
-    .name = TYPE_IPOD_TOUCH_SDIO,
+static const VMStateDescription vmstate_s5l_sdio = {
+    .name = TYPE_S5L_SDIO,
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(ctrl, IPodTouchSDIOState),
-        VMSTATE_UINT32(dctrl, IPodTouchSDIOState),
-        VMSTATE_UINT32(cmd, IPodTouchSDIOState),
-        VMSTATE_UINT32(arg, IPodTouchSDIOState),
-        VMSTATE_UINT32(stac, IPodTouchSDIOState),
-        VMSTATE_UINT32(dsta, IPodTouchSDIOState),
-        VMSTATE_UINT32_ARRAY(resp, IPodTouchSDIOState, 4),
-        VMSTATE_UINT32(clkdiv, IPodTouchSDIOState),
-        VMSTATE_UINT32(csr, IPodTouchSDIOState),
-        VMSTATE_UINT32(irq_status, IPodTouchSDIOState),
-        VMSTATE_UINT32(irq_mask, IPodTouchSDIOState),
-        VMSTATE_UINT32(baddr, IPodTouchSDIOState),
-        VMSTATE_UINT32(blklen, IPodTouchSDIOState),
-        VMSTATE_UINT32(numblk, IPodTouchSDIOState),
-        VMSTATE_BOOL(data_done, IPodTouchSDIOState),
-        VMSTATE_BOOL(card_irq, IPodTouchSDIOState),
-        VMSTATE_STRUCT(card, IPodTouchSDIOState, 1, vmstate_bcm4325, BCM4325State),
+        VMSTATE_UINT32(ctrl, S5LSDIOState),
+        VMSTATE_UINT32(dctrl, S5LSDIOState),
+        VMSTATE_UINT32(cmd, S5LSDIOState),
+        VMSTATE_UINT32(arg, S5LSDIOState),
+        VMSTATE_UINT32(stac, S5LSDIOState),
+        VMSTATE_UINT32(dsta, S5LSDIOState),
+        VMSTATE_UINT32_ARRAY(resp, S5LSDIOState, 4),
+        VMSTATE_UINT32(clkdiv, S5LSDIOState),
+        VMSTATE_UINT32(csr, S5LSDIOState),
+        VMSTATE_UINT32(irq_status, S5LSDIOState),
+        VMSTATE_UINT32(irq_mask, S5LSDIOState),
+        VMSTATE_UINT32(baddr, S5LSDIOState),
+        VMSTATE_UINT32(blklen, S5LSDIOState),
+        VMSTATE_UINT32(numblk, S5LSDIOState),
+        VMSTATE_BOOL(data_done, S5LSDIOState),
+        VMSTATE_BOOL(card_irq, S5LSDIOState),
+        VMSTATE_STRUCT(card, S5LSDIOState, 1, vmstate_bcm4325, BCM4325State),
         VMSTATE_END_OF_LIST()
     }
 };
 
-static void ipod_touch_sdio_class_init(ObjectClass *klass, const void *data)
+static void s5l_sdio_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->vmsd = &vmstate_ipod_touch_sdio;
-    dc->realize = ipod_touch_sdio_realize;
-    device_class_set_legacy_reset(dc, ipod_touch_sdio_reset);
-    device_class_set_props(dc, ipod_touch_sdio_properties);
+    dc->vmsd = &vmstate_s5l_sdio;
+    dc->realize = s5l_sdio_realize;
+    device_class_set_legacy_reset(dc, s5l_sdio_reset);
+    device_class_set_props(dc, s5l_sdio_properties);
 }
 
-static const TypeInfo ipod_touch_sdio_type_info = {
-    .name = TYPE_IPOD_TOUCH_SDIO,
+static const TypeInfo s5l_sdio_type_info = {
+    .name = TYPE_S5L_SDIO,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(IPodTouchSDIOState),
-    .instance_init = ipod_touch_sdio_init,
-    .class_init = ipod_touch_sdio_class_init,
+    .instance_size = sizeof(S5LSDIOState),
+    .instance_init = s5l_sdio_init,
+    .class_init = s5l_sdio_class_init,
 };
 
-static void ipod_touch_sdio_register_types(void)
+static void s5l_sdio_register_types(void)
 {
-    type_register_static(&ipod_touch_sdio_type_info);
+    type_register_static(&s5l_sdio_type_info);
 }
 
-type_init(ipod_touch_sdio_register_types)
+type_init(s5l_sdio_register_types)

@@ -1,5 +1,5 @@
-#ifndef IPOD_TOUCH_SYSIC_H
-#define IPOD_TOUCH_SYSIC_H
+#ifndef S5L_SYSIC_H
+#define S5L_SYSIC_H
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
@@ -7,8 +7,8 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 
-#define TYPE_IPOD_TOUCH_SYSIC                "ipodtouch.sysic"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSYSICState, IPOD_TOUCH_SYSIC)
+#define TYPE_S5L_SYSIC                "s5l.sysic"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LSYSICState, S5L_SYSIC)
 
 #define POWER_ID 0x44
 #define POWER_ONCTRL 0xC
@@ -27,7 +27,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSYSICState, IPOD_TOUCH_SYSIC)
 #define GPIO_NUMINTGROUPS 7
 #define GPIO_NUMINTSPERGROUP 32
 
-typedef struct IPodTouchSYSICState {
+typedef struct S5LSYSICState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     qemu_irq gpio_irqs[GPIO_NUMINTGROUPS];
@@ -40,6 +40,6 @@ typedef struct IPodTouchSYSICState {
     uint32_t gpio_int_enabled[GPIO_NUMINTGROUPS];
     uint32_t gpio_int_type[GPIO_NUMINTGROUPS]; // 1 = level-triggered
     uint32_t gpio_int_line[GPIO_NUMINTGROUPS]; // current level of the interrupt input lines
-} IPodTouchSYSICState;
+} S5LSYSICState;
 
 #endif

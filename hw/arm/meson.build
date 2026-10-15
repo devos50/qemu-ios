@@ -110,24 +110,36 @@ arm_common_ss.add(when: 'CONFIG_SX1', if_true: files('omap_sx1.c'))
 arm_common_ss.add(when: 'CONFIG_VERSATILE', if_true: files('versatilepb.c'))
 arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 
+# The S5L blocks and parts both iPod touch machines use
+arm_common_ss.add(when: 'CONFIG_S5L', if_true: files(
+  'lis302dl.c',
+  's5l_chipid.c',
+  's5l_gpio.c',
+  's5l_mbx.c',
+  's5l_sha1.c',
+  's5l_spi.c',
+  's5l_sysic.c',
+  's5l_timer.c',
+  's5l_tvout.c',
+  's5l_usb_otg.c',
+  's5l_usb_phys.c',
+))
 arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_2g.c',
+  # an S5L block, but it still has the 2G's BCM4325 Wi-Fi card built in
+  's5l_sdio.c',
   'ipod_touch_aes.c',
-  'ipod_touch_boot.c',
   'ipod_touch_alac.c',
   'ipod_touch_amc.c',
   'ipod_touch_bcm4325.c',
+  'ipod_touch_boot.c',
   'ipod_touch_cd3272_mikey.c',
-  'ipod_touch_chipid.c',
   'ipod_touch_clock.c',
   'ipod_touch_cs42l58.c',
   'ipod_touch_fmss.c',
-  'ipod_touch_gpio.c',
   'ipod_touch_i2s.c',
   'ipod_touch_isl29003dl.c',
   'ipod_touch_lcd.c',
-  'ipod_touch_lis302dl.c',
-  'ipod_touch_mbx.c',
   'ipod_touch_mipi_dsi.c',
   'ipod_touch_miu.c',
   'ipod_touch_multitouch.c',
@@ -136,15 +148,7 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_pcf50633_pmu.c',
   'ipod_touch_pke.c',
   'ipod_touch_scaler_csc.c',
-  'ipod_touch_sdio.c',
-  'ipod_touch_sha1.c',
-  'ipod_touch_spi.c',
-  'ipod_touch_sysic.c',
-  'ipod_touch_timer.c',
-  'ipod_touch_tvout.c',
   'ipod_touch_usb_link.c',
-  'ipod_touch_usb_otg.c',
-  'ipod_touch_usb_phys.c',
   'ipod_touch_wdt.c',
 ))
 arm_common_ss.add(when: ['CONFIG_IPOD_TOUCH_2G', faad2], if_true: faad2)

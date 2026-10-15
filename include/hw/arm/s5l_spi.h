@@ -1,5 +1,5 @@
-#ifndef HW_ARM_IPOD_TOUCH_SPI_H
-#define HW_ARM_IPOD_TOUCH_SPI_H
+#ifndef HW_ARM_S5L_SPI_H
+#define HW_ARM_S5L_SPI_H
 
 #include "qemu/osdep.h"
 #include "qemu/fifo8.h"
@@ -11,8 +11,8 @@
 #include "hw/arm/ipod_touch_nor_spi.h"
 #include "hw/arm/ipod_touch_multitouch.h"
 
-#define TYPE_IPOD_TOUCH_SPI "ipodtouch.spi"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSPIState, IPOD_TOUCH_SPI)
+#define TYPE_S5L_SPI "s5l.spi"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LSPIState, S5L_SPI)
 
 #define  R_CTRL                  0x000
 #define  R_CTRL_RUN              (1 << 0)
@@ -57,7 +57,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSPIState, IPOD_TOUCH_SPI)
 #define MMIO_SIZE              (0x4000)
 
 
-typedef struct IPodTouchSPIState {
+typedef struct S5LSPIState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -73,7 +73,7 @@ typedef struct IPodTouchSPIState {
     uint8_t base;
     Fifo8 rx_fifo;
     Fifo8 tx_fifo;
-} IPodTouchSPIState;
+} S5LSPIState;
 
 void set_spi_base(uint32_t base);
 

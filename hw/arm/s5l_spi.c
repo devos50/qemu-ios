@@ -4,10 +4,10 @@
  * by cmw
  */
 
-#include "hw/arm/ipod_touch_spi.h"
+#include "hw/arm/s5l_spi.h"
 #include "migration/vmstate.h"
 
-static int apple_spi_word_size(IPodTouchSPIState *s)
+static int apple_spi_word_size(S5LSPIState *s)
 {
     switch (R_CFG_WORD_SIZE(REG(s, R_CFG))) {
     case R_CFG_WORD_SIZE_8B:
@@ -22,21 +22,21 @@ static int apple_spi_word_size(IPodTouchSPIState *s)
     g_assert_not_reached();
 }
 
-static void apple_spi_update_xfer_tx(IPodTouchSPIState *s)
+static void apple_spi_update_xfer_tx(S5LSPIState *s)
 {
     if (fifo8_is_empty(&s->tx_fifo)) {
         REG(s, R_STATUS) |= R_STATUS_TXEMPTY;
     }
 }
 
-static void apple_spi_update_xfer_rx(IPodTouchSPIState *s)
+static void apple_spi_update_xfer_rx(S5LSPIState *s)
 {
     if (!fifo8_is_empty(&s->rx_fifo)) {
         REG(s, R_STATUS) |= R_STATUS_RXREADY;
     }
 }
 
-static void apple_spi_update_irq(IPodTouchSPIState *s)
+static void apple_spi_update_irq(S5LSPIState *s)
 {
     uint32_t irq = 0;
     uint32_t mask = 0;
@@ -60,7 +60,7 @@ static void apple_spi_update_irq(IPodTouchSPIState *s)
     }
 }
 
-static void apple_spi_update_cs(IPodTouchSPIState *s)
+static void apple_spi_update_cs(S5LSPIState *s)
 {
     BusState *b = BUS(s->spi);
     BusChild *kid = QTAILQ_FIRST(&b->children);
@@ -72,7 +72,7 @@ static void apple_spi_update_cs(IPodTouchSPIState *s)
 
 static void apple_spi_cs_set(void *opaque, int pin, int level)
 {
-    IPodTouchSPIState *s = IPOD_TOUCH_SPI(opaque);
+    S5LSPIState *s = S5L_SPI(opaque);
     if (level) {
         REG(s, R_PIN) |= R_PIN_CS;
     } else {
@@ -81,7 +81,7 @@ static void apple_spi_cs_set(void *opaque, int pin, int level)
     apple_spi_update_cs(s);
 }
 
-static void apple_spi_run(IPodTouchSPIState *s)
+static void apple_spi_run(S5LSPIState *s)
 {
     uint32_t tx;
     uint32_t rx;
@@ -137,9 +137,9 @@ static void apple_spi_run(IPodTouchSPIState *s)
     //printf("<after> TX buffer size: %d, RX buffer size: %d\n", fifo8_num_used(&s->tx_fifo), fifo8_num_used(&s->rx_fifo));
 }
 
-static uint64_t ipod_touch_spi_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t s5l_spi_read(void *opaque, hwaddr addr, unsigned size)
 {
-    IPodTouchSPIState *s = IPOD_TOUCH_SPI(opaque);
+    S5LSPIState *s = S5L_SPI(opaque);
     //printf("%s (base %d): read from location 0x%08x\n", __func__, s->base, addr);
 
     uint32_t r;
@@ -183,9 +183,9 @@ static uint64_t ipod_touch_spi_read(void *opaque, hwaddr addr, unsigned size)
     return r;
 }
 
-static void ipod_touch_spi_write(void *opaque, hwaddr addr, uint64_t data, unsigned size)
+static void s5l_spi_write(void *opaque, hwaddr addr, uint64_t data, unsigned size)
 {
-    IPodTouchSPIState *s = IPOD_TOUCH_SPI(opaque);
+    S5LSPIState *s = S5L_SPI(opaque);
     //printf("%s (base %d): writing 0x%08x to 0x%08x\n", __func__, s->base, data, addr);
 
     uint32_t r = data;
@@ -245,14 +245,14 @@ static void ipod_touch_spi_write(void *opaque, hwaddr addr, uint64_t data, unsig
 }
 
 static const MemoryRegionOps spi_ops = {
-    .read = ipod_touch_spi_read,
-    .write = ipod_touch_spi_write,
+    .read = s5l_spi_read,
+    .write = s5l_spi_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void ipod_touch_spi_reset(DeviceState *d)
+static void s5l_spi_reset(DeviceState *d)
 {
-    IPodTouchSPIState *s = (IPodTouchSPIState *)d;
+    S5LSPIState *s = (S5LSPIState *)d;
 	memset(s->regs, 0, sizeof(s->regs));
     fifo8_reset(&s->tx_fifo);
     fifo8_reset(&s->rx_fifo);
@@ -265,9 +265,9 @@ void set_spi_base(uint32_t base)
 	base_addr = base;
 }
 
-static void ipod_touch_spi_realize(DeviceState *dev, struct Error **errp)
+static void s5l_spi_realize(DeviceState *dev, struct Error **errp)
 {
-    IPodTouchSPIState *s = IPOD_TOUCH_SPI(dev);
+    S5LSPIState *s = S5L_SPI(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     char bus_name[32] = { 0 };
@@ -307,37 +307,37 @@ static void ipod_touch_spi_realize(DeviceState *dev, struct Error **errp)
     }
 }
 
-static const VMStateDescription vmstate_ipod_touch_spi = {
-    .name = TYPE_IPOD_TOUCH_SPI,
+static const VMStateDescription vmstate_s5l_spi = {
+    .name = TYPE_S5L_SPI,
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(last_irq, IPodTouchSPIState),
-        VMSTATE_UINT32_ARRAY(regs, IPodTouchSPIState, MMIO_SIZE >> 2),
-        VMSTATE_FIFO8(rx_fifo, IPodTouchSPIState),
-        VMSTATE_FIFO8(tx_fifo, IPodTouchSPIState),
+        VMSTATE_UINT32(last_irq, S5LSPIState),
+        VMSTATE_UINT32_ARRAY(regs, S5LSPIState, MMIO_SIZE >> 2),
+        VMSTATE_FIFO8(rx_fifo, S5LSPIState),
+        VMSTATE_FIFO8(tx_fifo, S5LSPIState),
         VMSTATE_END_OF_LIST()
     }
 };
 
-static void ipod_touch_spi_class_init(ObjectClass *klass, const void *data)
+static void s5l_spi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    dc->realize = ipod_touch_spi_realize;
-    dc->vmsd = &vmstate_ipod_touch_spi;
-    device_class_set_legacy_reset(dc, ipod_touch_spi_reset);
+    dc->realize = s5l_spi_realize;
+    dc->vmsd = &vmstate_s5l_spi;
+    device_class_set_legacy_reset(dc, s5l_spi_reset);
 }
 
-static const TypeInfo ipod_touch_spi_info = {
-    .name          = TYPE_IPOD_TOUCH_SPI,
+static const TypeInfo s5l_spi_info = {
+    .name          = TYPE_S5L_SPI,
     .parent        = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(IPodTouchSPIState),
-    .class_init    = ipod_touch_spi_class_init,
+    .instance_size = sizeof(S5LSPIState),
+    .class_init    = s5l_spi_class_init,
 };
 
-static void ipod_touch_spi_register_types(void)
+static void s5l_spi_register_types(void)
 {
-    type_register_static(&ipod_touch_spi_info);
+    type_register_static(&s5l_spi_info);
 }
 
-type_init(ipod_touch_spi_register_types)
+type_init(s5l_spi_register_types)

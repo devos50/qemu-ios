@@ -1,5 +1,5 @@
-#ifndef IPOD_TOUCH_TVOUT_H
-#define IPOD_TOUCH_TVOUT_H
+#ifndef S5L_TVOUT_H
+#define S5L_TVOUT_H
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
@@ -20,10 +20,10 @@
 #define SDO_IRQ_VSYNC 0x1
 #define TVOUT_REFRESH_RATE 60
 
-#define TYPE_IPOD_TOUCH_TVOUT                "ipodtouch.tvout"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchTVOutState, IPOD_TOUCH_TVOUT)
+#define TYPE_S5L_TVOUT                "s5l.tvout"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LTVOutState, S5L_TVOUT)
 
-typedef struct IPodTouchTVOutState {
+typedef struct S5LTVOutState {
     SysBusDevice parent_obj;
 
     MemoryRegion mixer1_iomem;
@@ -44,6 +44,6 @@ typedef struct IPodTouchTVOutState {
 
     bool mixer_enabled;
     QEMUTimer *vsync_timer;
-} IPodTouchTVOutState;
+} S5LTVOutState;
 
 #endif

@@ -97,12 +97,12 @@ z2_aer915_event(int8_t event, int8_t len) "i2c event =0x%x len=%d bytes"
 # bcm2838.c
 bcm2838_gic_set_irq(int irq, int level) "gic irq:%d lvl:%d"
 
-# ipod_touch_usb_otg.c
-ipod_touch_usb_read(uint64_t addr, uint64_t val) "0x%03" PRIx64 " -> 0x%08" PRIx64
-ipod_touch_usb_write(uint64_t addr, uint64_t val) "0x%03" PRIx64 " <- 0x%08" PRIx64
+# s5l_usb_otg.c
+s5l_usb_otg_read(uint64_t addr, uint64_t val) "0x%03" PRIx64 " -> 0x%08" PRIx64
+s5l_usb_otg_write(uint64_t addr, uint64_t val) "0x%03" PRIx64 " <- 0x%08" PRIx64
 ipod_touch_usb_link_request(uint8_t type, uint8_t ep, uint32_t tag, uint32_t length) "type %u ep 0x%02x tag %u length %u"
 ipod_touch_usb_link_reply(uint8_t type, uint8_t ep, uint32_t tag, uint8_t status, uint32_t length) "type %u ep 0x%02x tag %u status %u length %u"
-ipod_touch_usb_ep_enable(const char *dir, uint8_t ep, uint32_t tx_size, uint64_t dma) "%s ep %u tsiz 0x%08x dma 0x%08" PRIx64
+s5l_usb_otg_ep_enable(const char *dir, uint8_t ep, uint32_t tx_size, uint64_t dma) "%s ep %u tsiz 0x%08x dma 0x%08" PRIx64
 
 # ipod_touch_pcf50633_pmu.c
 ipod_touch_pmu_event(int event, uint32_t reg) "event %d reg 0x%02x"
@@ -135,8 +135,8 @@ cs42l58_read(uint8_t reg, uint8_t val) "0x%02x -> 0x%02x"
 cs42l58_write(uint8_t reg, uint8_t val) "0x%02x <- 0x%02x"
 cs42l58_output(int db, int mute) "output %d dB (-999: off), mute 0x%x"
 
-# ipod_touch_sdio.c
-ipod_touch_sdio_cmd(uint8_t index, uint32_t arg, bool ok, uint32_t resp) "CMD%u arg 0x%08x ok %d resp 0x%08x"
+# s5l_sdio.c
+s5l_sdio_cmd(uint8_t index, uint32_t arg, bool ok, uint32_t resp) "CMD%u arg 0x%08x ok %d resp 0x%08x"
 
 # ipod_touch_bcm4325.c
 ipod_touch_bcm4325_cmd53(bool write, uint32_t func, uint32_t addr, uint32_t len) "write %d function %u address 0x%05x length %u"
@@ -153,18 +153,18 @@ ipod_touch_mipi_dsi_read(uint64_t addr, uint32_t val) "0x%02" PRIx64 " -> 0x%08x
 ipod_touch_mipi_dsi_write(uint64_t addr, uint64_t val) "0x%02" PRIx64 " <- 0x%08" PRIx64
 ipod_touch_mipi_dsi_packet(uint8_t type, uint8_t data0, uint8_t data1) "type 0x%02x data 0x%02x 0x%02x"
 
-# ipod_touch_mbx.c
-ipod_touch_mbx_read(uint64_t addr, uint64_t val) "0x%04" PRIx64 " -> 0x%08" PRIx64
-ipod_touch_mbx_write(uint64_t addr, uint64_t val) "0x%04" PRIx64 " <- 0x%08" PRIx64
-ipod_touch_mbx_irq(uint32_t status, uint32_t mask, int level) "status 0x%08x mask 0x%08x level %d"
-ipod_touch_mbx_mmu_fault(uint32_t va) "no mapping for GPU address 0x%08x"
-ipod_touch_mbx_2d_block(uint32_t header, uint32_t len) "block 0x%08x, %u words"
-ipod_touch_mbx_2d_blit(uint32_t rop, unsigned rot, int x0, int y0, int x1, int y1, uint32_t blend) "rop 0x%04x rot %u (%d,%d)-(%d,%d) blend 0x%08x"
-ipod_touch_mbx_2d_surfaces(uint32_t dst, uint32_t dst_fmt, int32_t dst_stride, uint32_t src, uint32_t src_fmt, int32_t src_stride, uint32_t sx, uint32_t sy) "dst 0x%08x fmt %u stride %d, src/colour 0x%08x fmt %u stride %d at (%u,%u)"
-ipod_touch_mbx_2d_flush(void) "flush"
-ipod_touch_mbx_3d_start(void) "3D render started"
-ipod_touch_mbx_3d_render(uint32_t addr, uint32_t format, uint32_t stride, int x0, int y0, int x1, int y1) "target 0x%08x fmt %u stride %u (%d,%d)-(%d,%d)"
-ipod_touch_mbx_3d_object(uint32_t ptr) "object 0x%08x"
-ipod_touch_mbx_3d_texture(int n, uint32_t a, uint32_t b, uint32_t tsp) "texture %d: 0x%08x 0x%08x tsp 0x%08x"
-ipod_touch_mbx_3d_draw(int textures, uint32_t isp, uint32_t colour, int x0, int y0, int x3, int y3) "%d textures isp 0x%08x colour 0x%08x (%d,%d)..(%d,%d)"
-ipod_touch_mbx_ta_write(uint64_t offset, uint64_t val) "TA port 0x%06" PRIx64 " <- 0x%08" PRIx64
+# s5l_mbx.c
+s5l_mbx_read(uint64_t addr, uint64_t val) "0x%04" PRIx64 " -> 0x%08" PRIx64
+s5l_mbx_write(uint64_t addr, uint64_t val) "0x%04" PRIx64 " <- 0x%08" PRIx64
+s5l_mbx_irq(uint32_t status, uint32_t mask, int level) "status 0x%08x mask 0x%08x level %d"
+s5l_mbx_mmu_fault(uint32_t va) "no mapping for GPU address 0x%08x"
+s5l_mbx_2d_block(uint32_t header, uint32_t len) "block 0x%08x, %u words"
+s5l_mbx_2d_blit(uint32_t rop, unsigned rot, int x0, int y0, int x1, int y1, uint32_t blend) "rop 0x%04x rot %u (%d,%d)-(%d,%d) blend 0x%08x"
+s5l_mbx_2d_surfaces(uint32_t dst, uint32_t dst_fmt, int32_t dst_stride, uint32_t src, uint32_t src_fmt, int32_t src_stride, uint32_t sx, uint32_t sy) "dst 0x%08x fmt %u stride %d, src/colour 0x%08x fmt %u stride %d at (%u,%u)"
+s5l_mbx_2d_flush(void) "flush"
+s5l_mbx_3d_start(void) "3D render started"
+s5l_mbx_3d_render(uint32_t addr, uint32_t format, uint32_t stride, int x0, int y0, int x1, int y1) "target 0x%08x fmt %u stride %u (%d,%d)-(%d,%d)"
+s5l_mbx_3d_object(uint32_t ptr) "object 0x%08x"
+s5l_mbx_3d_texture(int n, uint32_t a, uint32_t b, uint32_t tsp) "texture %d: 0x%08x 0x%08x tsp 0x%08x"
+s5l_mbx_3d_draw(int textures, uint32_t isp, uint32_t colour, int x0, int y0, int x3, int y3) "%d textures isp 0x%08x colour 0x%08x (%d,%d)..(%d,%d)"
+s5l_mbx_ta_write(uint64_t offset, uint64_t val) "TA port 0x%06" PRIx64 " <- 0x%08" PRIx64

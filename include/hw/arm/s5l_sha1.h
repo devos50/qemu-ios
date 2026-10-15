@@ -1,5 +1,5 @@
-#ifndef HW_ARM_IPOD_TOUCH_SHA1_H
-#define HW_ARM_IPOD_TOUCH_SHA1_H
+#ifndef HW_ARM_S5L_SHA1_H
+#define HW_ARM_S5L_SHA1_H
 
 #include "qemu/osdep.h"
 #include "hw/core/platform-bus.h"
@@ -9,8 +9,8 @@
 #include "exec/hwaddr.h"
 #include "system/memory.h"
 
-#define TYPE_IPOD_TOUCH_SHA1                "ipodtouch.sha1"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSHA1State, IPOD_TOUCH_SHA1)
+#define TYPE_S5L_SHA1                "s5l.sha1"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LSHA1State, S5L_SHA1)
 
 #define SHA_CONFIG         0x0
 #define SHA_RESET          0x4
@@ -27,7 +27,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchSHA1State, IPOD_TOUCH_SHA1)
 #define SHA_CONFIG_IRQ      (1 << 2) // signal completion with an interrupt instead of being polled
 #define SHA_CONFIG_CONTINUE (1 << 3) // continue from the state in SHA_HASH
 
-typedef struct IPodTouchSHA1State {
+typedef struct S5LSHA1State {
 	SysBusDevice busdev;
     MemoryRegion iomem;
     qemu_irq irq;
@@ -42,6 +42,6 @@ typedef struct IPodTouchSHA1State {
     bool hw_buffer_dirty;
     bool hash_computed;
     uint32_t state[5]; // running SHA-1 state h0..h4
-} IPodTouchSHA1State;
+} S5LSHA1State;
 
 #endif

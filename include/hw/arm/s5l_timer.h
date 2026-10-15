@@ -1,5 +1,5 @@
-#ifndef IPOD_TOUCH_TIMER_H
-#define IPOD_TOUCH_TIMER_H
+#ifndef S5L_TIMER_H
+#define S5L_TIMER_H
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
@@ -7,8 +7,8 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 
-#define TYPE_IPOD_TOUCH_TIMER                "ipodtouch.timer"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchTimerState, IPOD_TOUCH_TIMER)
+#define TYPE_S5L_TIMER                "s5l.timer"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LTimerState, S5L_TIMER)
 
 // all timers run from the 24 MHz fixed-frequency clock
 #define TIMER_SRC_HZ 24000000
@@ -40,14 +40,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchTimerState, IPOD_TOUCH_TIMER)
 #define TIMER_STATE_MANUALUPDATE 2  // restart the count from the count buffers
 
 // CONFIG register fields
-#define TIMER_CONFIG_CLK_SHIFT 8    // clock select, see ipod_touch_timer_hz()
+#define TIMER_CONFIG_CLK_SHIFT 8    // clock select, see s5l_timer_hz()
 #define TIMER_CONFIG_CLK_MASK  0x7
 #define TIMER_CONFIG_IE_SHIFT  12   // one enable per status bit
 #define TIMER_CONFIG_IE_MASK   0x7
 
 #define TIMER_IRQ_COUNT_REACHED 1   // status bit 0, the only interrupt the model raises
 
-typedef struct IPodTouchTimerChannel {
+typedef struct S5LTimerChannel {
     uint32_t config;
     uint32_t state;
     uint32_t count_buffer;
@@ -56,15 +56,15 @@ typedef struct IPodTouchTimerChannel {
     uint64_t base_count;  // count at start_ns
     int64_t start_ns;
     QEMUTimer *timer;
-} IPodTouchTimerChannel;
+} S5LTimerChannel;
 
-typedef struct IPodTouchTimerState
+typedef struct S5LTimerState
 {
     SysBusDevice busdev;
     MemoryRegion iomem;
     qemu_irq irq;
 
-    IPodTouchTimerChannel channels[NUM_TIMERS];
+    S5LTimerChannel channels[NUM_TIMERS];
     uint32_t irqstat;
 
     // free running counter
@@ -73,6 +73,6 @@ typedef struct IPodTouchTimerState
     uint64_t ticks_base;    // count at ticks_base_ns
     int64_t ticks_base_ns;
     uint32_t ticks_low;     // latched when the high word is read
-} IPodTouchTimerState;
+} S5LTimerState;
 
 #endif

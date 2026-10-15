@@ -20,7 +20,7 @@
 #include "hw/core/platform-bus.h"
 #include "qapi/error.h"
 #include "hw/core/hw-error.h"
-#include "hw/arm/ipod_touch_usb_otg.h"
+#include "hw/arm/s5l_usb_otg.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "exec/cpu-common.h"
@@ -322,7 +322,7 @@ static void synopsys_usb_update_in_ep(synopsys_usb_state *_state, uint8_t _ep)
 	synopsys_usb_update_ep(_state, eps);
 
 	if(eps->control & USB_EPCON_ENABLE)
-		trace_ipod_touch_usb_ep_enable("in", _ep, eps->tx_size, eps->dma_address);
+		trace_s5l_usb_otg_ep_enable("in", _ep, eps->tx_size, eps->dma_address);
 
 	synopsys_usb_service(_state, true, _ep);
 }
@@ -334,7 +334,7 @@ static void synopsys_usb_update_out_ep(synopsys_usb_state *_state, uint8_t _ep)
 
 	if(eps->control & USB_EPCON_ENABLE)
 	{
-		trace_ipod_touch_usb_ep_enable("out", _ep, eps->tx_size, eps->dma_address);
+		trace_s5l_usb_otg_ep_enable("out", _ep, eps->tx_size, eps->dma_address);
 
 		if(_ep == 0 && _state->link_reset_phase == USB_LINK_RESET_RECOVERY)
 			synopsys_usb_link_reset_done(_state, USB_LINK_OK);
@@ -420,7 +420,7 @@ static uint64_t synopsys_usb_read(void *opaque, hwaddr _addr, unsigned size)
 	synopsys_usb_state *state = (synopsys_usb_state *)opaque;
 	uint64_t val = synopsys_usb_read_reg(state, _addr);
 
-	trace_ipod_touch_usb_read(_addr, val);
+	trace_s5l_usb_otg_read(_addr, val);
 	return val;
 }
 
@@ -611,7 +611,7 @@ static void synopsys_usb_write(void *opaque, hwaddr _addr, uint64_t _val, unsign
 {
 	synopsys_usb_state *state = (synopsys_usb_state *)opaque;
 
-	trace_ipod_touch_usb_write(_addr, _val);
+	trace_s5l_usb_otg_write(_addr, _val);
 
 	switch(_addr)
 	{
@@ -757,9 +757,9 @@ static const MemoryRegionOps usb_otg_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void s5l8900_usb_otg_reset(DeviceState *d)
+static void s5l_usb_otg_reset(DeviceState *d)
 {
-	synopsys_usb_state *state = S5L8900USBOTG(d);
+	synopsys_usb_state *state = S5L_USB_OTG(d);
 
 	state->pcgcctl = 3;
 	state->grstctl = GRSTCTL_AHBIDLE;
@@ -800,21 +800,21 @@ static void s5l8900_usb_otg_reset(DeviceState *d)
 	synopsys_usb_update_irq(state);
 }
 
-static void s5l8900_usb_otg_realize(DeviceState *dev, Error **errp)
+static void s5l_usb_otg_realize(DeviceState *dev, Error **errp)
 {
-	synopsys_usb_state *s = S5L8900USBOTG(dev);
+	synopsys_usb_state *s = S5L_USB_OTG(dev);
 
 	s->link_reset_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, synopsys_usb_link_reset_timeout, s);
 	usb_link_init(&s->link, USB_NUM_ENDPOINTS, &synopsys_usb_link_ops, s);
 }
 
-static const Property s5l8900_usb_otg_properties[] = {
+static const Property s5l_usb_otg_properties[] = {
 	DEFINE_PROP_CHR("chardev", synopsys_usb_state, link.chr),
 };
 
-static void s5l8900_usb_otg_init1(Object *obj)
+static void s5l_usb_otg_init1(Object *obj)
 {
-    synopsys_usb_state *s = S5L8900USBOTG(obj);
+    synopsys_usb_state *s = S5L_USB_OTG(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &usb_otg_ops, s, "usb_otg", 0x1000);
@@ -825,8 +825,8 @@ static void s5l8900_usb_otg_init1(Object *obj)
 // Helper for adding to a machine
 DeviceState *ipod_touch_init_usb_otg(qemu_irq _irq, uint32_t _hwcfg[4])
 {
-	DeviceState *dev = qdev_new(TYPE_S5L8900USBOTG);
-	synopsys_usb_state *state = S5L8900USBOTG(dev);
+	DeviceState *dev = qdev_new(TYPE_S5L_USB_OTG);
+	synopsys_usb_state *state = S5L_USB_OTG(dev);
 
 	state->ghwcfg1 = _hwcfg[0];
 	state->ghwcfg2 = _hwcfg[1];
@@ -844,7 +844,7 @@ DeviceState *ipod_touch_init_usb_otg(qemu_irq _irq, uint32_t _hwcfg[4])
  * QEMU before the state was loaded may have queued requests already, and its bus reset was overwritten by the load,
  * so it is signalled again.
  */
-static int s5l8900_usb_otg_post_load(void *opaque, int version_id)
+static int s5l_usb_otg_post_load(void *opaque, int version_id)
 {
 	synopsys_usb_state *s = opaque;
 
@@ -875,10 +875,10 @@ static const VMStateDescription vmstate_synopsys_usb_ep = {
 
 // The hardware configuration registers (ghwcfg*) are the board's.
 static const VMStateDescription vmstate_s5l8900_usb_otg = {
-	.name = TYPE_S5L8900USBOTG,
+	.name = TYPE_S5L_USB_OTG,
 	.version_id = 1,
 	.minimum_version_id = 1,
-	.post_load = s5l8900_usb_otg_post_load,
+	.post_load = s5l_usb_otg_post_load,
 	.fields = (const VMStateField[]) {
 		VMSTATE_UINT32(link_reset_phase, synopsys_usb_state),
 		VMSTATE_TIMER_PTR(link_reset_timer, synopsys_usb_state),
@@ -909,26 +909,26 @@ static const VMStateDescription vmstate_s5l8900_usb_otg = {
 	}
 };
 
-static void s5l8900_usb_otg_class_init(ObjectClass *klass, const void *data)
+static void s5l_usb_otg_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->vmsd = &vmstate_s5l8900_usb_otg;
-    device_class_set_legacy_reset(dc, s5l8900_usb_otg_reset);
-    dc->realize = s5l8900_usb_otg_realize;
-    device_class_set_props(dc, s5l8900_usb_otg_properties);
+    device_class_set_legacy_reset(dc, s5l_usb_otg_reset);
+    dc->realize = s5l_usb_otg_realize;
+    device_class_set_props(dc, s5l_usb_otg_properties);
 }
 
-static const TypeInfo s5l8900_usb_otg_info = {
-    .name          = TYPE_S5L8900USBOTG,
+static const TypeInfo s5l_usb_otg_info = {
+    .name          = TYPE_S5L_USB_OTG,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(synopsys_usb_state),
-    .instance_init = s5l8900_usb_otg_init1,
-    .class_init    = s5l8900_usb_otg_class_init,
+    .instance_init = s5l_usb_otg_init1,
+    .class_init    = s5l_usb_otg_class_init,
 };
 
-static void s5l8900_usb_otg_register_types(void)
+static void s5l_usb_otg_register_types(void)
 {
-    type_register_static(&s5l8900_usb_otg_info);
+    type_register_static(&s5l_usb_otg_info);
 }
 
-type_init(s5l8900_usb_otg_register_types)
+type_init(s5l_usb_otg_register_types)

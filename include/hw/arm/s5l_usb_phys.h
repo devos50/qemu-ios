@@ -1,12 +1,12 @@
-#ifndef HW_ARM_IPOD_TOUCH_USB_PHYS_H
-#define HW_ARM_IPOD_TOUCH_USB_PHYS_H
+#ifndef HW_ARM_S5L_USB_PHYS_H
+#define HW_ARM_S5L_USB_PHYS_H
 
 #include "qemu/osdep.h"
 #include "hw/core/hw-error.h"
 #include "hw/core/sysbus.h"
 
-#define TYPE_IPOD_TOUCH_USB_PHYS "ipodtouch.usbphys"
-OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchUSBPhysState, IPOD_TOUCH_USB_PHYS)
+#define TYPE_S5L_USB_PHYS "s5l.usbphys"
+OBJECT_DECLARE_SIMPLE_TYPE(S5LUSBPhysState, S5L_USB_PHYS)
 
 #define REG_OPHYPWR 0x0
 #define REG_OPHYCLK 0x4
@@ -15,7 +15,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IPodTouchUSBPhysState, IPOD_TOUCH_USB_PHYS)
 #define REG_OPHYTUNE 0x20
 #define REG_CABLE    0x28
 
-typedef struct IPodTouchUSBPhysState {
+typedef struct S5LUSBPhysState {
     SysBusDevice busdev;
     MemoryRegion iomem;
 
@@ -25,6 +25,6 @@ typedef struct IPodTouchUSBPhysState {
     uint32_t usb_unknown1;
     uint32_t usb_ophytune;
     bool cable_connected;
-} IPodTouchUSBPhysState;
+} S5LUSBPhysState;
 
 #endif

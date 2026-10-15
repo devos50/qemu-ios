@@ -527,16 +527,16 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->clock1 = IPOD_TOUCH_CLOCK(dev);
 
     // init the timer
-    dev = sysbus_create_simple(TYPE_IPOD_TOUCH_TIMER, TIMER1_MEM_BASE, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ));
-    nms->timer1 = IPOD_TOUCH_TIMER(dev);
+    dev = sysbus_create_simple(TYPE_S5L_TIMER, TIMER1_MEM_BASE, s5l8900_get_irq(nms, S5L8720_TIMER1_IRQ));
+    nms->timer1 = S5L_TIMER(dev);
 
     // init the watchdog timer
     sysbus_create_simple(TYPE_IPOD_TOUCH_WDT, WDT_MEM_BASE, s5l8900_get_irq(nms, S5L8720_WDT_IRQ));
 
     // init sysic
-    dev = qdev_new("ipodtouch.sysic");
-    IPodTouchSYSICState *sysic_state = IPOD_TOUCH_SYSIC(dev);
-    nms->sysic = (IPodTouchSYSICState *) g_malloc0(sizeof(struct IPodTouchSYSICState));
+    dev = qdev_new("s5l.sysic");
+    S5LSYSICState *sysic_state = S5L_SYSIC(dev);
+    nms->sysic = (S5LSYSICState *) g_malloc0(sizeof(struct S5LSYSICState));
     memory_region_add_subregion(sysmem, SYSIC_MEM_BASE, &sysic_state->iomem);
     SysBusDevice *busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize(busdev, &error_fatal);
@@ -545,15 +545,15 @@ static void ipod_touch_machine_init(MachineState *machine)
     }
 
     // init GPIO
-    dev = qdev_new("ipodtouch.gpio");
-    IPodTouchGPIOState *gpio_state = IPOD_TOUCH_GPIO(dev);
+    dev = qdev_new("s5l.gpio");
+    S5LGPIOState *gpio_state = S5L_GPIO(dev);
     nms->gpio_state = gpio_state;
     memory_region_add_subregion(sysmem, GPIO_MEM_BASE, &gpio_state->iomem);
     sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init SDIO, with the Wi-Fi card on the netdev= backend or on the first -nic
-    dev = qdev_new("ipodtouch.sdio");
-    IPodTouchSDIOState *sdio_state = IPOD_TOUCH_SDIO(dev);
+    dev = qdev_new("s5l.sdio");
+    S5LSDIOState *sdio_state = S5L_SDIO(dev);
     nms->sdio_state = sdio_state;
     if (nms->netdev) {
         NetClientState *netdev = qemu_find_netdev(nms->netdev);
@@ -595,13 +595,13 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     // init spis
     set_spi_base(0);
-    dev = sysbus_create_simple("ipodtouch.spi", SPI0_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI0_IRQ));
-    IPodTouchSPIState *spi0_state = IPOD_TOUCH_SPI(dev);
+    dev = sysbus_create_simple("s5l.spi", SPI0_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI0_IRQ));
+    S5LSPIState *spi0_state = S5L_SPI(dev);
     nms->spi0_state = spi0_state;
 
     set_spi_base(1);
-    dev = sysbus_create_simple("ipodtouch.spi", SPI1_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI1_IRQ));
-    IPodTouchSPIState *spi1_state = IPOD_TOUCH_SPI(dev);
+    dev = sysbus_create_simple("s5l.spi", SPI1_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI1_IRQ));
+    S5LSPIState *spi1_state = S5L_SPI(dev);
     nms->spi1_state = spi1_state;
 
     // both SPI buses are connected to the same NOR, selected through GPIOs
@@ -613,14 +613,14 @@ static void ipod_touch_machine_init(MachineState *machine)
     qdev_connect_gpio_out(DEVICE(gpio_state), GPIO_OUT_INDEX(GPIO_NOR_CS_SPI1), qdev_get_gpio_in_named(DEVICE(spi1_state->nor), SSI_GPIO_CS, 0));
 
     set_spi_base(2);
-    sysbus_create_simple("ipodtouch.spi", SPI2_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI2_IRQ));
+    sysbus_create_simple("s5l.spi", SPI2_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI2_IRQ));
 
     set_spi_base(3);
-    sysbus_create_simple("ipodtouch.spi", SPI3_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI3_IRQ));
+    sysbus_create_simple("s5l.spi", SPI3_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI3_IRQ));
 
     set_spi_base(4);
-    dev = sysbus_create_simple("ipodtouch.spi", SPI4_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI4_IRQ));
-    IPodTouchSPIState *spi4_state = IPOD_TOUCH_SPI(dev);
+    dev = sysbus_create_simple("s5l.spi", SPI4_MEM_BASE, s5l8900_get_irq(nms, S5L8720_SPI4_IRQ));
+    S5LSPIState *spi4_state = S5L_SPI(dev);
     spi4_state->mt->sysic = sysic_state;
     spi4_state->mt->gpio_state = gpio_state;
     qdev_connect_gpio_out_named(DEVICE(spi4_state->mt), "irq", 0, qdev_get_gpio_in(DEVICE(sysic_state), GPIO_MULTITOUCH_IRQ));
@@ -629,15 +629,15 @@ static void ipod_touch_machine_init(MachineState *machine)
     nms->spi4_state = spi4_state;
 
     // init the chip ID module
-    dev = qdev_new("ipodtouch.chipid");
-    IPodTouchChipIDState *chipid_state = IPOD_TOUCH_CHIPID(dev);
+    dev = qdev_new("s5l.chipid");
+    S5LChipIDState *chipid_state = S5L_CHIPID(dev);
     nms->chipid_state = chipid_state;
     memory_region_add_subregion(sysmem, CHIPID_MEM_BASE, &chipid_state->iomem);
     sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init the TVOut instance
-    dev = qdev_new("ipodtouch.tvout");
-    IPodTouchTVOutState *tvout_state = IPOD_TOUCH_TVOUT(dev);
+    dev = qdev_new("s5l.tvout");
+    S5LTVOutState *tvout_state = S5L_TVOUT(dev);
     nms->tvout_state = tvout_state;
     memory_region_add_subregion(sysmem, TVOUT_MIXER1_MEM_BASE, &tvout_state->mixer1_iomem);
     memory_region_add_subregion(sysmem, TVOUT_MIXER2_MEM_BASE, &tvout_state->mixer2_iomem);
@@ -654,7 +654,7 @@ static void ipod_touch_machine_init(MachineState *machine)
 
     // init USB OTG
     dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8720_USB_OTG_IRQ), s5l8720_usb_hwcfg);
-    synopsys_usb_state *usb_otg = S5L8900USBOTG(dev);
+    synopsys_usb_state *usb_otg = S5L_USB_OTG(dev);
     nms->usb_otg = usb_otg;
     if (nms->usb_chardev) {
         Chardev *usb_chr = qemu_chr_find(nms->usb_chardev);
@@ -775,8 +775,8 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8720_FMSS_IRQ));
 
     // init the USB module
-    dev = qdev_new("ipodtouch.usbphys");
-    IPodTouchUSBPhysState *usb_phys_state = IPOD_TOUCH_USB_PHYS(dev);
+    dev = qdev_new("s5l.usbphys");
+    S5LUSBPhysState *usb_phys_state = S5L_USB_PHYS(dev);
     nms->usb_phys_state = usb_phys_state;
     usb_phys_state->cable_connected = nms->usb_chardev != NULL;
     memory_region_add_subregion(sysmem, USBPHYS_MEM_BASE, &usb_phys_state->iomem);
@@ -810,8 +810,8 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_realize(busdev, &error_fatal);
 
     // init SHA1 engine
-    dev = qdev_new("ipodtouch.sha1");
-    IPodTouchSHA1State *sha1_state = IPOD_TOUCH_SHA1(dev);
+    dev = qdev_new("s5l.sha1");
+    S5LSHA1State *sha1_state = S5L_SHA1(dev);
     nms->sha1_state = sha1_state;
     busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, SHA1_MEM_BASE, &sha1_state->iomem);
@@ -834,8 +834,8 @@ static void ipod_touch_machine_init(MachineState *machine)
     sysbus_realize(SYS_BUS_DEVICE(dev), &error_fatal);
 
     // init the MBX
-    dev = qdev_new("ipodtouch.mbx");
-    IPodTouchMBXState *mbx_state = IPOD_TOUCH_MBX(dev);
+    dev = qdev_new("s5l.mbx");
+    S5LMBXState *mbx_state = S5L_MBX(dev);
     nms->mbx_state = mbx_state;
     busdev = SYS_BUS_DEVICE(dev);
     memory_region_add_subregion(sysmem, MBX1_MEM_BASE, &mbx_state->iomem1);

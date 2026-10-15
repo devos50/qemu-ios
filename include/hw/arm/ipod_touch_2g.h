@@ -9,30 +9,30 @@
 #include "cpu.h"
 #include "hw/dma/pl080.h"
 #include "hw/i2c/ipod_touch_i2c.h"
-#include "hw/arm/ipod_touch_timer.h"
+#include "hw/arm/s5l_timer.h"
 #include "hw/arm/ipod_touch_clock.h"
-#include "hw/arm/ipod_touch_chipid.h"
-#include "hw/arm/ipod_touch_gpio.h"
-#include "hw/arm/ipod_touch_sysic.h"
-#include "hw/arm/ipod_touch_usb_otg.h"
-#include "hw/arm/ipod_touch_usb_phys.h"
-#include "hw/arm/ipod_touch_spi.h"
-#include "hw/arm/ipod_touch_sha1.h"
+#include "hw/arm/s5l_chipid.h"
+#include "hw/arm/s5l_gpio.h"
+#include "hw/arm/s5l_sysic.h"
+#include "hw/arm/s5l_usb_otg.h"
+#include "hw/arm/s5l_usb_phys.h"
+#include "hw/arm/s5l_spi.h"
+#include "hw/arm/s5l_sha1.h"
 #include "hw/arm/ipod_touch_aes.h"
 #include "hw/arm/ipod_touch_pke.h"
 #include "hw/arm/ipod_touch_miu.h"
 #include "hw/arm/ipod_touch_lcd.h"
 #include "hw/arm/ipod_touch_mipi_dsi.h"
 #include "hw/arm/ipod_touch_fmss.h"
-#include "hw/arm/ipod_touch_mbx.h"
+#include "hw/arm/s5l_mbx.h"
 #include "hw/arm/ipod_touch_scaler_csc.h"
-#include "hw/arm/ipod_touch_sdio.h"
-#include "hw/arm/ipod_touch_tvout.h"
+#include "hw/arm/s5l_sdio.h"
+#include "hw/arm/s5l_tvout.h"
 #include "hw/arm/ipod_touch_wdt.h"
 #include "hw/arm/ipod_touch_i2s.h"
 #include "hw/arm/ipod_touch_cs42l58.h"
 #include "hw/arm/ipod_touch_amc.h"
-#include "hw/arm/ipod_touch_lis302dl.h"
+#include "hw/arm/lis302dl.h"
 
 #define TYPE_IPOD_TOUCH "iPod-Touch"
 
@@ -173,16 +173,16 @@ typedef struct {
 	PL192State *vic1;
 	IPodTouchClockState *clock0;
 	IPodTouchClockState *clock1;
-	IPodTouchTimerState *timer1;
-	IPodTouchSPIState *spi0_state;
-	IPodTouchSPIState *spi1_state;
-	IPodTouchSPIState *spi4_state;
-	IPodTouchChipIDState *chipid_state;
-	IPodTouchGPIOState *gpio_state;
-	IPodTouchSYSICState *sysic;
+	S5LTimerState *timer1;
+	S5LSPIState *spi0_state;
+	S5LSPIState *spi1_state;
+	S5LSPIState *spi4_state;
+	S5LChipIDState *chipid_state;
+	S5LGPIOState *gpio_state;
+	S5LSYSICState *sysic;
 	synopsys_usb_state *usb_otg;
-	IPodTouchUSBPhysState *usb_phys_state;
-	IPodTouchSHA1State *sha1_state;
+	S5LUSBPhysState *usb_phys_state;
+	S5LSHA1State *sha1_state;
 	IPodTouchAESState *aes_state;
 	IPodTouchPKEState *pke_state;
 	IPodTouchI2CState *i2c0_state;
@@ -192,10 +192,10 @@ typedef struct {
 	IPodTouchFMSSState *fmss_state;
 	IPodTouchI2SState *i2s_state;
 	IPodTouchAMCState *amc_state;
-	IPodTouchMBXState *mbx_state;
+	S5LMBXState *mbx_state;
 	IPodTouchScalerCSCState *scaler_csc_state;
-	IPodTouchSDIOState *sdio_state;
-	IPodTouchTVOutState *tvout_state;
+	S5LSDIOState *sdio_state;
+	S5LTVOutState *tvout_state;
 	char bootrom_path[1024];
 	char *boot_image_path;
 	uint8_t *boot_image;   // the first boot stage given with boot-image (an IMG3 image), started without a bootrom
