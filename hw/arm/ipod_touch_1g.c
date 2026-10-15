@@ -22,6 +22,7 @@
 #include "system/reset.h"
 #include "target/arm/cpregs.h"
 #include "hw/arm/ipod_touch_1g.h"
+#include "hw/arm/s5l8900_bootrom.h"
 #include "hw/arm/s5l8900_clock.h"
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
@@ -42,18 +43,6 @@
 
 #define IMG2_FLAG_ENCRYPTED     0x200       // the data is encrypted with the device's image key
 
-#define S5L8900_8900_MAGIC      0x30303938  // '8900'
-#define S5L8900_8900_HEADER     0x800
-#define S5L8900_8900_ENCRYPTED  3
-
-/*
- * Key 0x837: what the S5L8900's AES engine derives from its GID key, and what 8900 containers are encrypted with
- * (AES-128-CBC, zero IV). It is published, e.g. on The Apple Wiki.
- */
-static const uint8_t key_0x837[16] = {
-    0x18, 0x84, 0x58, 0xa6, 0xd1, 0x50, 0x34, 0xdf, 0xe3, 0x86, 0xf2, 0x3b, 0x61, 0xd4, 0x37, 0x74,
-};
-
 /*
  * The image key of an installed Img2 image: these 16 bytes encrypted (AES-128-CBC) with the UID key and IV, as LLB
  * derives it. A restore encrypts the data of the images it writes to the NOR with it (and signs them).
@@ -64,36 +53,6 @@ static const uint8_t img2_key_seed[16] = {
 static const uint8_t img2_key_iv[16] = {
     0x41, 0x70, 0x5d, 0x11, 0x6f, 0x98, 0x4b, 0x82, 0x9c, 0x6c, 0x99, 0xbb, 0xa5, 0xf1, 0x78, 0x69,
 };
-
-/* AES-128-CBC over the whole blocks of buf, in place; a partial last block is left as it is, as the engine does. */
-static void it1g_aes_cbc(const uint8_t *key, const uint8_t *iv_in, uint8_t *buf, size_t len, bool encrypt)
-{
-    uint8_t iv[AES_BLOCK_SIZE], block[AES_BLOCK_SIZE];
-    AES_KEY aes;
-
-    memcpy(iv, iv_in, sizeof(iv));
-    if (encrypt) {
-        AES_set_encrypt_key(key, 128, &aes);
-    } else {
-        AES_set_decrypt_key(key, 128, &aes);
-    }
-    for (size_t off = 0; off + AES_BLOCK_SIZE <= len; off += AES_BLOCK_SIZE) {
-        if (encrypt) {
-            for (int i = 0; i < AES_BLOCK_SIZE; i++) {
-                block[i] = buf[off + i] ^ iv[i];
-            }
-            AES_encrypt(block, buf + off, &aes);
-            memcpy(iv, buf + off, AES_BLOCK_SIZE);
-        } else {
-            memcpy(block, buf + off, AES_BLOCK_SIZE);
-            AES_decrypt(block, buf + off, &aes);
-            for (int i = 0; i < AES_BLOCK_SIZE; i++) {
-                buf[off + i] ^= iv[i];
-            }
-            memcpy(iv, block, AES_BLOCK_SIZE);
-        }
-    }
-}
 
 static void allocate_ram(MemoryRegion *top, const char *name, hwaddr addr, uint64_t size)
 {
@@ -144,7 +103,7 @@ static uint8_t *s5l8900_unwrap_8900(const uint8_t *file, size_t size, size_t *pa
     uint8_t *out = g_memdup2(file + S5L8900_8900_HEADER, len);
     if (file[7] == S5L8900_8900_ENCRYPTED) {
         static const uint8_t zero_iv[AES_BLOCK_SIZE];
-        it1g_aes_cbc(key_0x837, zero_iv, out, len, false);
+        s5l8900_aes_cbc(s5l8900_key_0x837, zero_iv, out, len, false);
     }
     *payload_size = len;
     return out;
@@ -228,8 +187,8 @@ static bool it1g_load_first_stage(IPodTouch1GMachineState *nms, Error **errp)
         static const uint8_t zero_iv[AES_BLOCK_SIZE];
         uint8_t key[16];
         memcpy(key, img2_key_seed, sizeof(key));
-        it1g_aes_cbc(key_uid, img2_key_iv, key, sizeof(key), true);
-        it1g_aes_cbc(key, zero_iv, data, len, false);
+        s5l8900_aes_cbc(key_uid, img2_key_iv, key, sizeof(key), true);
+        s5l8900_aes_cbc(key, zero_iv, data, len, false);
     }
     physical_memory_write(IT1G_SRAM_MEM_BASE, data, len);
     return true;
@@ -255,7 +214,6 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
     allocate_ram(sysmem, "ram", IT1G_RAM_MEM_BASE, IT1G_RAM_SIZE);
     // whether this is memory of its own or another window on the DRAM isn't known; its own is the safe guess
     allocate_ram(sysmem, "iboot-ram", IT1G_IBOOT_RAM_BASE, IT1G_IBOOT_RAM_SIZE);
-    allocate_ram(sysmem, "vrom", IT1G_VROM_MEM_BASE, 0x10000);
     allocate_ram(sysmem, "sram", IT1G_SRAM_MEM_BASE, IT1G_SRAM_SIZE);
 
     /*
@@ -352,6 +310,9 @@ static void it1g_machine_init(MachineState *machine)
     nms->vic0->daisy_callback = nms->vic1;
 
     sysbus_create_simple(TYPE_S5L8900_CLOCK, IT1G_CLOCK1_MEM_BASE, NULL);
+
+    // in place of the bootrom, what iBoot calls in it (the machine itself does the bootrom's loading of LLB)
+    sysbus_create_simple(TYPE_S5L8900_BOOTROM, IT1G_VROM_MEM_BASE, NULL);
 
     dev = qdev_new(TYPE_S5L_CHIPID);
     qdev_prop_set_uint32(dev, "chip", 0x8900);
