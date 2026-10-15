@@ -36,7 +36,7 @@
 #include "hw/arm/ipod_touch_amc.h"
 #include "hw/arm/lis302dl.h"
 
-#define TYPE_IPOD_TOUCH "iPod-Touch"
+#define TYPE_IPOD_TOUCH_2G "iPod-Touch-2G"
 
 #define S5L8720_VIC_N	  2
 #define S5L8720_VIC_SIZE  32
@@ -103,9 +103,9 @@
 
 const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L8900_GPIO_G2_IRQ, S5L8900_GPIO_G3_IRQ, S5L8900_GPIO_G4_IRQ };
 
-#define TYPE_IPOD_TOUCH_MACHINE   MACHINE_TYPE_NAME(TYPE_IPOD_TOUCH)
-#define IPOD_TOUCH_MACHINE(obj) \
-    OBJECT_CHECK(IPodTouchMachineState, (obj), TYPE_IPOD_TOUCH_MACHINE)
+#define TYPE_IPOD_TOUCH_2G_MACHINE   MACHINE_TYPE_NAME(TYPE_IPOD_TOUCH_2G)
+#define IPOD_TOUCH_2G_MACHINE(obj) \
+    OBJECT_CHECK(IPodTouch2GMachineState, (obj), TYPE_IPOD_TOUCH_2G_MACHINE)
 
 // memory addresses
 #define VROM_MEM_BASE   0x0
@@ -164,7 +164,7 @@ const int S5L8900_GPIO_IRQS[5] = { S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L
 
 typedef struct {
     MachineClass parent;
-} IPodTouchMachineClass;
+} IPodTouch2GMachineClass;
 
 typedef struct {
 	MachineState parent;
@@ -214,6 +214,6 @@ typedef struct {
 	LIS302DLState *accelerometer;
 	bool force_dfu;
 	uint32_t periph_port_remap; // cp15 c15 c2 4
-} IPodTouchMachineState;
+} IPodTouch2GMachineState;
 
 #endif

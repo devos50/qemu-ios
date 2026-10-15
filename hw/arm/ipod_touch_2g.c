@@ -31,12 +31,12 @@ static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uin
 
 static uint64_t it2g_periph_remap_read(CPUARMState *env, const ARMCPRegInfo *ri)
 {
-    return IPOD_TOUCH_MACHINE(qdev_get_machine())->periph_port_remap;
+    return IPOD_TOUCH_2G_MACHINE(qdev_get_machine())->periph_port_remap;
 }
 
 static void it2g_periph_remap_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
 {
-    IPOD_TOUCH_MACHINE(qdev_get_machine())->periph_port_remap = value;
+    IPOD_TOUCH_2G_MACHINE(qdev_get_machine())->periph_port_remap = value;
 }
 
 /*
@@ -83,7 +83,7 @@ static void ipod_touch_cpu_setup(MachineState *machine, MemoryRegion **sysmem, A
  * is now, which a restore may have rewritten) to SRAM and starts it like the bootrom does, with r0 = 0. The CPU's reset
  * state is what the bootrom leaves behind (SVC mode, interrupts masked, MMU and caches off).
  */
-static bool ipod_touch_load_first_stage(IPodTouchMachineState *nms, Error **errp)
+static bool ipod_touch_load_first_stage(IPodTouch2GMachineState *nms, Error **errp)
 {
     const uint8_t *image = nms->boot_image;
     size_t size = nms->boot_image_size;
@@ -102,7 +102,7 @@ static bool ipod_touch_load_first_stage(IPodTouchMachineState *nms, Error **errp
 
 static void ipod_touch_cpu_reset(void *opaque)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE((MachineState *)opaque);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE((MachineState *)opaque);
     ARMCPU *cpu = nms->cpu;
     CPUState *cs = CPU(cpu);
     Error *err = NULL;
@@ -123,7 +123,7 @@ static void ipod_touch_cpu_reset(void *opaque)
 
 static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem, AddressSpace *nsas)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(machine);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(machine);
 
     allocate_ram(sysmem, "insecure_ram", INSECURE_RAM_MEM_BASE, 0x3000000);
     allocate_ram(sysmem, "secure_ram", SECURE_RAM_MEM_BASE, 0x4B04000);
@@ -180,7 +180,7 @@ static void ipod_touch_memory_setup(MachineState *machine, MemoryRegion *sysmem,
 
 static char *ipod_touch_get_bootrom_path(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->bootrom_path);
 }
 
@@ -192,13 +192,13 @@ static void ipod_touch_set_bootrom_path(Object *obj, const char *value, Error **
         exit(1);
     }
     
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_strlcpy(nms->bootrom_path, value, sizeof(nms->bootrom_path));
 }
 
 static char *ipod_touch_get_nor_path(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->nor_path);
 }
 
@@ -210,13 +210,13 @@ static void ipod_touch_set_nor_path(Object *obj, const char *value, Error **errp
         exit(1);
     }
 
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_strlcpy(nms->nor_path, value, sizeof(nms->nor_path));
 }
 
 static char *ipod_touch_get_nand_path(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->nand_path);
 }
 
@@ -228,103 +228,103 @@ static void ipod_touch_set_nand_path(Object *obj, const char *value, Error **err
         exit(1);
     }
     
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_strlcpy(nms->nand_path, value, sizeof(nms->nand_path));
 }
 
 static char *ipod_touch_get_nand_disk(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->nand_disk);
 }
 
 static void ipod_touch_set_nand_disk(Object *obj, const char *value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_free(nms->nand_disk);
     nms->nand_disk = g_strdup(value);
 }
 
 static char *ipod_touch_get_nand_overlay(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->nand_overlay);
 }
 
 static void ipod_touch_set_nand_overlay(Object *obj, const char *value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_free(nms->nand_overlay);
     nms->nand_overlay = g_strdup(value);
 }
 
 static char *ipod_touch_get_usb_chardev(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->usb_chardev);
 }
 
 static void ipod_touch_set_usb_chardev(Object *obj, const char *value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_free(nms->usb_chardev);
     nms->usb_chardev = g_strdup(value);
 }
 
 static char *ipod_touch_get_netdev(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->netdev);
 }
 
 static void ipod_touch_set_netdev(Object *obj, const char *value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_free(nms->netdev);
     nms->netdev = g_strdup(value);
 }
 
 static char *ipod_touch_get_boot_args(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->boot_args);
 }
 
 static void ipod_touch_set_boot_args(Object *obj, const char *value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_free(nms->boot_args);
     nms->boot_args = g_strdup(value);
 }
 
 static bool ipod_touch_get_force_dfu(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return nms->force_dfu;
 }
 
 static void ipod_touch_set_force_dfu(Object *obj, bool value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     nms->force_dfu = value;
 }
 
 static char *ipod_touch_get_boot_image(Object *obj, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     return g_strdup(nms->boot_image_path);
 }
 
 static void ipod_touch_set_boot_image(Object *obj, const char *value, Error **errp)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
     g_free(nms->boot_image_path);
     nms->boot_image_path = g_strdup(value);
 }
 
 static void ipod_touch_instance_init(Object *obj)
 {
-    IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(obj);
+    IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(obj);
 
     object_property_add_str(obj, "bootrom", ipod_touch_get_bootrom_path, ipod_touch_set_bootrom_path);
     object_property_set_description(obj, "bootrom", "Path to the S5L8720 bootrom binary (optional: without it the "
@@ -367,7 +367,7 @@ static void ipod_touch_instance_init(Object *obj)
     object_property_set_description(obj, "dfu", "Hold the force-DFU GPIO so the bootrom enters DFU mode (with bootrom only)");
 }
 
-static inline qemu_irq s5l8900_get_irq(IPodTouchMachineState *s, int n)
+static inline qemu_irq s5l8900_get_irq(IPodTouch2GMachineState *s, int n)
 {
     return s->irq[n / S5L8720_VIC_SIZE][n % S5L8720_VIC_SIZE];
 }
@@ -437,14 +437,14 @@ static void ipod_touch_key_event(void *opaque, int keycode)
     }
     else if(keycode == KEY_M_DOWN) {
         // the iPod Touch 2G has no mute switch: mute the host audio output instead
-        IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(qdev_get_machine());
+        IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(qdev_get_machine());
         bool muted = ipod_touch_i2s_toggle_host_mute(nms->i2s_state);
         info_report("iPod Touch: host audio %s", muted ? "muted" : "unmuted");
         return;
     }
     else if(keycode == KEY_R_DOWN) {
         // rotate the device by tilting the accelerometer
-        IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(qdev_get_machine());
+        IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(qdev_get_machine());
         info_report("iPod Touch: rotated to %s", lis302dl_rotate(nms->accelerometer));
         return;
     }
@@ -472,18 +472,18 @@ static const QemuInputHandler ipod_touch_key_handler = {
 
 // The machine's own state: the cp15 register the CPU model lacks
 static const VMStateDescription vmstate_ipod_touch_machine = {
-    .name = "ipodtouch.machine",
+    .name = "ipodtouch2g.machine",
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(periph_port_remap, IPodTouchMachineState),
+        VMSTATE_UINT32(periph_port_remap, IPodTouch2GMachineState),
         VMSTATE_END_OF_LIST()
     }
 };
 
 static void ipod_touch_machine_init(MachineState *machine)
 {
-	IPodTouchMachineState *nms = IPOD_TOUCH_MACHINE(machine);
+	IPodTouch2GMachineState *nms = IPOD_TOUCH_2G_MACHINE(machine);
 	MemoryRegion *sysmem;
     AddressSpace *nsas;
     ARMCPU *cpu;
@@ -891,7 +891,9 @@ static void ipod_touch_machine_init(MachineState *machine)
 static void ipod_touch_machine_class_init(ObjectClass *klass, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(klass);
-    mc->desc = "iPod Touch";
+    mc->desc = "iPod touch (2nd generation)";
+    // the machine's name before the iPod touch 1G joined it
+    mc->alias = "iPod-Touch";
     mc->init = ipod_touch_machine_init;
     mc->max_cpus = 1;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm1176");
@@ -899,10 +901,10 @@ static void ipod_touch_machine_class_init(ObjectClass *klass, const void *data)
 }
 
 static const TypeInfo ipod_touch_machine_info = {
-    .name          = TYPE_IPOD_TOUCH_MACHINE,
+    .name          = TYPE_IPOD_TOUCH_2G_MACHINE,
     .parent        = TYPE_MACHINE,
-    .instance_size = sizeof(IPodTouchMachineState),
-    .class_size    = sizeof(IPodTouchMachineClass),
+    .instance_size = sizeof(IPodTouch2GMachineState),
+    .class_size    = sizeof(IPodTouch2GMachineClass),
     .class_init    = ipod_touch_machine_class_init,
     .instance_init = ipod_touch_instance_init,
     .interfaces    = arm_machine_interfaces,
