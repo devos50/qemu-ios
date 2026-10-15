@@ -24,6 +24,7 @@
 #include "hw/arm/ipod_touch_1g.h"
 #include "hw/arm/s5l8900_bootrom.h"
 #include "hw/arm/s5l8900_clock.h"
+#include "hw/arm/s5l8900_lcd.h"
 #include "hw/arm/s5l8900_nand.h"
 #include "hw/dma/pl080.h"
 #include "hw/arm/s5l_chipid.h"
@@ -244,7 +245,6 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         { "clock0",     IT1G_CLOCK0_MEM_BASE,   0x1000 },
         { "usb-otg",    IT1G_USBOTG_MEM_BASE,   0x10000 },
         { "adm",        IT1G_ADM_MEM_BASE,      0x1000 },
-        { "display",    IT1G_DISPLAY_MEM_BASE,  0x1000 },
         { "sdio",       IT1G_SDIO_MEM_BASE,     0x1000 },
         { "edgeic",     IT1G_EDGEIC_MEM_BASE,   0x1000 },
         { "tvout1",     IT1G_TVOUT1_MEM_BASE,   0x1000 },
@@ -308,6 +308,7 @@ static void it1g_machine_init(MachineState *machine)
     nms->vic0->daisy_callback = nms->vic1;
 
     sysbus_create_simple(TYPE_S5L8900_CLOCK, IT1G_CLOCK1_MEM_BASE, NULL);
+    sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE, NULL);
 
     // in place of the bootrom, what iBoot calls in it (the machine itself does the bootrom's loading of LLB)
     sysbus_create_simple(TYPE_S5L8900_BOOTROM, IT1G_VROM_MEM_BASE, NULL);

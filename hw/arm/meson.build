@@ -133,6 +133,7 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_1G', if_true: files(
   's5l8900_nand.c',
   's5l8900_nand_disk.c',
   's5l8900_clock.c',
+  's5l8900_lcd.c',
 ))
 arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_2g.c',
