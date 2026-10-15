@@ -24,6 +24,8 @@
 #include "hw/arm/ipod_touch_1g.h"
 #include "hw/arm/s5l8900_bootrom.h"
 #include "hw/arm/s5l8900_clock.h"
+#include "hw/arm/s5l8900_nand.h"
+#include "hw/dma/pl080.h"
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
 #include "hw/arm/ipod_touch_aes.h"
@@ -240,20 +242,16 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
     // the blocks without a model yet
     static const struct { const char *name; hwaddr base; uint64_t size; } unimp_regions[] = {
         { "clock0",     IT1G_CLOCK0_MEM_BASE,   0x1000 },
-        { "dmac0",      IT1G_DMAC0_MEM_BASE,    0x1000 },
         { "usb-otg",    IT1G_USBOTG_MEM_BASE,   0x10000 },
         { "adm",        IT1G_ADM_MEM_BASE,      0x1000 },
         { "display",    IT1G_DISPLAY_MEM_BASE,  0x1000 },
-        { "nand",       IT1G_NAND_MEM_BASE,     0x1000 },
         { "sdio",       IT1G_SDIO_MEM_BASE,     0x1000 },
         { "edgeic",     IT1G_EDGEIC_MEM_BASE,   0x1000 },
-        { "nand-ecc",   IT1G_NAND_ECC_MEM_BASE, 0x1000 },
         { "tvout1",     IT1G_TVOUT1_MEM_BASE,   0x1000 },
         { "tvout2",     IT1G_TVOUT2_MEM_BASE,   0x1000 },
         { "tvout3",     IT1G_TVOUT3_MEM_BASE,   0x1000 },
         { "mpvd",       IT1G_MPVD_MEM_BASE,     0x70000 },
         { "h264bpd",    IT1G_H264BPD_MEM_BASE,  0x1000 },
-        { "dmac1",      IT1G_DMAC1_MEM_BASE,    0x1000 },
         { "mbx",        IT1G_MBX_MEM_BASE,      0x1000000 },
         { "usb-phys",   IT1G_USBPHYS_MEM_BASE,  0x1000 },
         { "iis2",       IT1G_IIS2_MEM_BASE,     0x1000 },
@@ -381,6 +379,23 @@ static void it1g_machine_init(MachineState *machine)
     dev = ssi_create_peripheral(nms->spi[1]->spi, TYPE_IPOD_TOUCH_1G_LCD_PANEL);
     qdev_connect_gpio_out(DEVICE(nms->gpio_state), GPIO_OUT_INDEX(IT1G_GPIO_LCD_CS),
                           qdev_get_gpio_in_named(dev, SSI_GPIO_CS, 0));
+
+    // the DMA controllers, ARM PL080s; the NAND controller is peripheral 8 of DMAC0
+    static const struct { hwaddr base; int irq; } dmacs[] = {
+        { IT1G_DMAC0_MEM_BASE, S5L8900_DMAC0_IRQ }, { IT1G_DMAC1_MEM_BASE, S5L8900_DMAC1_IRQ },
+    };
+    for (int i = 0; i < ARRAY_SIZE(dmacs); i++) {
+        dev = qdev_new(TYPE_PL080);
+        object_property_set_link(OBJECT(dev), "downstream", OBJECT(sysmem), &error_fatal);
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_fatal);
+        sysbus_mmio_map(busdev, 0, dmacs[i].base);
+        sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, dmacs[i].irq));
+    }
+
+    // the NAND and its ECC engine
+    sysbus_create_simple(TYPE_S5L8900_NAND, IT1G_NAND_MEM_BASE, NULL);
+    sysbus_create_simple(TYPE_S5L8900_NAND_ECC, IT1G_NAND_ECC_MEM_BASE, s5l8900_get_irq(nms, S5L8900_NAND_ECC_IRQ));
 
     // Samsung UARTs, like the Exynos one
     for (int i = 0; i < IT1G_UART_COUNT; i++) {
