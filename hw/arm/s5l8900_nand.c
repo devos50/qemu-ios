@@ -7,8 +7,9 @@
  * the controller can take a command, bit 2 when the address has gone out, bit 3 when a transfer has, bit 4 + n when
  * bank n is ready again; the last three are cleared by writing them.
  *
- * The chips are 8 banks of Hynix NAND, as in the 8 GB iPod touch. So far the NAND has no storage: every page reads
- * as erased, and the commands that would change it are logged with -d unimp.
+ * The chips are 8 banks of Hynix NAND, as in the 8 GB iPod touch. Their contents come from a disk image with an
+ * overlay (the "disk" and "overlay" properties, s5l8900_nand_disk.c); without one every page reads as erased. The
+ * commands that would change the NAND aren't modelled yet (iBoot only reads), and are logged with -d unimp.
  *
  * The ECC engine checks what the FIL read, 512-byte sectors against their ECC bytes, and interrupts when it is done.
  * It doesn't compute ECC: it reports an uncorrectable error only where the sectors and their ECC bytes are all 0xff,
@@ -19,7 +20,9 @@
 #include "qemu/bswap.h"
 #include "hw/core/irq.h"
 #include "hw/arm/s5l8900_nand.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "system/address-spaces.h"
 #include "system/dma.h"
 
@@ -64,13 +67,14 @@ static int nand_bank(S5L8900NANDState *s)
     return banks ? ctz32(banks) : -1;
 }
 
-/* Loads a page into the selected chip's page register. With no storage yet, every page is erased. */
+/* Loads a page into the selected chip's page register */
 static void nand_load_page(S5L8900NANDState *s, int bank, uint32_t row)
 {
     if (row >= S5L8900_NAND_PAGES_PER_BANK) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: page %u of bank %d is beyond the chip\n", __func__, row, bank);
     }
-    memset(s->page_register, 0xff, sizeof(s->page_register));
+    s5l8900_nand_disk_read_page(&s->disk, bank, row, s->page_register,
+                                s->page_register + S5L8900_NAND_BYTES_PER_PAGE);
 }
 
 static void nand_command(S5L8900NANDState *s, uint32_t cmd)
@@ -243,7 +247,26 @@ static void nand_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &nand_ops, s, TYPE_S5L8900_NAND, 0x1000);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    s->disk.disk_fd = -1;
 }
+
+static void nand_realize(DeviceState *dev, Error **errp)
+{
+    S5L8900NANDState *s = S5L8900_NAND(dev);
+
+    if (!s->disk_path != !s->overlay_path) {
+        error_setg(errp, "the NAND's disk image and overlay go together");
+        return;
+    }
+    if (s->disk_path) {
+        s5l8900_nand_disk_open(&s->disk, s->disk_path, s->overlay_path, errp);
+    }
+}
+
+static const Property nand_properties[] = {
+    DEFINE_PROP_STRING("disk", S5L8900NANDState, disk_path),
+    DEFINE_PROP_STRING("overlay", S5L8900NANDState, overlay_path),
+};
 
 static void nand_reset(DeviceState *dev)
 {
@@ -289,6 +312,8 @@ static void nand_class_init(ObjectClass *klass, const void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_s5l8900_nand;
+    dc->realize = nand_realize;
+    device_class_set_props(dc, nand_properties);
     device_class_set_legacy_reset(dc, nand_reset);
 }
 

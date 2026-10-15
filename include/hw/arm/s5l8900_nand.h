@@ -24,6 +24,25 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8900NANDECCState, S5L8900_NAND_ECC)
 #define S5L8900_NAND_BYTES_PER_SPARE    64
 #define S5L8900_NAND_PAGE_REGISTER      (S5L8900_NAND_BYTES_PER_PAGE + S5L8900_NAND_BYTES_PER_SPARE)
 
+/*
+ * The NAND's contents: a disk image presented as a freshly formatted NAND, with an overlay for the pages the guest
+ * changes (s5l8900_nand_disk.c). Without one, every page is erased.
+ */
+typedef struct S5L8900NANDDisk {
+    int disk_fd;                            // -1 without a disk image
+    uint64_t disk_size;
+    unsigned long *data_lbns;               // the logical blocks that hold data, and are presented as written
+    GHashTable *special_pages;              // (bank << 32 | page) -> page data + spare of the formatted NAND
+    int overlay_data_fd[S5L8900_NAND_BANKS];
+    int overlay_spare_fd[S5L8900_NAND_BANKS];
+    int overlay_state_fd[S5L8900_NAND_BANKS];
+    uint8_t *overlay_state[S5L8900_NAND_BANKS];
+} S5L8900NANDDisk;
+
+bool s5l8900_nand_disk_open(S5L8900NANDDisk *disk, const char *path, const char *overlay, Error **errp);
+// Reads a page into data and spare. Returns false if the page is erased (data and spare are then all 0xff).
+bool s5l8900_nand_disk_read_page(S5L8900NANDDisk *disk, uint32_t bank, uint32_t page, uint8_t *data, uint8_t *spare);
+
 typedef enum {
     NAND_OUT_DATA,      // the page register, from the column
     NAND_OUT_ID,
@@ -33,6 +52,10 @@ typedef enum {
 typedef struct S5L8900NANDState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
+
+    char *disk_path;
+    char *overlay_path;
+    S5L8900NANDDisk disk;
 
     uint32_t fmctrl0;
     uint32_t fmctrl1;
