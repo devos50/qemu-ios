@@ -4,6 +4,7 @@
 #include "qemu/osdep.h"
 #include "qemu/fifo8.h"
 #include "qemu/log.h"
+#include "qemu/timer.h"
 #include "hw/core/platform-bus.h"
 #include "hw/core/hw-error.h"
 #include "hw/core/irq.h"
@@ -23,7 +24,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LSPIState, S5L_SPI)
 #define  R_CFG_CPOL              (1 << 2)
 #define  R_CFG_IE_RXREADY        (1 << 7)
 #define  R_CFG_IE_TXEMPTY        (1 << 8)
-#define  R_CFG_WORD_SIZE(_x)     (((_x) >> 15) & 0x3)
+#define  R_CFG_WORD_SIZE_SHIFT   15      // 13 on the S5L8900 (cfg-word-size-shift)
 #define  R_CFG_WORD_SIZE_8B      0
 #define  R_CFG_WORD_SIZE_16B     1
 #define  R_CFG_WORD_SIZE_32B     2
@@ -34,8 +35,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LSPIState, S5L_SPI)
 #define  R_STATUS_TXEMPTY        (1 << 1)
 #define  R_STATUS_RXOVERFLOW     (1 << 3)
 #define  R_STATUS_COMPLETE       (1 << 22)
-#define  R_STATUS_TXFIFO_SHIFT   (6)
-#define  R_STATUS_RXFIFO_SHIFT   (11)
+#define  R_STATUS_TXFIFO_SHIFT   (6)     // 4 on the S5L8900 (status-tx-level-shift)
+#define  R_STATUS_RXFIFO_SHIFT   (11)    // 8 on the S5L8900 (status-rx-level-shift)
 
 #define  R_PIN                   0x00c
 #define  R_PIN_CS                (1 << 1)
@@ -46,7 +47,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LSPIState, S5L_SPI)
 #define R_CLKDIV_MAX            0x7ff
 #define R_RXCNT                 0x034
 #define R_WORD_DELAY            0x038
-#define R_TXCNT                 0x04c
+#define R_TXCNT                 0x04c   // not on the S5L8900 (tx-count)
 
 #define R_FIFO_TX_DEPTH         50000
 #define R_FIFO_RX_DEPTH         16
@@ -69,6 +70,15 @@ typedef struct S5LSPIState {
     uint8_t base;
     Fifo8 rx_fifo;
     Fifo8 tx_fifo;
+    QEMUTimer *xfer_timer;
+
+    // the S5L8900's differences
+    uint8_t word_size_shift;
+    uint8_t tx_level_shift;
+    uint8_t rx_level_shift;
+    uint8_t level_width;
+    uint32_t rx_fifo_depth;
+    bool tx_count;
 } S5LSPIState;
 
 void set_spi_base(uint32_t base);
