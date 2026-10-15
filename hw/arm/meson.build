@@ -126,6 +126,10 @@ arm_common_ss.add(when: 'CONFIG_S5L', if_true: files(
   's5l_usb_otg.c',
   's5l_usb_phys.c',
 ))
+arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_1G', if_true: files(
+  'ipod_touch_1g.c',
+  's5l8900_clock.c',
+))
 arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_2g.c',
   # an S5L block, but it still has the 2G's BCM4325 Wi-Fi card built in

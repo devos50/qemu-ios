@@ -732,6 +732,16 @@ config ARMSSE
 config S5L
     bool
 
+config IPOD_TOUCH_1G
+    bool
+    default y
+    depends on TCG && ARM
+    select PFLASH_CFI02
+    select EXYNOS4210_UART
+    select PL192
+    select UNIMP
+    select S5L
+
 config IPOD_TOUCH_2G
     bool
     default y
