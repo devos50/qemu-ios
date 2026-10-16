@@ -10,6 +10,8 @@
 #include "hw/arm/s5l_gpio.h"
 #include "hw/arm/s5l_sysic.h"
 #include "hw/arm/s5l_spi.h"
+#include "hw/arm/ipod_touch_multitouch.h"
+#include "ui/input.h"
 
 #define TYPE_IPOD_TOUCH_1G "iPod-Touch-1G"
 #define TYPE_IPOD_TOUCH_1G_MACHINE MACHINE_TYPE_NAME(TYPE_IPOD_TOUCH_1G)
@@ -99,6 +101,10 @@
 #define IT1G_GPIO_BUTTON_POWER_IRQ 0x2D
 #define IT1G_GPIO_BUTTON_HOME_IRQ  0x2E
 #define IT1G_GPIO_LIGHTSENSOR_IRQ  0x4C        // the device tree's als node
+// the multi-touch node (on SPI2, chip select 0) and its interrupt
+#define IT1G_GPIO_MULTITOUCH_CS    0x1804      // function-spi_cs0 of spi2
+#define IT1G_GPIO_MULTITOUCH_RESET 0x606       // function-reset
+#define IT1G_GPIO_MULTITOUCH_IRQ   0x9B
 
 #define IT1G_UART_COUNT          5
 #define IT1G_UART_STRIDE         0x4000
@@ -117,6 +123,9 @@ typedef struct {
     S5LGPIOState *gpio_state;
     DeviceState *sysic;
     S5LSPIState *spi[3];
+    IPodTouchMultitouchState *mt;
+    int touch_axis[INPUT_AXIS__MAX];    // the pointer's position, in INPUT_EVENT_ABS_MIN..MAX
+    bool touch_button;
     struct PFlashCFI02 *nor;
     uint32_t periph_port_remap;
     char *nor_path;

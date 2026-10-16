@@ -256,6 +256,51 @@ static const QemuInputHandler it1g_key_handler = {
     .event = it1g_key_event,
 };
 
+/*
+ * The touchscreen: the left mouse button puts a finger on the Z2 multi-touch controller where the pointer is, as on
+ * the 2G. The pointer takes absolute positions over the screen; the multi-touch Y axis points up.
+ */
+static void it1g_touch_event(DeviceState *dev, QemuConsole *src, QemuInputEvent *evt)
+{
+    IPodTouch1GMachineState *nms = IPOD_TOUCH_1G_MACHINE(qdev_get_machine());
+
+    switch (evt->type) {
+    case INPUT_EVENT_KIND_ABS:
+        if (evt->abs.axis < INPUT_AXIS__MAX) {
+            nms->touch_axis[evt->abs.axis] = evt->abs.value;
+        }
+        break;
+    case INPUT_EVENT_KIND_BTN:
+        if (evt->btn.button == INPUT_BUTTON_LEFT) {
+            nms->touch_button = evt->btn.down;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static void it1g_touch_sync(DeviceState *dev)
+{
+    IPodTouch1GMachineState *nms = IPOD_TOUCH_1G_MACHINE(qdev_get_machine());
+    IPodTouchMultitouchState *mt = nms->mt;
+
+    mt->touch_x = (float)nms->touch_axis[INPUT_AXIS_X] / INPUT_EVENT_ABS_MAX;
+    mt->touch_y = 1 - (float)nms->touch_axis[INPUT_AXIS_Y] / INPUT_EVENT_ABS_MAX;
+    if (nms->touch_button && !mt->touch_down) {
+        ipod_touch_multitouch_on_touch(mt);
+    } else if (!nms->touch_button && mt->touch_down) {
+        ipod_touch_multitouch_on_release(mt);
+    }
+}
+
+static const QemuInputHandler it1g_touch_handler = {
+    .name  = "iPod touch 1G touchscreen",
+    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS,
+    .event = it1g_touch_event,
+    .sync  = it1g_touch_sync,
+};
+
 static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem)
 {
     allocate_ram(sysmem, "ram", IT1G_RAM_MEM_BASE, IT1G_RAM_SIZE);
@@ -414,8 +459,8 @@ static void it1g_machine_init(MachineState *machine)
 
     /*
      * The SPI controllers: the same as the S5L8720's but with 8-byte FIFOs, the word size and the FIFO levels at
-     * other bits, and no TX count (see iBoot's driver). The LCD panel is on SPI1, the multi-touch controller on SPI2
-     * (not modelled yet); iBoot also writes to something on SPI0.
+     * other bits, and no TX count (see iBoot's driver). The LCD panel is on SPI1, the multi-touch controller on SPI2;
+     * iBoot also writes to something on SPI0.
      */
     static const struct { hwaddr base; int irq; } spis[] = {
         { IT1G_SPI0_MEM_BASE, S5L8900_SPI0_IRQ },
@@ -440,6 +485,17 @@ static void it1g_machine_init(MachineState *machine)
     dev = ssi_create_peripheral(nms->spi[1]->spi, TYPE_IPOD_TOUCH_1G_LCD_PANEL);
     qdev_connect_gpio_out(DEVICE(nms->gpio_state), GPIO_OUT_INDEX(IT1G_GPIO_LCD_CS),
                           qdev_get_gpio_in_named(dev, SSI_GPIO_CS, 0));
+    /*
+     * The same Z2 multi-touch controller as the 2G's (family 81, 15 rows by 10 columns), which the 1.1.5 driver
+     * (AppleMultitouchZ2SPI) bootloads and reads frames from the same way.
+     */
+    dev = ssi_create_peripheral(nms->spi[2]->spi, TYPE_IPOD_TOUCH_MULTITOUCH);
+    nms->mt = IPOD_TOUCH_MULTITOUCH(dev);
+    qdev_connect_gpio_out_named(dev, "irq", 0, qdev_get_gpio_in(nms->sysic, IT1G_GPIO_MULTITOUCH_IRQ));
+    qdev_connect_gpio_out(DEVICE(nms->gpio_state), GPIO_OUT_INDEX(IT1G_GPIO_MULTITOUCH_CS),
+                          qdev_get_gpio_in_named(dev, SSI_GPIO_CS, 0));
+    qdev_connect_gpio_out(DEVICE(nms->gpio_state), GPIO_OUT_INDEX(IT1G_GPIO_MULTITOUCH_RESET),
+                          qdev_get_gpio_in_named(dev, "reset", 0));
 
     // the DMA controllers, ARM PL080s; the NAND controller is peripheral 8 of DMAC0
     static const struct { hwaddr base; int irq; } dmacs[] = {
@@ -528,6 +584,7 @@ static void it1g_machine_init(MachineState *machine)
     qemu_register_reset(it1g_cpu_reset, nms);
 
     qemu_input_handler_activate(qemu_input_handler_register(nms->sysic, &it1g_key_handler));
+    qemu_input_handler_activate(qemu_input_handler_register(DEVICE(nms->mt), &it1g_touch_handler));
 }
 
 static char *it1g_get_nor(Object *obj, Error **errp)
