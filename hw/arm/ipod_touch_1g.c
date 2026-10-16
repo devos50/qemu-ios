@@ -446,6 +446,7 @@ static void it1g_machine_init(MachineState *machine)
     sysbus_mmio_map(busdev, 0, IT1G_SYSIC_MEM_BASE);
     static const int gpio_irqs[] = {
         S5L8900_GPIO_G0_IRQ, S5L8900_GPIO_G1_IRQ, S5L8900_GPIO_G2_IRQ, S5L8900_GPIO_G3_IRQ, S5L8900_GPIO_G4_IRQ,
+        S5L8900_GPIO_G5_IRQ, S5L8900_GPIO_G6_IRQ,
     };
     for (int grp = 0; grp < ARRAY_SIZE(gpio_irqs); grp++) {
         sysbus_connect_irq(busdev, grp, s5l8900_get_irq(nms, gpio_irqs[grp]));
