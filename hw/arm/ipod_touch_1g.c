@@ -27,6 +27,7 @@
 #include "hw/arm/s5l8900_lcd.h"
 #include "hw/arm/s5l8900_nand.h"
 #include "hw/arm/s5l8900_adm.h"
+#include "hw/arm/s5l8900_tvout.h"
 #include "hw/dma/pl080.h"
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
@@ -248,9 +249,6 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         { "usb-otg",    IT1G_USBOTG_MEM_BASE,   0x10000 },
         { "sdio",       IT1G_SDIO_MEM_BASE,     0x1000 },
         { "edgeic",     IT1G_EDGEIC_MEM_BASE,   0x1000 },
-        { "tvout1",     IT1G_TVOUT1_MEM_BASE,   0x1000 },
-        { "tvout2",     IT1G_TVOUT2_MEM_BASE,   0x1000 },
-        { "tvout3",     IT1G_TVOUT3_MEM_BASE,   0x1000 },
         { "mpvd",       IT1G_MPVD_MEM_BASE,     0x70000 },
         { "h264bpd",    IT1G_H264BPD_MEM_BASE,  0x1000 },
         { "usb-phys",   IT1G_USBPHYS_MEM_BASE,  0x1000 },
@@ -308,7 +306,17 @@ static void it1g_machine_init(MachineState *machine)
     nms->vic0->daisy_callback = nms->vic1;
 
     sysbus_create_simple(TYPE_S5L8900_CLOCK, IT1G_CLOCK1_MEM_BASE, NULL);
-    sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE, NULL);
+    sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE, s5l8900_get_irq(nms, S5L8900_LCD_IRQ));
+
+    // the TV out: the SDO, the mixer and the third block
+    dev = qdev_new(TYPE_S5L8900_TVOUT);
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_mmio_map(busdev, S5L8900_TVOUT_SDO, IT1G_TVOUT3_MEM_BASE);
+    sysbus_mmio_map(busdev, S5L8900_TVOUT_MIXER, IT1G_TVOUT2_MEM_BASE);
+    sysbus_mmio_map(busdev, S5L8900_TVOUT_VP, IT1G_TVOUT1_MEM_BASE);
+    sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8900_TVOUT_SDO_IRQ));
+    sysbus_connect_irq(busdev, 1, s5l8900_get_irq(nms, S5L8900_TVOUT_MIXER_IRQ));
 
     // the same MBX Lite as the S5L8720's, without the wrapper
     dev = qdev_new(TYPE_S5L_MBX);
