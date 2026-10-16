@@ -1,5 +1,6 @@
 #include "hw/arm/s5l_sysic.h"
 #include "migration/vmstate.h"
+#include "hw/core/qdev-properties.h"
 
 static uint64_t s5l_sysic_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -62,10 +63,18 @@ static void s5l_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
             s->power_id = val;
             break;
         case POWER_ONCTRL:
+            if (s->power_off_bits) {
+                s->power_state &= ~val;
+                break;
+            }
             if((val & 0x20) != 0 || (val & 0x4) != 0 || (val & POWER_ID_ADM) != 0) { break; } // make sure that we do not record the 'on' state of some devices so it appears like they are turned on immediately.
             s->power_state = val;
             break;
         case POWER_OFFCTRL:
+            if (s->power_off_bits) {
+                s->power_state |= val;
+                break;
+            }
             s->power_state = val;
             break;
         case GPIO_INTLEVEL ... (GPIO_INTLEVEL + GPIO_NUMINTGROUPS * 4):
@@ -155,11 +164,16 @@ static const VMStateDescription vmstate_s5l_sysic = {
     }
 };
 
+static const Property s5l_sysic_properties[] = {
+    DEFINE_PROP_BOOL("power-off-bits", S5LSYSICState, power_off_bits, false),
+};
+
 static void s5l_sysic_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_s5l_sysic;
+    device_class_set_props(dc, s5l_sysic_properties);
 }
 
 static const TypeInfo s5l_sysic_type_info = {

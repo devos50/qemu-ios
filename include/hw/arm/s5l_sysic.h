@@ -33,6 +33,12 @@ typedef struct S5LSYSICState {
     qemu_irq gpio_irqs[GPIO_NUMINTGROUPS];
     uint32_t power_id;
     uint32_t power_state;
+    /*
+     * The S5L8900's power controller: POWER_STATE has a bit set for each domain that is off, which writing it to
+     * POWER_ONCTRL clears and to POWER_OFFCTRL sets (the kernel waits for both). Without it, POWER_STATE holds the
+     * last mask written, as the S5L8720 has always been modelled.
+     */
+    bool power_off_bits;
 
     // GPIO
     uint32_t gpio_int_level[GPIO_NUMINTGROUPS];
