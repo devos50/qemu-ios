@@ -33,6 +33,7 @@
 #define S5L8900_LCD_IRQ         0x0D
 #define S5L8900_DMAC0_IRQ       0x10
 #define S5L8900_DMAC1_IRQ       0x11
+#define S5L8900_USB_OTG_IRQ     0x13
 #define S5L8900_I2C0_IRQ        0x15
 #define S5L8900_I2C1_IRQ        0x16
 #define S5L8900_UART0_IRQ       0x18
@@ -133,6 +134,7 @@ typedef struct {
     bool touch_button;
     struct PFlashCFI02 *nor;
     uint32_t periph_port_remap;
+    char *usb_chardev;
     char *nor_path;
     char *boot_image_path;
     char *bootrom_path;

@@ -33,6 +33,10 @@
 #include "hw/dma/pl080.h"
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
+#include "hw/arm/s5l_usb_otg.h"
+#include "hw/arm/s5l_usb_phys.h"
+#include "hw/arm/ipod_touch_pcf50633_pmu.h"
+#include "chardev/char.h"
 #include "hw/arm/s5l_mbx.h"
 #include "hw/arm/ipod_touch_aes.h"
 #include "hw/arm/ipod_touch_i2s.h"
@@ -334,12 +338,10 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
     // the blocks without a model yet
     static const struct { const char *name; hwaddr base; uint64_t size; } unimp_regions[] = {
         { "clock0",     IT1G_CLOCK0_MEM_BASE,   0x1000 },
-        { "usb-otg",    IT1G_USBOTG_MEM_BASE,   0x10000 },
         { "sdio",       IT1G_SDIO_MEM_BASE,     0x1000 },
         { "edgeic",     IT1G_EDGEIC_MEM_BASE,   0x1000 },
         { "mpvd",       IT1G_MPVD_MEM_BASE,     0x70000 },
         { "h264bpd",    IT1G_H264BPD_MEM_BASE,  0x1000 },
-        { "usb-phys",   IT1G_USBPHYS_MEM_BASE,  0x1000 },
         { "iis2",       IT1G_IIS2_MEM_BASE,     0x1000 },
         { "iis0",       IT1G_IIS0_MEM_BASE,     0x1000 },
         { "watchdog",   IT1G_WATCHDOG_MEM_BASE, 0x1000 },
@@ -391,6 +393,29 @@ static void it1g_machine_init(MachineState *machine)
     }
     nms->vic1->daisy = nms->vic0;
     nms->vic0->daisy_callback = nms->vic1;
+
+    /* The S5L8900 has the same Synopsys core configuration as the S5L8720. */
+    uint32_t usb_hwcfg[] = { 0, 0x7a8f60d0, 0x082000e8, 0x01f08024 };
+    dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8900_USB_OTG_IRQ), usb_hwcfg);
+    qdev_prop_set_bit(dev, "cable-connected", nms->usb_chardev != NULL);
+    if (nms->usb_chardev) {
+        Chardev *chr = qemu_chr_find(nms->usb_chardev);
+        if (!chr) {
+            error_report("USB chardev '%s' not found", nms->usb_chardev);
+            exit(1);
+        }
+        qdev_prop_set_chr(dev, "chardev", chr);
+    }
+    DeviceState *usb_otg = dev;
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, IT1G_USBOTG_MEM_BASE);
+
+    dev = qdev_new(TYPE_S5L_USB_PHYS);
+    qdev_prop_set_uint32(dev, "control-offset", 0x18);
+    S5L_USB_PHYS(dev)->cable_connected = nms->usb_chardev != NULL;
+    qdev_connect_gpio_out_named(dev, "link-reset", 0, qdev_get_gpio_in_named(usb_otg, "link-reset", 0));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, IT1G_USBPHYS_MEM_BASE);
 
     sysbus_create_simple(TYPE_S5L8900_CLOCK, IT1G_CLOCK1_MEM_BASE, NULL);
     DeviceState *lcd = sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE,
@@ -593,6 +618,7 @@ static void it1g_machine_init(MachineState *machine)
      * (0-127) to LEDOUT through a table that ends at 0x2e, which is full brightness here.
      */
     dev = DEVICE(i2c_slave_new("pcf50633", 0x73));
+    PCF50633(dev)->usb_present = nms->usb_chardev != NULL;
     qdev_prop_set_uint8(dev, "backlight-level-reg", 0x28);
     qdev_prop_set_uint8(dev, "backlight-ctrl-reg", 0x29);
     qdev_prop_set_uint8(dev, "backlight-level-max", 0x2e);
@@ -663,12 +689,15 @@ static void it1g_set_##field(Object *obj, const char *value, Error **errp)      
     nms->field = g_strdup(value);                                               \
 }
 
+IT1G_STR_PROPERTY(usb_chardev)
 IT1G_STR_PROPERTY(nand_disk)
 IT1G_STR_PROPERTY(nand_overlay)
 IT1G_STR_PROPERTY(nand_epoch)
 
 static void it1g_instance_init(Object *obj)
 {
+    object_property_add_str(obj, "usb-chardev", it1g_get_usb_chardev, it1g_set_usb_chardev);
+    object_property_set_description(obj, "usb-chardev", "ID of the chardev that carries the USB link to the host");
     object_property_add_str(obj, "nor", it1g_get_nor, it1g_set_nor);
     object_property_set_description(obj, "nor", "Path to the S5L8900 NOR image");
     object_property_add_str(obj, "boot-image", it1g_get_boot_image, it1g_set_boot_image);

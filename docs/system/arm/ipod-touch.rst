@@ -6,6 +6,8 @@ iPhone OS firmware:
 
 - ``iPod-Touch-2G``: the iPod touch (2nd generation), ``n72ap``, S5L8720. ``iPod-Touch`` is an alias, the
   machine's name before there was more than one.
+- ``iPod-Touch-1G``: the experimental iPod touch (1st generation), ``n45ap``, S5L8900.
+  Boots 1.1.5 from a hand-built disk/NOR with a build-specific USB notifier repair; restore is not supported yet.
 
 The device models of the SoC blocks the S5L chips share are in ``hw/arm/s5l_*.c`` (``CONFIG_S5L``); the
 external parts both boards use (the LIS302DL accelerometer) are named after the part. Everything else is the
@@ -28,14 +30,15 @@ Options (``-M <machine>,<option>=<value>,...``):
   ``nand-epoch`` is the security epoch of the NAND driver the disk was formatted for.
   On the iPod touch 1G the disk is presented in Whimory 2.1's legacy format (the one iPhone OS 1.1.x reads,
   logical pages of 2048 bytes, so the MBR's LBAs count 2048 bytes), and ``nand-epoch`` is refused: that NAND
-  driver has no security epoch. The 1G doesn't write the overlay yet (iBoot only reads).
+  driver has no security epoch. Both iBoot and the kernel read and write the 1G's overlay.
 
 ``nand=<dir>``
   A NAND kept as one file per page, the older layout. Superseded by ``nand-disk``.
 
 ``usb-chardev=<id>``
   The chardev that carries the USB link to the host: the device side of USB, so that the host can restore
-  the device and talk to it over usbmux.
+  the device and talk to it over usbmux. On the 1G this also supplies the PMU and PHY cable state and
+  the OTG B-session-valid input. An unknown chardev ID is refused.
 
 ``bootrom=<file>``
   Optional. A dump of the SoC's SecureROM to boot through. Without it the machine starts the first boot stage
