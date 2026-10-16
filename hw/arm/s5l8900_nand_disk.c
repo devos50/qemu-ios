@@ -407,3 +407,37 @@ bool s5l8900_nand_disk_read_page(S5L8900NANDDisk *disk, uint32_t bank, uint32_t 
         return read_formatted_page(disk, bank, page, data, spare);
     }
 }
+
+static void set_overlay_state(S5L8900NANDDisk *disk, uint32_t bank, uint32_t page, uint8_t state)
+{
+    disk->overlay_state[bank][page] = state;
+    if (pwrite(disk->overlay_state_fd[bank], &state, 1, page) != 1) {
+        error_report("%s: unable to write the NAND overlay state of page %u of bank %u", __func__, page, bank);
+    }
+}
+
+void s5l8900_nand_disk_program_page(S5L8900NANDDisk *disk, uint32_t bank, uint32_t page, const uint8_t *data,
+                                    const uint8_t *spare)
+{
+    if (disk->disk_fd < 0 || bank >= BANKS || page >= PAGES_PER_BANK) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: page %u of bank %u is beyond the NAND\n", __func__, page, bank);
+        return;
+    }
+    if (pwrite(disk->overlay_data_fd[bank], data, PAGE_SIZE_, (off_t)page * PAGE_SIZE_) != PAGE_SIZE_ ||
+        pwrite(disk->overlay_spare_fd[bank], spare, SPARE_SIZE, (off_t)page * SPARE_SIZE) != SPARE_SIZE) {
+        error_report("%s: unable to write page %u of bank %u to the NAND overlay", __func__, page, bank);
+        return;
+    }
+    set_overlay_state(disk, bank, page, OVERLAY_PROGRAMMED);
+}
+
+void s5l8900_nand_disk_erase_block(S5L8900NANDDisk *disk, uint32_t bank, uint32_t block)
+{
+    if (disk->disk_fd < 0 || bank >= BANKS || block >= BLOCKS_PER_BANK) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: block %u of bank %u is beyond the NAND\n", __func__, block, bank);
+        return;
+    }
+    for (uint32_t page = block * PAGES_PER_BLOCK; page < (block + 1) * PAGES_PER_BLOCK; page++) {
+        set_overlay_state(disk, bank, page, OVERLAY_ERASED);
+    }
+}

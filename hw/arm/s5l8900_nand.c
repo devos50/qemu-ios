@@ -9,7 +9,9 @@
  *
  * The chips are 8 banks of Hynix NAND, as in the 8 GB iPod touch. Their contents come from a disk image with an
  * overlay (the "disk" and "overlay" properties, s5l8900_nand_disk.c); without one every page reads as erased. The
- * commands that would change the NAND aren't modelled yet (iBoot only reads), and are logged with -d unimp.
+ * commands that would change the NAND through these registers aren't modelled (iBoot only reads), and are logged
+ * with -d unimp. The kernel doesn't use them either: its driver hands commands to the ADM (s5l8900_adm.c), which
+ * moves the pages through the FIFO as a stream (see s5l8900_nand.h) and programs and erases the overlay.
  *
  * The ECC engine checks what the FIL read, 512-byte sectors against their ECC bytes, and interrupts when it is done.
  * It doesn't compute ECC: it reports an uncorrectable error only where the sectors and their ECC bytes are all 0xff,
@@ -146,9 +148,82 @@ static void nand_transfer(S5L8900NANDState *s)
     s->fmcstat |= NAND_FMCSTAT_TRANSFER;
 }
 
+void s5l8900_nand_stream_read(S5L8900NANDState *s, uint32_t count, const uint8_t *banks, const uint32_t *pages)
+{
+    assert(count <= S5L8900_NAND_STREAM_PAGES);
+    s->stream = NAND_STREAM_READ;
+    s->stream_count = count;
+    s->stream_next = 0;
+    memcpy(s->stream_banks, banks, count);
+    memcpy(s->stream_pages, pages, count * sizeof(*pages));
+    s->fifo_len = s->fifo_pos = 0;
+}
+
+void s5l8900_nand_stream_write(S5L8900NANDState *s, uint32_t count, const uint8_t *banks, const uint32_t *pages,
+                               uint32_t stride, const uint8_t *meta, uint32_t meta_len)
+{
+    assert(count <= S5L8900_NAND_STREAM_PAGES && meta_len <= S5L8900_NAND_STREAM_META);
+    assert(stride >= S5L8900_NAND_BYTES_PER_PAGE && stride <= sizeof(s->fifo));
+    s->stream = NAND_STREAM_WRITE;
+    s->stream_count = count;
+    s->stream_next = 0;
+    s->stream_stride = stride;
+    s->stream_meta_len = meta_len;
+    memcpy(s->stream_banks, banks, count);
+    memcpy(s->stream_pages, pages, count * sizeof(*pages));
+    memcpy(s->stream_meta, meta, count * meta_len);
+    s->fifo_len = s->fifo_pos = 0;
+    if (!count) {
+        s->stream = NAND_STREAM_NONE;
+        qemu_irq_pulse(s->stream_done);
+    }
+}
+
+// the next page of a read stream into the FIFO
+static void nand_stream_refill(S5L8900NANDState *s)
+{
+    uint8_t spare[S5L8900_NAND_BYTES_PER_SPARE];
+    uint32_t n = s->stream_next++;
+
+    s5l8900_nand_disk_read_page(&s->disk, s->stream_banks[n], s->stream_pages[n], s->fifo, spare);
+    s->fifo_len = S5L8900_NAND_BYTES_PER_PAGE;
+    s->fifo_pos = 0;
+    if (s->stream_next == s->stream_count) {
+        s->stream = NAND_STREAM_NONE;
+    }
+}
+
+// a word into a write stream; the page goes to the NAND, with the meta data in its spare, once it is complete
+static void nand_stream_push(S5L8900NANDState *s, uint32_t value, unsigned size)
+{
+    uint8_t spare[S5L8900_NAND_BYTES_PER_SPARE];
+    uint32_t n = s->stream_next;
+
+    for (unsigned i = 0; i < size && s->fifo_len < s->stream_stride; i++) {
+        s->fifo[s->fifo_len++] = value >> (8 * i);
+    }
+    if (s->fifo_len < s->stream_stride) {
+        return;
+    }
+    // as the formatter lays out a spare: 12 bytes of meta data (unused ones erased), then a zero ECC
+    memset(spare, 0xff, 12);
+    memcpy(spare, s->stream_meta + n * s->stream_meta_len, s->stream_meta_len);
+    memset(spare + 12, 0, sizeof(spare) - 12);
+    s5l8900_nand_disk_program_page(&s->disk, s->stream_banks[n], s->stream_pages[n], s->fifo, spare);
+    s->fifo_len = 0;
+    if (++s->stream_next == s->stream_count) {
+        s->stream = NAND_STREAM_NONE;
+        qemu_irq_pulse(s->stream_done);
+    }
+}
+
 static uint32_t nand_fifo_pop(S5L8900NANDState *s)
 {
     uint8_t word[4];
+
+    if (s->fifo_pos >= s->fifo_len && s->stream == NAND_STREAM_READ) {
+        nand_stream_refill(s);
+    }
 
     for (int i = 0; i < sizeof(word); i++) {
         word[i] = s->fifo_pos < s->fifo_len ? s->fifo[s->fifo_pos++] : 0xff;
@@ -224,7 +299,11 @@ static void nand_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
         s->fmcstat &= ~value;
         break;
     case NAND_FMFIFO:
-        qemu_log_mask(LOG_UNIMP, "%s: writing to the NAND\n", __func__);
+        if (s->stream == NAND_STREAM_WRITE) {
+            nand_stream_push(s, value, size);
+        } else {
+            qemu_log_mask(LOG_UNIMP, "%s: writing to the NAND\n", __func__);
+        }
         break;
     case NAND_RSCTRL:
         s->rsctrl = value;
@@ -247,6 +326,7 @@ static void nand_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &nand_ops, s, TYPE_S5L8900_NAND, 0x1000);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->stream_done, "stream-done", 1);
     s->disk.disk_fd = -1;
 }
 
@@ -280,12 +360,14 @@ static void nand_reset(DeviceState *dev)
     s->column = s->row = 0;
     memset(s->page_register, 0xff, sizeof(s->page_register));
     s->fifo_len = s->fifo_pos = 0;
+    s->stream = NAND_STREAM_NONE;
+    s->stream_count = s->stream_next = 0;
 }
 
 static const VMStateDescription vmstate_s5l8900_nand = {
     .name = TYPE_S5L8900_NAND,
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(fmctrl0, S5L8900NANDState),
         VMSTATE_UINT32(fmctrl1, S5L8900NANDState),
@@ -303,6 +385,14 @@ static const VMStateDescription vmstate_s5l8900_nand = {
         VMSTATE_UINT8_ARRAY(fifo, S5L8900NANDState, S5L8900_NAND_PAGE_REGISTER),
         VMSTATE_UINT32(fifo_len, S5L8900NANDState),
         VMSTATE_UINT32(fifo_pos, S5L8900NANDState),
+        VMSTATE_UINT32(stream, S5L8900NANDState),
+        VMSTATE_UINT32(stream_count, S5L8900NANDState),
+        VMSTATE_UINT32(stream_next, S5L8900NANDState),
+        VMSTATE_UINT32(stream_stride, S5L8900NANDState),
+        VMSTATE_UINT32(stream_meta_len, S5L8900NANDState),
+        VMSTATE_UINT8_ARRAY(stream_banks, S5L8900NANDState, S5L8900_NAND_STREAM_PAGES),
+        VMSTATE_UINT32_ARRAY(stream_pages, S5L8900NANDState, S5L8900_NAND_STREAM_PAGES),
+        VMSTATE_UINT8_ARRAY(stream_meta, S5L8900NANDState, S5L8900_NAND_STREAM_PAGES * S5L8900_NAND_STREAM_META),
         VMSTATE_END_OF_LIST()
     }
 };

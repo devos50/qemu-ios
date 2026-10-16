@@ -42,6 +42,28 @@ typedef struct S5L8900NANDDisk {
 bool s5l8900_nand_disk_open(S5L8900NANDDisk *disk, const char *path, const char *overlay, Error **errp);
 // Reads a page into data and spare. Returns false if the page is erased (data and spare are then all 0xff).
 bool s5l8900_nand_disk_read_page(S5L8900NANDDisk *disk, uint32_t bank, uint32_t page, uint8_t *data, uint8_t *spare);
+// Writes a page into the overlay, and erases a block there (its pages then read as erased).
+void s5l8900_nand_disk_program_page(S5L8900NANDDisk *disk, uint32_t bank, uint32_t page, const uint8_t *data,
+                                    const uint8_t *spare);
+void s5l8900_nand_disk_erase_block(S5L8900NANDDisk *disk, uint32_t bank, uint32_t block);
+
+/*
+ * The ADM (s5l8900.adm) moves pages through the FIFO for the kernel's DMA: a read stream fills the FIFO with each
+ * page's data in turn as it is drained, a write stream programs a page each time the FIFO has taken one (the data and
+ * a pad, "stride" bytes) and pulses the "stream-done" GPIO when the last one is in.
+ */
+#define S5L8900_NAND_STREAM_PAGES       512     // the most pages an ADM command moves
+#define S5L8900_NAND_STREAM_META        16      // the most meta data bytes per page
+
+typedef enum {
+    NAND_STREAM_NONE,
+    NAND_STREAM_READ,
+    NAND_STREAM_WRITE,
+} S5L8900NANDStream;
+
+void s5l8900_nand_stream_read(S5L8900NANDState *s, uint32_t count, const uint8_t *banks, const uint32_t *pages);
+void s5l8900_nand_stream_write(S5L8900NANDState *s, uint32_t count, const uint8_t *banks, const uint32_t *pages,
+                               uint32_t stride, const uint8_t *meta, uint32_t meta_len);
 
 typedef enum {
     NAND_OUT_DATA,      // the page register, from the column
@@ -77,6 +99,17 @@ typedef struct S5L8900NANDState {
     uint8_t fifo[S5L8900_NAND_PAGE_REGISTER];
     uint32_t fifo_len;
     uint32_t fifo_pos;
+
+    // the ADM's page stream
+    uint32_t stream;
+    uint32_t stream_count;
+    uint32_t stream_next;
+    uint32_t stream_stride;
+    uint32_t stream_meta_len;
+    uint8_t stream_banks[S5L8900_NAND_STREAM_PAGES];
+    uint32_t stream_pages[S5L8900_NAND_STREAM_PAGES];
+    uint8_t stream_meta[S5L8900_NAND_STREAM_PAGES * S5L8900_NAND_STREAM_META];
+    qemu_irq stream_done;
 } S5L8900NANDState;
 
 typedef struct S5L8900NANDECCState {
