@@ -3,9 +3,9 @@
  *
  * iBoot sets up a window and reads its registers back to tell the kernel where the framebuffer is (the video boot
  * arguments: base, width and height, bytes per line, depth), so every register reads back what was written. iBoot
- * waits on nothing here. The screen shows the last window with a framebuffer and a size; which bits enable a window
- * isn't known. Formats 6-7 are 32 bits per pixel (BGRA in memory), 3-5 16 (RGB565); 8-bit and 4-bit windows aren't
- * drawn.
+ * waits on nothing here. The screen shows the last window that is on (see S5L8900_LCD_CON) with a framebuffer and a
+ * size; how the windows overlap isn't known, since only one is on at a time. Formats 6-7 are 32 bits per pixel (BGRA
+ * in memory), 3-5 16 (RGB565); 8-bit and 4-bit windows aren't drawn.
  *
  * The kernel's AppleH1CLCD takes the interrupt (0x0d): enables at 0x14, status at 0x18 (writing 1s clears them). Bit
  * 0 is raised at the end of every frame, and the driver changes the windows to the next buffer it was handed only
@@ -70,7 +70,8 @@ static void s5l8900_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsigned 
     if (addr == S5L8900_LCD_INT_ENABLE) {
         s5l8900_lcd_update_irq(s);
     }
-    if (addr >= S5L8900_LCD_WINDOW(0) && addr < S5L8900_LCD_WINDOW(S5L8900_LCD_WINDOWS)) {
+    if (addr == S5L8900_LCD_CON ||
+        (addr >= S5L8900_LCD_WINDOW(0) && addr < S5L8900_LCD_WINDOW(S5L8900_LCD_WINDOWS))) {
         s->invalidate = true;
     }
 }
@@ -124,7 +125,8 @@ static bool s5l8900_lcd_update(void *opaque)
     drawfn draw;
 
     for (n = S5L8900_LCD_WINDOWS - 1; n >= 0; n--) {
-        if (s5l8900_lcd_wnd(s, n, S5L8900_LCD_WND_BASE) && s5l8900_lcd_wnd(s, n, S5L8900_LCD_WND_SIZE)) {
+        if ((s->regs[S5L8900_LCD_CON / 4] & S5L8900_LCD_CON_WINDOW_ON(n)) &&
+            s5l8900_lcd_wnd(s, n, S5L8900_LCD_WND_BASE) && s5l8900_lcd_wnd(s, n, S5L8900_LCD_WND_SIZE)) {
             break;
         }
     }

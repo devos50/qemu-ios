@@ -12,6 +12,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8900LCDState, S5L8900_LCD)
 
 #define S5L8900_LCD_REGS        0x1000
 
+/*
+ * The control register: bits 2-6 turn the windows on, window n at bit 6 - n. iBoot clears bits 2-7, sets up window 1
+ * and sets bit 5 (0x1800a7ea in 1.1.5's iBoot, CON |= mask << 2); the kernel then sets up window 0, sets bit 6 and
+ * clears bit 5, leaving iBoot's window as it was but off. Only windows 0 and 1 have been seen.
+ */
+#define S5L8900_LCD_CON         0x08
+#define S5L8900_LCD_CON_WINDOW_ON(n) (1 << (6 - (n)))
+
 // five windows of six registers each, from 0x58 (iBoot 1.1.5's display driver)
 #define S5L8900_LCD_WINDOWS     5
 #define S5L8900_LCD_WINDOW(n)   (0x58 + (n) * 0x18)
