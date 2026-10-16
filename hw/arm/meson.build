@@ -112,8 +112,9 @@ arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 
 # The S5L blocks and parts both iPod touch machines use
 arm_common_ss.add(when: 'CONFIG_S5L', if_true: files(
-  # an S5L block under its 2G name until the rename (the same registers on both chips)
+  # S5L blocks under their 2G names until the rename (the same registers on both chips), and the Z2 multi-touch
   'ipod_touch_aes.c',
+  'ipod_touch_multitouch.c',
   'lis302dl.c',
   's5l_chipid.c',
   's5l_gpio.c',
@@ -154,7 +155,6 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_lcd.c',
   'ipod_touch_mipi_dsi.c',
   'ipod_touch_miu.c',
-  'ipod_touch_multitouch.c',
   'ipod_touch_nand.c',
   'ipod_touch_nor_spi.c',
   'ipod_touch_pcf50633_pmu.c',
