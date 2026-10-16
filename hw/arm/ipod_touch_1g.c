@@ -35,6 +35,8 @@
 #include "hw/arm/s5l_sha1.h"
 #include "hw/arm/s5l_mbx.h"
 #include "hw/arm/ipod_touch_aes.h"
+#include "hw/arm/ipod_touch_i2s.h"
+#include "hw/arm/ipod_touch_wm8758.h"
 #include "hw/arm/ipod_touch_1g_lcd_panel.h"
 #include "hw/arm/s5l_spi.h"
 #include "hw/i2c/ipod_touch_i2c.h"
@@ -339,7 +341,6 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         { "h264bpd",    IT1G_H264BPD_MEM_BASE,  0x1000 },
         { "usb-phys",   IT1G_USBPHYS_MEM_BASE,  0x1000 },
         { "iis2",       IT1G_IIS2_MEM_BASE,     0x1000 },
-        { "iis1",       IT1G_IIS1_MEM_BASE,     0x1000 },
         { "iis0",       IT1G_IIS0_MEM_BASE,     0x1000 },
         { "watchdog",   IT1G_WATCHDOG_MEM_BASE, 0x1000 },
     };
@@ -498,18 +499,34 @@ static void it1g_machine_init(MachineState *machine)
     qdev_connect_gpio_out(DEVICE(nms->gpio_state), GPIO_OUT_INDEX(IT1G_GPIO_MULTITOUCH_RESET),
                           qdev_get_gpio_in_named(dev, "reset", 0));
 
-    // the DMA controllers, ARM PL080s; the NAND controller is peripheral 8 of DMAC0
-    static const struct { hwaddr base; int irq; } dmacs[] = {
-        { IT1G_DMAC0_MEM_BASE, S5L8900_DMAC0_IRQ }, { IT1G_DMAC1_MEM_BASE, S5L8900_DMAC1_IRQ },
+    // the DMA controllers, ARM PL080s; the NAND controller is peripheral 8 of DMAC0, i2s1 (TX, RX) 2 and 3 of DMAC1
+    static const struct { hwaddr base; int irq; uint32_t dreq_mask; } dmacs[] = {
+        { IT1G_DMAC0_MEM_BASE, S5L8900_DMAC0_IRQ, 0 },
+        { IT1G_DMAC1_MEM_BASE, S5L8900_DMAC1_IRQ, (1 << IT1G_DMAC1_I2S1_TX_DREQ) | (1 << IT1G_DMAC1_I2S1_RX_DREQ) },
     };
+    DeviceState *dmac[ARRAY_SIZE(dmacs)];
     for (int i = 0; i < ARRAY_SIZE(dmacs); i++) {
-        dev = qdev_new(TYPE_PL080);
+        dev = dmac[i] = qdev_new(TYPE_PL080);
         object_property_set_link(OBJECT(dev), "downstream", OBJECT(sysmem), &error_fatal);
+        qdev_prop_set_uint32(dev, "dreq-mask", dmacs[i].dreq_mask);
         busdev = SYS_BUS_DEVICE(dev);
         sysbus_realize_and_unref(busdev, &error_fatal);
         sysbus_mmio_map(busdev, 0, dmacs[i].base);
         sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, dmacs[i].irq));
     }
+
+    // i2s1, which feeds the audio codec (the 2G's I2S model: the same AppleS5L8900XI2SController drives both)
+    dev = qdev_new(TYPE_IPOD_TOUCH_I2S);
+    IPodTouchI2SState *i2s = IPOD_TOUCH_I2S(dev);
+    if (machine->audiodev) {
+        qdev_prop_set_string(dev, "audiodev", machine->audiodev);
+    }
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_mmio_map(busdev, 0, IT1G_IIS1_MEM_BASE);
+    qdev_connect_gpio_out_named(dev, "sync", 0, qdev_get_gpio_in(nms->sysic, IT1G_GPIO_I2S1_IRQ));
+    qdev_connect_gpio_out_named(dev, "dma-tx", 0, qdev_get_gpio_in_named(dmac[1], "dreq", IT1G_DMAC1_I2S1_TX_DREQ));
+    qdev_connect_gpio_out_named(dev, "dma-rx", 0, qdev_get_gpio_in_named(dmac[1], "dreq", IT1G_DMAC1_I2S1_RX_DREQ));
 
     // the NAND and its ECC engine
     if (nms->nand_epoch) {
@@ -551,7 +568,7 @@ static void it1g_machine_init(MachineState *machine)
         sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8900_UART0_IRQ + i));
     }
 
-    // the I2C buses: the accelerometer and the light sensor on I2C0, the PMU on I2C1
+    // the I2C buses: the accelerometer and the light sensor on I2C0, the PMU and the audio codec on I2C1
     static const struct { hwaddr base; int irq; } i2cs[] = {
         { IT1G_I2C0_MEM_BASE, S5L8900_I2C0_IRQ }, { IT1G_I2C1_MEM_BASE, S5L8900_I2C1_IRQ },
     };
@@ -581,6 +598,16 @@ static void it1g_machine_init(MachineState *machine)
     qdev_prop_set_uint8(dev, "backlight-level-max", 0x2e);
     i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c[1]->bus, &error_fatal);
     qdev_connect_gpio_out_named(dev, "backlight", 0, qdev_get_gpio_in_named(lcd, "backlight", 0));
+
+    // the audio codec, which plays what i2s1 sends
+    dev = DEVICE(i2c_slave_new(TYPE_WM8758, 0x1A));
+    object_property_set_link(OBJECT(dev), "i2s", OBJECT(i2s), &error_fatal);
+    i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c[1]->bus, &error_fatal);
+    /*
+     * The headphone jack, which AppleWM8758Audio reads as in while the pad is high. Without headphones the driver mutes
+     * them and only the piezo clicker sounds; the host's audio output stands in for the headphones, so they are in.
+     */
+    gpio_set_on(nms->gpio_state->gpio_state, IT1G_GPIO_HP_DETECT);
 
     qemu_register_reset(it1g_cpu_reset, nms);
 
@@ -664,6 +691,7 @@ static void it1g_machine_class_init(ObjectClass *klass, const void *data)
     mc->init = it1g_machine_init;
     mc->max_cpus = 1;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm1176");
+    machine_add_audiodev_property(mc);
 }
 
 static const TypeInfo it1g_machine_info = {

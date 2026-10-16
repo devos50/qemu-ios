@@ -105,6 +105,11 @@
 #define IT1G_GPIO_MULTITOUCH_CS    0x1804      // function-spi_cs0 of spi2
 #define IT1G_GPIO_MULTITOUCH_RESET 0x606       // function-reset
 #define IT1G_GPIO_MULTITOUCH_IRQ   0x9B
+// i2s1 (the device tree's i2s1 node): its frame sync interrupt, and its DMA requests on DMAC1 (dma-channels)
+#define IT1G_GPIO_I2S1_IRQ         0xAA
+#define IT1G_DMAC1_I2S1_TX_DREQ    2
+#define IT1G_DMAC1_I2S1_RX_DREQ    3
+#define IT1G_GPIO_HP_DETECT        0x1205      // the codec's function-hp_detect
 
 #define IT1G_UART_COUNT          5
 #define IT1G_UART_STRIDE         0x4000
