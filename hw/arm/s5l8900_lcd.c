@@ -10,6 +10,9 @@
  * The kernel's AppleH1CLCD takes the interrupt (0x0d): enables at 0x14, status at 0x18 (writing 1s clears them). Bit
  * 0 is raised at the end of every frame, and the driver changes the windows to the next buffer it was handed only
  * then; bits 8-13 report underruns, which don't happen here. The model raises bit 0 at 60 Hz.
+ *
+ * The backlight is the PMU's; its "backlight" line sets the brightness the pixels are scaled by, so the screen goes
+ * dark when the device locks.
  */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
@@ -79,18 +82,31 @@ static const MemoryRegionOps s5l8900_lcd_ops = {
     .valid = { .min_access_size = 4, .max_access_size = 4 },
 };
 
+#define DIM(c, b) ((c) * (b) / 255)
+
 static void s5l8900_lcd_draw_32(void *opaque, uint8_t *d, const uint8_t *src, int width, int deststep)
 {
+    int b = ((S5L8900LCDState *)opaque)->brightness;
     for (int x = 0; x < width; x++, src += 4, d += 4) {
-        *(uint32_t *)d = rgb_to_pixel32(src[2], src[1], src[0]);
+        *(uint32_t *)d = rgb_to_pixel32(DIM(src[2], b), DIM(src[1], b), DIM(src[0], b));
     }
 }
 
 static void s5l8900_lcd_draw_16(void *opaque, uint8_t *d, const uint8_t *src, int width, int deststep)
 {
+    int b = ((S5L8900LCDState *)opaque)->brightness;
     for (int x = 0; x < width; x++, src += 2, d += 4) {
         uint16_t v = lduw_le_p(src);
-        *(uint32_t *)d = rgb_to_pixel32((v >> 8) & 0xf8, (v >> 3) & 0xfc, (v << 3) & 0xf8);
+        *(uint32_t *)d = rgb_to_pixel32(DIM((v >> 8) & 0xf8, b), DIM((v >> 3) & 0xfc, b), DIM((v << 3) & 0xf8, b));
+    }
+}
+
+static void s5l8900_lcd_set_backlight(void *opaque, int n, int level)
+{
+    S5L8900LCDState *s = opaque;
+    if (s->brightness != level) {
+        s->brightness = level;
+        s->invalidate = true;
     }
 }
 
@@ -161,6 +177,7 @@ static void s5l8900_lcd_reset(DeviceState *dev)
     s->status = 0;
     s->shown = -1;
     s->invalidate = true;
+    s->brightness = 255;
     timer_mod(s->frame_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + S5L8900_LCD_FRAME_NS);
 }
 
@@ -172,6 +189,7 @@ static void s5l8900_lcd_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, s5l8900_lcd_frame, s);
+    qdev_init_gpio_in_named(DEVICE(obj), s5l8900_lcd_set_backlight, "backlight", 1);
 }
 
 static void s5l8900_lcd_realize(DeviceState *dev, Error **errp)
@@ -193,12 +211,13 @@ static int s5l8900_lcd_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_s5l8900_lcd = {
     .name = TYPE_S5L8900_LCD,
-    .version_id = 2,
-    .minimum_version_id = 2,
+    .version_id = 3,
+    .minimum_version_id = 3,
     .post_load = s5l8900_lcd_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, S5L8900LCDState, S5L8900_LCD_REGS / 4),
         VMSTATE_UINT32(status, S5L8900LCDState),
+        VMSTATE_INT32(brightness, S5L8900LCDState),
         VMSTATE_TIMER_PTR(frame_timer, S5L8900LCDState),
         VMSTATE_END_OF_LIST()
     }

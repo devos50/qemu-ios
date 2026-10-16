@@ -4,11 +4,14 @@
 #include "qemu/cutils.h"
 #include "system/rtc.h"
 #include "migration/vmstate.h"
+#include "hw/core/qdev-properties.h"
 
 static void pcf50633_update_backlight(Pcf50633State *s)
 {
-    uint32_t level = MIN(s->backlight_level, PMU_BACKLIGHT_LEVEL_MAX);
-    lcd_changebrightness((s->backlight_ctrl & PMU_BACKLIGHT_CTRL_ON) ? level * 255 / PMU_BACKLIGHT_LEVEL_MAX : 0);
+    uint32_t level = MIN(s->backlight_level, s->backlight_level_max);
+    int brightness = (s->backlight_ctrl & PMU_BACKLIGHT_CTRL_ON) ? level * 255 / s->backlight_level_max : 0;
+    lcd_changebrightness(brightness);
+    qemu_set_irq(s->backlight, brightness);
 }
 
 // The first byte of a write sets the register pointer, further bytes write to
@@ -30,7 +33,11 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
     Pcf50633State *s = PCF50633(i2c);
     int res = 0;
 
-    switch(s->cmd) {
+    if (s->cmd == s->backlight_level_reg) {
+        res = s->backlight_level;
+    } else if (s->cmd == s->backlight_ctrl_reg) {
+        res = s->backlight_ctrl;
+    } else switch(s->cmd) {
         case PMU_STATUS_A:
             res = s->usb_present ? PMU_STATUS_A_USB_PRESENT : 0;
             break;
@@ -51,12 +58,6 @@ static uint8_t pcf50633_recv(I2CSlave *i2c)
             break;
         case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
             res = s->rtc_offset[s->cmd - PMU_RTC_OFFSET];
-            break;
-        case PMU_BACKLIGHT_LEVEL:
-            res = s->backlight_level;
-            break;
-        case PMU_BACKLIGHT_CTRL:
-            res = s->backlight_ctrl;
             break;
         case 0x69:
             res = 0; // boot count error/panic
@@ -85,15 +86,13 @@ static int pcf50633_send(I2CSlave *i2c, uint8_t data)
         return 0;
     }
 
-    switch(s->cmd) {
-        case PMU_BACKLIGHT_LEVEL:
-            s->backlight_level = data;
-            pcf50633_update_backlight(s);
-            break;
-        case PMU_BACKLIGHT_CTRL:
-            s->backlight_ctrl = data;
-            pcf50633_update_backlight(s);
-            break;
+    if (s->cmd == s->backlight_level_reg) {
+        s->backlight_level = data;
+        pcf50633_update_backlight(s);
+    } else if (s->cmd == s->backlight_ctrl_reg) {
+        s->backlight_ctrl = data;
+        pcf50633_update_backlight(s);
+    } else switch(s->cmd) {
         case PMU_RTC_OFFSET ... PMU_RTC_OFFSET + 3:
             s->rtc_offset[s->cmd - PMU_RTC_OFFSET] = data;
             break;
@@ -110,6 +109,8 @@ static void pcf50633_init(Object *obj)
     // full brightness until the bootloader programs the backlight
     s->backlight_level = PMU_BACKLIGHT_LEVEL_MAX;
     s->backlight_ctrl = PMU_BACKLIGHT_CTRL_ON;
+    // the brightness (0-255), for a display that doesn't take it from lcd_changebrightness()
+    qdev_init_gpio_out_named(DEVICE(obj), &s->backlight, "backlight", 1);
 }
 
 static int pcf50633_post_load(void *opaque, int version_id)
@@ -136,12 +137,23 @@ static const VMStateDescription vmstate_pcf50633 = {
     }
 };
 
+/*
+ * Where the backlight is: the D1759's level and control registers by default. The iPod touch 1G's PCF50635 has its
+ * level in LEDOUT (0x28) and switches it on with bit 0 of LEDENA (0x29).
+ */
+static const Property pcf50633_properties[] = {
+    DEFINE_PROP_UINT8("backlight-level-reg", Pcf50633State, backlight_level_reg, PMU_BACKLIGHT_LEVEL),
+    DEFINE_PROP_UINT8("backlight-ctrl-reg", Pcf50633State, backlight_ctrl_reg, PMU_BACKLIGHT_CTRL),
+    DEFINE_PROP_UINT8("backlight-level-max", Pcf50633State, backlight_level_max, PMU_BACKLIGHT_LEVEL_MAX),
+};
+
 static void pcf50633_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
     dc->vmsd = &vmstate_pcf50633;
+    device_class_set_props(dc, pcf50633_properties);
     k->event = pcf50633_event;
     k->recv = pcf50633_recv;
     k->send = pcf50633_send;

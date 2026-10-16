@@ -39,6 +39,10 @@ typedef struct Pcf50633State {
 	uint8_t rtc_offset[4];
 	uint8_t backlight_level;
 	uint8_t backlight_ctrl;
+	uint8_t backlight_level_reg;
+	uint8_t backlight_ctrl_reg;
+	uint8_t backlight_level_max;
+	qemu_irq backlight;
 } Pcf50633State;
 
 #endif

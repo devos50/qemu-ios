@@ -41,6 +41,7 @@ typedef struct S5L8900LCDState {
     MemoryRegionSection fbsection;
     bool invalidate;
     int shown;      // the window on screen, -1 for none
+    int32_t brightness; // of the backlight, 0-255 (the PMU's "backlight" line)
     uint32_t regs[S5L8900_LCD_REGS / 4];
 } S5L8900LCDState;
 
