@@ -26,6 +26,7 @@
 #include "hw/arm/s5l8900_clock.h"
 #include "hw/arm/s5l8900_lcd.h"
 #include "hw/arm/s5l8900_nand.h"
+#include "hw/arm/s5l8900_adm.h"
 #include "hw/dma/pl080.h"
 #include "hw/arm/s5l_chipid.h"
 #include "hw/arm/s5l_sha1.h"
@@ -245,7 +246,6 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
     static const struct { const char *name; hwaddr base; uint64_t size; } unimp_regions[] = {
         { "clock0",     IT1G_CLOCK0_MEM_BASE,   0x1000 },
         { "usb-otg",    IT1G_USBOTG_MEM_BASE,   0x10000 },
-        { "adm",        IT1G_ADM_MEM_BASE,      0x1000 },
         { "sdio",       IT1G_SDIO_MEM_BASE,     0x1000 },
         { "edgeic",     IT1G_EDGEIC_MEM_BASE,   0x1000 },
         { "tvout1",     IT1G_TVOUT1_MEM_BASE,   0x1000 },
@@ -418,6 +418,16 @@ static void it1g_machine_init(MachineState *machine)
     sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, IT1G_NAND_MEM_BASE);
     sysbus_create_simple(TYPE_S5L8900_NAND_ECC, IT1G_NAND_ECC_MEM_BASE, s5l8900_get_irq(nms, S5L8900_NAND_ECC_IRQ));
+
+    // the ADM, which drives the NAND for the kernel
+    DeviceState *nand = dev;
+    dev = qdev_new(TYPE_S5L8900_ADM);
+    object_property_set_link(OBJECT(dev), "nand", OBJECT(nand), &error_fatal);
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
+    sysbus_mmio_map(busdev, 0, IT1G_ADM_MEM_BASE);
+    sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8900_ADM_IRQ));
+    qdev_connect_gpio_out_named(nand, "stream-done", 0, qdev_get_gpio_in_named(dev, "stream-done", 0));
 
     // Samsung UARTs, like the Exynos one
     for (int i = 0; i < IT1G_UART_COUNT; i++) {

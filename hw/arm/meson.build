@@ -132,6 +132,7 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_1G', if_true: files(
   's5l8900_bootrom.c',
   's5l8900_nand.c',
   's5l8900_nand_disk.c',
+  's5l8900_adm.c',
   's5l8900_clock.c',
   's5l8900_lcd.c',
 ))
