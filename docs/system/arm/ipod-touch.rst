@@ -64,7 +64,7 @@ Input:
 
 - The screen takes absolute pointer events, with the left button as a touch.
 - Keys: ``h`` home, ``p`` power, ``+`` and ``-`` volume up and down, ``r`` rotates the device a quarter turn,
-  ``m`` mutes the host's audio.
+  ``m`` mutes the host's audio. The iPod touch 1G has only ``h`` and ``p`` so far (it has no volume buttons).
 
 Running and saving:
 

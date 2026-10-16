@@ -92,6 +92,13 @@
 
 #define IT1G_GPIO_FSEL           0x320         // the pin configuration register (0x1e0 on the S5L8720)
 #define IT1G_GPIO_LCD_CS         0x1800        // the LCD panel's chip select, on SPI1
+// the buttons (the device tree's buttons node: function-button_hold and _menu, read high while pressed) and their
+// GPIO interrupts
+#define IT1G_GPIO_BUTTON_POWER   0x1605
+#define IT1G_GPIO_BUTTON_HOME    0x1606
+#define IT1G_GPIO_BUTTON_POWER_IRQ 0x2D
+#define IT1G_GPIO_BUTTON_HOME_IRQ  0x2E
+#define IT1G_GPIO_LIGHTSENSOR_IRQ  0x4C        // the device tree's als node
 
 #define IT1G_UART_COUNT          5
 #define IT1G_UART_STRIDE         0x4000
@@ -108,6 +115,7 @@ typedef struct {
     PL192State *vic1;
     S5LTimerState *timer1;
     S5LGPIOState *gpio_state;
+    DeviceState *sysic;
     S5LSPIState *spi[3];
     struct PFlashCFI02 *nor;
     uint32_t periph_port_remap;

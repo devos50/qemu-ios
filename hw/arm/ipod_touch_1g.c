@@ -21,6 +21,8 @@
 #include "system/system.h"
 #include "system/reset.h"
 #include "target/arm/cpregs.h"
+#include "ui/input.h"
+#include "standard-headers/linux/input-event-codes.h"
 #include "hw/arm/ipod_touch_1g.h"
 #include "hw/arm/s5l8900_bootrom.h"
 #include "hw/arm/s5l8900_clock.h"
@@ -215,6 +217,45 @@ static void it1g_cpu_reset(void *opaque)
     cpu_set_pc(cs, IT1G_SRAM_MEM_BASE);
 }
 
+/*
+ * The power (hold) and home (menu) buttons, on the P and H keys as on the 2G. A press or release changes the pad and
+ * interrupts on both edges, as the kernel's buttons driver expects.
+ */
+static void it1g_key_event(DeviceState *dev, QemuConsole *src, QemuInputEvent *evt)
+{
+    IPodTouch1GMachineState *nms = IPOD_TOUCH_1G_MACHINE(qdev_get_machine());
+    uint32_t gpio;
+    int irq;
+
+    switch (evt->key.key) {
+    case KEY_P:
+        gpio = IT1G_GPIO_BUTTON_POWER;
+        irq = IT1G_GPIO_BUTTON_POWER_IRQ;
+        break;
+    case KEY_H:
+        gpio = IT1G_GPIO_BUTTON_HOME;
+        irq = IT1G_GPIO_BUTTON_HOME_IRQ;
+        break;
+    default:
+        return;
+    }
+    if (evt->key.down == gpio_is_on(nms->gpio_state->gpio_state, gpio)) {
+        return;     // a key repeat
+    }
+    if (evt->key.down) {
+        gpio_set_on(nms->gpio_state->gpio_state, gpio);
+    } else {
+        gpio_set_off(nms->gpio_state->gpio_state, gpio);
+    }
+    qemu_irq_pulse(qdev_get_gpio_in(nms->sysic, irq));
+}
+
+static const QemuInputHandler it1g_key_handler = {
+    .name  = "iPod touch 1G buttons",
+    .mask  = INPUT_EVENT_MASK_KEY,
+    .event = it1g_key_event,
+};
+
 static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem)
 {
     allocate_ram(sysmem, "ram", IT1G_RAM_MEM_BASE, IT1G_RAM_SIZE);
@@ -306,7 +347,8 @@ static void it1g_machine_init(MachineState *machine)
     nms->vic0->daisy_callback = nms->vic1;
 
     sysbus_create_simple(TYPE_S5L8900_CLOCK, IT1G_CLOCK1_MEM_BASE, NULL);
-    sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE, s5l8900_get_irq(nms, S5L8900_LCD_IRQ));
+    DeviceState *lcd = sysbus_create_simple(TYPE_S5L8900_LCD, IT1G_DISPLAY_MEM_BASE,
+                                            s5l8900_get_irq(nms, S5L8900_LCD_IRQ));
 
     // the TV out: the SDO, the mixer and the third block
     dev = qdev_new(TYPE_S5L8900_TVOUT);
@@ -352,6 +394,8 @@ static void it1g_machine_init(MachineState *machine)
     nms->timer1 = S5L_TIMER(dev);
 
     dev = qdev_new(TYPE_S5L_SYSIC);
+    nms->sysic = dev;
+    qdev_prop_set_bit(dev, "power-off-bits", true);
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, IT1G_SYSIC_MEM_BASE);
@@ -450,7 +494,7 @@ static void it1g_machine_init(MachineState *machine)
         sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, S5L8900_UART0_IRQ + i));
     }
 
-    // the I2C buses: the accelerometer on I2C0, the PMU on I2C1
+    // the I2C buses: the accelerometer and the light sensor on I2C0, the PMU on I2C1
     static const struct { hwaddr base; int irq; } i2cs[] = {
         { IT1G_I2C0_MEM_BASE, S5L8900_I2C0_IRQ }, { IT1G_I2C1_MEM_BASE, S5L8900_I2C1_IRQ },
     };
@@ -465,9 +509,25 @@ static void it1g_machine_init(MachineState *machine)
         sysbus_connect_irq(busdev, 0, s5l8900_get_irq(nms, i2cs[i].irq));
     }
     i2c_slave_create_simple(i2c[0]->bus, "lis302dl", 0x1D);
-    i2c_slave_create_simple(i2c[1]->bus, "pcf50633", 0x73);
+    // the ambient light sensor, whose reading auto-brightness follows (dark without it)
+    dev = DEVICE(i2c_slave_new("isl29003dl", 0x44));
+    object_property_add_child(OBJECT(machine), "lightsensor", OBJECT(dev));
+    i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c[0]->bus, &error_fatal);
+    qdev_connect_gpio_out(dev, 0, qdev_get_gpio_in(nms->sysic, IT1G_GPIO_LIGHTSENSOR_IRQ));
+    /*
+     * The PMU is a PCF50635, with its backlight in the LED registers. ApplePCF50635PMUBacklight maps its brightness
+     * (0-127) to LEDOUT through a table that ends at 0x2e, which is full brightness here.
+     */
+    dev = DEVICE(i2c_slave_new("pcf50633", 0x73));
+    qdev_prop_set_uint8(dev, "backlight-level-reg", 0x28);
+    qdev_prop_set_uint8(dev, "backlight-ctrl-reg", 0x29);
+    qdev_prop_set_uint8(dev, "backlight-level-max", 0x2e);
+    i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c[1]->bus, &error_fatal);
+    qdev_connect_gpio_out_named(dev, "backlight", 0, qdev_get_gpio_in_named(lcd, "backlight", 0));
 
     qemu_register_reset(it1g_cpu_reset, nms);
+
+    qemu_input_handler_activate(qemu_input_handler_register(nms->sysic, &it1g_key_handler));
 }
 
 static char *it1g_get_nor(Object *obj, Error **errp)
