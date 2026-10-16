@@ -24,7 +24,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5LGPIOState, S5L_GPIO)
 #define GPIO_I2S0_IRQ           0x2C // i2s0 frame sync
 #define GPIO_MULTITOUCH_IRQ     0x6D
 
-#define NUM_GPIO_PADS 0xD // pads 0-12, read at 0x24 + 0x20 * pad
+// Pads read at 0x4 + 0x20 * pad: 0-12 on the S5L8720, 0-0x18 on the S5L8900 (up to its pin configuration register)
+#define NUM_GPIO_PADS 0x19
+#define NUM_GPIO_PADS_S5L8720 0xD
 #define NUM_GPIO_PINS 0x20
 
 // Output lines, indexed by (pad << 3) | pin, driven through the pin configuration register (fsel-offset)

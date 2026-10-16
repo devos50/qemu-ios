@@ -30,6 +30,10 @@ static uint64_t s5l_gpio_read(void *opaque, hwaddr addr, unsigned size)
         case 0x24 ... 0x184:
             return s->gpio_state[GPIOADDR2PAD(addr)];
         default:
+            // the S5L8900's pads past the S5L8720's
+            if ((addr & 0x1f) == 4 && GPIOADDR2PAD(addr) < NUM_GPIO_PADS && addr < s->fsel_offset) {
+                return s->gpio_state[GPIOADDR2PAD(addr)];
+            }
             break;
     }
 
@@ -72,13 +76,41 @@ static void s5l_gpio_init(Object *obj)
     qdev_init_gpio_out(dev, s->outputs, ARRAY_SIZE(s->outputs));
 }
 
+static bool s5l_gpio_extra_pads_needed(void *opaque)
+{
+    S5LGPIOState *s = opaque;
+    for (int i = NUM_GPIO_PADS_S5L8720; i < NUM_GPIO_PADS; i++) {
+        if (s->gpio_state[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// the S5L8900's pads past the S5L8720's, in a subsection so that the S5L8720's snapshots keep their format
+static const VMStateDescription vmstate_s5l_gpio_extra_pads = {
+    .name = TYPE_S5L_GPIO "/extra-pads",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = s5l_gpio_extra_pads_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_SUB_ARRAY(gpio_state, S5LGPIOState, NUM_GPIO_PADS_S5L8720,
+                                 NUM_GPIO_PADS - NUM_GPIO_PADS_S5L8720),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_s5l_gpio = {
     .name = TYPE_S5L_GPIO,
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32_ARRAY(gpio_state, S5LGPIOState, NUM_GPIO_PADS),
+        VMSTATE_UINT32_SUB_ARRAY(gpio_state, S5LGPIOState, 0, NUM_GPIO_PADS_S5L8720),
         VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription * const []) {
+        &vmstate_s5l_gpio_extra_pads,
+        NULL
     }
 };
 
