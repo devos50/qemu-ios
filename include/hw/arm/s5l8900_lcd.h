@@ -5,6 +5,7 @@
 #include "hw/core/sysbus.h"
 #include "ui/console.h"
 #include "hw/display/framebuffer.h"
+#include "qemu/timer.h"
 
 #define TYPE_S5L8900_LCD "s5l8900.lcd"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8900LCDState, S5L8900_LCD)
@@ -20,6 +21,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8900LCDState, S5L8900_LCD)
 #define S5L8900_LCD_WND_SIZE    0x0c  // width << 16 | height
 #define S5L8900_LCD_WND_QLEN    0x10
 
+// the interrupt: enables, and the status, which writing 1s clears
+#define S5L8900_LCD_INT_ENABLE  0x14
+#define S5L8900_LCD_INT_STATUS  0x18
+#define S5L8900_LCD_INT_FRAME   (1 << 0)
+#define S5L8900_LCD_FRAME_NS    (NANOSECONDS_PER_SECOND / 60)
+
 #define S5L8900_LCD_WIDTH       320
 #define S5L8900_LCD_HEIGHT      480
 
@@ -27,6 +34,9 @@ typedef struct S5L8900LCDState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     MemoryRegion *sysmem;
+    qemu_irq irq;
+    QEMUTimer *frame_timer;
+    uint32_t status;
     QemuConsole *con;
     MemoryRegionSection fbsection;
     bool invalidate;

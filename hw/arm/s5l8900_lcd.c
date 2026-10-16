@@ -5,13 +5,18 @@
  * arguments: base, width and height, bytes per line, depth), so every register reads back what was written. iBoot
  * waits on nothing here. The screen shows the last window with a framebuffer and a size; which bits enable a window
  * isn't known. Formats 6-7 are 32 bits per pixel (BGRA in memory), 3-5 16 (RGB565); 8-bit and 4-bit windows aren't
- * drawn. No interrupt yet.
+ * drawn.
+ *
+ * The kernel's AppleH1CLCD takes the interrupt (0x0d): enables at 0x14, status at 0x18 (writing 1s clears them). Bit
+ * 0 is raised at the end of every frame, and the driver changes the windows to the next buffer it was handed only
+ * then; bits 8-13 report underruns, which don't happen here. The model raises bit 0 at 60 Hz.
  */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "migration/vmstate.h"
 #include "system/address-spaces.h"
 #include "ui/pixel_ops.h"
+#include "hw/core/irq.h"
 #include "hw/arm/s5l8900_lcd.h"
 
 static uint32_t s5l8900_lcd_wnd(S5L8900LCDState *s, int n, hwaddr reg)
@@ -25,16 +30,43 @@ static int s5l8900_lcd_bpp(uint32_t con)
     return bpp[(con >> 8) & 7];
 }
 
+static void s5l8900_lcd_update_irq(S5L8900LCDState *s)
+{
+    qemu_set_irq(s->irq, (s->status & s->regs[S5L8900_LCD_INT_ENABLE / 4]) != 0);
+}
+
+static void s5l8900_lcd_frame(void *opaque)
+{
+    S5L8900LCDState *s = opaque;
+
+    s->status |= S5L8900_LCD_INT_FRAME;
+    s5l8900_lcd_update_irq(s);
+    timer_mod(s->frame_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + S5L8900_LCD_FRAME_NS);
+}
+
 static uint64_t s5l8900_lcd_read(void *opaque, hwaddr addr, unsigned size)
 {
     S5L8900LCDState *s = opaque;
+
+    if (addr == S5L8900_LCD_INT_STATUS) {
+        return s->status;
+    }
     return s->regs[addr / 4];
 }
 
 static void s5l8900_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     S5L8900LCDState *s = opaque;
+
+    if (addr == S5L8900_LCD_INT_STATUS) {
+        s->status &= ~val;
+        s5l8900_lcd_update_irq(s);
+        return;
+    }
     s->regs[addr / 4] = val;
+    if (addr == S5L8900_LCD_INT_ENABLE) {
+        s5l8900_lcd_update_irq(s);
+    }
     if (addr >= S5L8900_LCD_WINDOW(0) && addr < S5L8900_LCD_WINDOW(S5L8900_LCD_WINDOWS)) {
         s->invalidate = true;
     }
@@ -126,8 +158,10 @@ static void s5l8900_lcd_reset(DeviceState *dev)
     S5L8900LCDState *s = S5L8900_LCD(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
+    s->status = 0;
     s->shown = -1;
     s->invalidate = true;
+    timer_mod(s->frame_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + S5L8900_LCD_FRAME_NS);
 }
 
 static void s5l8900_lcd_init(Object *obj)
@@ -136,6 +170,8 @@ static void s5l8900_lcd_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &s5l8900_lcd_ops, s, TYPE_S5L8900_LCD, S5L8900_LCD_REGS);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
+    s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, s5l8900_lcd_frame, s);
 }
 
 static void s5l8900_lcd_realize(DeviceState *dev, Error **errp)
@@ -157,11 +193,13 @@ static int s5l8900_lcd_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_s5l8900_lcd = {
     .name = TYPE_S5L8900_LCD,
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .post_load = s5l8900_lcd_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, S5L8900LCDState, S5L8900_LCD_REGS / 4),
+        VMSTATE_UINT32(status, S5L8900LCDState),
+        VMSTATE_TIMER_PTR(frame_timer, S5L8900LCDState),
         VMSTATE_END_OF_LIST()
     }
 };
