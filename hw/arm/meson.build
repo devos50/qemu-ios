@@ -114,6 +114,7 @@ arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 arm_common_ss.add(when: 'CONFIG_S5L', if_true: files(
   # S5L blocks under their 2G names until the rename (the same registers on both chips), and the Z2 multi-touch
   'ipod_touch_aes.c',
+  'ipod_touch_i2s.c',
   'ipod_touch_multitouch.c',
   'lis302dl.c',
   's5l_chipid.c',
@@ -150,7 +151,6 @@ arm_common_ss.add(when: 'CONFIG_IPOD_TOUCH_2G', if_true: files(
   'ipod_touch_clock.c',
   'ipod_touch_cs42l58.c',
   'ipod_touch_fmss.c',
-  'ipod_touch_i2s.c',
   'ipod_touch_isl29003dl.c',
   'ipod_touch_lcd.c',
   'ipod_touch_mipi_dsi.c',
