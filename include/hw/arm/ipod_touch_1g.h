@@ -43,6 +43,8 @@
 #define S5L8900_GPIO_G0_IRQ     0x21
 #define S5L8900_ADM_IRQ         0x25
 #define S5L8900_TVOUT_MIXER_IRQ 0x26
+#define S5L8900_AES_IRQ         0x27
+#define S5L8900_SHA1_IRQ        0x28
 #define S5L8900_NAND_ECC_IRQ    0x2B
 
 #define IT1G_RAM_MEM_BASE        0x08000000

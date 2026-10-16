@@ -83,6 +83,7 @@ typedef struct IPodTouchAESState
     AES_KEY key;
     uint32_t dma_mask;      // applied to the segment addresses
     bool big_endian_words;  // the key and IV registers hold big-endian words
+    bool gid_key_837;       // S5L8900's known GID derivation for 8900 containers
 } IPodTouchAESState;
 
 /*

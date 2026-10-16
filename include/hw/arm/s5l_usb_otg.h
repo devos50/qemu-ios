@@ -239,6 +239,8 @@ typedef struct synopsys_usb_state
 	USBLink link;
 	uint32_t link_reset_phase;
 	QEMUTimer *link_reset_timer;
+	QEMUTimer *endpoint_timer;
+	bool deferred_endpoints;
 
 	uint32_t pcgcctl;
 

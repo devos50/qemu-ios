@@ -9,6 +9,7 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/bswap.h"
+#include "qobject/qdict.h"
 #include "crypto/aes.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/machines-qom.h"
@@ -178,12 +179,41 @@ static bool it1g_load_first_stage(IPodTouch1GMachineState *nms, Error **errp)
                 return false;
             }
             image = unwrapped;
+            /* DFU iBSS is raw code in its 8900 envelope, unlike the NOR's Img2 LLB. */
+            if (size >= 4 && ldl_le_p(image) == 0xea00000e && size <= IT1G_SRAM_SIZE) {
+                physical_memory_write(IT1G_SRAM_MEM_BASE, image, size);
+                return true;
+            }
         }
-    } else if (!it1g_find_nor_image(memory_region_get_ram_ptr(sysbus_mmio_get_region(SYS_BUS_DEVICE(nms->nor), 0)),
-                                    IT1G_NOR_SIZE, IMG2_TYPE_LLB,
-                                    &image, &size)) {
-        error_setg(errp, "the NOR has no LLB image to boot");
-        return false;
+    } else {
+        const uint8_t *nor = memory_region_get_ram_ptr(
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(nms->nor), 0));
+        /* Restore installs LLB separately from the Img2 list: a format-1
+         * 8900 header at 0x8000, with raw code at 0x8800 encrypted by key 836.
+         * Its unused header area also holds the list superblock at 0x8400. */
+        const uint8_t *llb = nor + 0x8000;
+        if (ldl_le_p(llb) == S5L8900_8900_MAGIC) {
+            uint32_t len = ldl_le_p(llb + 0xc);
+            if (llb[7] != 1 || !len || len > IT1G_SRAM_SIZE ||
+                len > IT1G_NOR_SIZE - 0x8800) {
+                error_setg(errp, "invalid installed LLB in NOR");
+                return false;
+            }
+            static const uint8_t zero_iv[AES_BLOCK_SIZE];
+            uint8_t key836[16] = {
+                0x00, 0xe5, 0xa0, 0xe6, 0x52, 0x6f, 0xae, 0x66,
+                0xc5, 0xc1, 0xc6, 0xd4, 0xf1, 0x6d, 0x61, 0x80,
+            };
+            s5l8900_aes_cbc(key_uid, zero_iv, key836, sizeof(key836), true);
+            g_autofree uint8_t *data = g_memdup2(llb + 0x800, len);
+            s5l8900_aes_cbc(key836, zero_iv, data, len, false);
+            physical_memory_write(IT1G_SRAM_MEM_BASE, data, len);
+            return true;
+        }
+        if (!it1g_find_nor_image(nor, IT1G_NOR_SIZE, IMG2_TYPE_LLB, &image, &size)) {
+            error_setg(errp, "the NOR has no LLB image to boot");
+            return false;
+        }
     }
 
     if (size < IMG2_HEADER_SIZE || ldl_le_p(image) != IMG2_IMAGE_MAGIC) {
@@ -315,19 +345,24 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
     allocate_ram(sysmem, "sram", IT1G_SRAM_MEM_BASE, IT1G_SRAM_SIZE);
 
     /*
-     * The NOR: 1 MB of SST CFI flash on a 16-bit bus, which LLB identifies by its JEDEC IDs. Read-only for now: the
-     * boot stages only read it.
+     * The NOR: 1 MB of SST CFI flash on a 16-bit bus, which LLB identifies by its JEDEC IDs.
+     * Restore and NVRAM writes persist through the flash backend.
      */
     if (!nms->nor_path) {
         error_report("the iPod touch 1G needs a NOR image (nor=)");
         exit(1);
     }
     Error *err = NULL;
-    BlockBackend *blk = blk_new_open(nms->nor_path, NULL, NULL, 0, &err);
+    QDict *nor_options = qdict_new();
+    qdict_put_str(nor_options, "driver", "raw");
+    BlockBackend *blk = blk_new_open(nms->nor_path, NULL, nor_options, BDRV_O_RDWR, &err);
     if (!blk) {
         error_reportf_err(err, "nor: ");
         exit(1);
     }
+    /* NOR programs one word at a time. Avoid an fdatasync for each word;
+     * the block backend is flushed when QEMU closes it. */
+    blk_set_enable_write_cache(blk, true);
     if (blk_getlength(blk) != IT1G_NOR_SIZE) {
         error_report("nor: %s isn't a %d byte NOR image", nms->nor_path, IT1G_NOR_SIZE);
         exit(1);
@@ -398,6 +433,7 @@ static void it1g_machine_init(MachineState *machine)
     uint32_t usb_hwcfg[] = { 0, 0x7a8f60d0, 0x082000e8, 0x01f08024 };
     dev = ipod_touch_init_usb_otg(s5l8900_get_irq(nms, S5L8900_USB_OTG_IRQ), usb_hwcfg);
     qdev_prop_set_bit(dev, "cable-connected", nms->usb_chardev != NULL);
+    qdev_prop_set_bit(dev, "deferred-endpoints", true);
     if (nms->usb_chardev) {
         Chardev *chr = qemu_chr_find(nms->usb_chardev);
         if (!chr) {
@@ -447,12 +483,15 @@ static void it1g_machine_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, IT1G_CHIPID_MEM_BASE);
 
     // the same SHA-1 and AES engines as the S5L8720's; the AES engine differs in two details (see its properties)
-    sysbus_create_simple(TYPE_S5L_SHA1, IT1G_SHA1_MEM_BASE, NULL);
+    sysbus_create_simple(TYPE_S5L_SHA1, IT1G_SHA1_MEM_BASE,
+                         s5l8900_get_irq(nms, S5L8900_SHA1_IRQ));
     dev = qdev_new(TYPE_IPOD_TOUCH_AES);
     qdev_prop_set_uint32(dev, "dma-mask", 0x7fffffff);
     qdev_prop_set_bit(dev, "big-endian-words", true);
+    qdev_prop_set_bit(dev, "gid-key-837", true);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     memory_region_add_subregion(sysmem, IT1G_AES_MEM_BASE, &IPOD_TOUCH_AES(dev)->iomem);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, s5l8900_get_irq(nms, S5L8900_AES_IRQ));
 
     dev = qdev_new(TYPE_S5L_TIMER);
     qdev_prop_set_uint32(dev, "irqstat-offset", 0x10000);
@@ -701,7 +740,7 @@ static void it1g_instance_init(Object *obj)
     object_property_add_str(obj, "nor", it1g_get_nor, it1g_set_nor);
     object_property_set_description(obj, "nor", "Path to the S5L8900 NOR image");
     object_property_add_str(obj, "boot-image", it1g_get_boot_image, it1g_set_boot_image);
-    object_property_set_description(obj, "boot-image", "Img2 image (or its 8900 container) to start instead of LLB "
+    object_property_set_description(obj, "boot-image", "Img2 or 8900 iBSS image to start instead of LLB "
                                     "from the NOR");
     object_property_add_str(obj, "bootrom", it1g_get_bootrom, it1g_set_bootrom);
     object_property_set_description(obj, "bootrom", "Not supported on the iPod touch 1G yet");

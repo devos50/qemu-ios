@@ -7,7 +7,7 @@ iPhone OS firmware:
 - ``iPod-Touch-2G``: the iPod touch (2nd generation), ``n72ap``, S5L8720. ``iPod-Touch`` is an alias, the
   machine's name before there was more than one.
 - ``iPod-Touch-1G``: the experimental iPod touch (1st generation), ``n45ap``, S5L8900.
-  Boots 1.1.5 from a hand-built disk/NOR with a build-specific USB notifier repair; restore is not supported yet.
+  Restores and boots 1.1.5 with a build-specific USB notifier repair supplied by the host pipeline.
 
 The device models of the SoC blocks the S5L chips share are in ``hw/arm/s5l_*.c`` (``CONFIG_S5L``); the
 external parts both boards use (the LIS302DL accelerometer) are named after the part. Everything else is the
@@ -22,7 +22,8 @@ machine. A machine that can't do one of these yet refuses it with an error, inst
 Options (``-M <machine>,<option>=<value>,...``):
 
 ``nor=<file>``
-  The NOR image: the boot stages (LLB, iBoot, the device tree, the boot logos) and the SysCfg.
+  The writable NOR image: the boot stages (LLB, iBoot, the device tree, the boot logos), SysCfg and NVRAM.
+  The 1G uses SST parallel flash; erase/program operations persist to the image.
 
 ``nand-disk=<file>``, ``nand-overlay=<dir>``, ``nand-epoch=<n>``
   The NAND, presented as a freshly formatted NAND holding ``nand-disk`` (a raw disk image, as the restore
@@ -46,7 +47,8 @@ Options (``-M <machine>,<option>=<value>,...``):
 
 ``boot-image=<file>``
   An image to start instead of LLB from the NOR, such as the iBSS of an IPSW, for a restore. Not with
-  ``bootrom``.
+  ``bootrom``. On the 1G this accepts an Img2 LLB or an 8900-wrapped raw iBSS. Normal boot accepts both the
+  installed format-1 8900 LLB at NOR offset 0x8000 and the older hand-built Img2-list layout.
 
 ``boot-args=<string>``
   The kernel boot arguments iBoot passes on a normal boot. Commas are doubled (``,,``) to escape them.

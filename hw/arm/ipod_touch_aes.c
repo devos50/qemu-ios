@@ -474,7 +474,19 @@ static void ipod_touch_aes_start(IPodTouchAESState *s)
         uint8_t *in = g_malloc(s->size);
         uint8_t *out = g_malloc0(s->size);
         physical_memory_read(s->in_addr & s->dma_mask, in, s->size);
-        if(encrypt || !ipod_touch_aes_gid_decrypt(in, out, s->size)) {
+        static const uint8_t seed837[16] = {
+            0x34, 0x5a, 0x2d, 0x6c, 0x50, 0x50, 0xd0, 0x58,
+            0x78, 0x0d, 0xa4, 0x31, 0xf0, 0x71, 0x0e, 0x15,
+        };
+        static const uint8_t key837[16] = {
+            0x18, 0x84, 0x58, 0xa6, 0xd1, 0x50, 0x34, 0xdf,
+            0xe3, 0x86, 0xf2, 0x3b, 0x61, 0xd4, 0x37, 0x74,
+        };
+        static const uint8_t zero_iv[16];
+        if (s->gid_key_837 && encrypt && key_bits == 128 && s->size == 16 &&
+            memcmp(in, seed837, 16) == 0 && memcmp(s->ivec, zero_iv, 16) == 0) {
+            memcpy(out, key837, 16);
+        } else if(encrypt || !ipod_touch_aes_gid_decrypt(in, out, s->size)) {
             qemu_log_mask(LOG_UNIMP, "%s: no known GID %s result for this input (size %d)\n", __func__,
                           encrypt ? "encryption" : "decryption", s->size);
         }
@@ -630,6 +642,7 @@ static const VMStateDescription vmstate_ipod_touch_aes = {
 static const Property ipod_touch_aes_properties[] = {
     DEFINE_PROP_UINT32("dma-mask", IPodTouchAESState, dma_mask, 0xffffffff),
     DEFINE_PROP_BOOL("big-endian-words", IPodTouchAESState, big_endian_words, false),
+    DEFINE_PROP_BOOL("gid-key-837", IPodTouchAESState, gid_key_837, false),
 };
 
 static void ipod_touch_aes_class_init(ObjectClass *klass, const void *data)

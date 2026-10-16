@@ -518,6 +518,16 @@ static void pflash_write(void *opaque, hwaddr offset, uint64_t value,
             goto reset_flash;
         }
         switch (cmd) {
+        case 0x98:
+            /* SST39VF800: CFI query after AA/55 at the unlock addresses.
+             * The S5L8900 kernel uses this sequence rather than a single
+             * query command at word address 0x55. */
+            if (pfl->ident0 == 0x00bf && pfl->ident1 == 0x273f) {
+                pfl->wcycle = WCYCLE_CFI;
+                pfl->cmd = cmd;
+                return;
+            }
+            goto reset_flash;
         case 0x20:
             pfl->bypass = 1;
             goto do_bypass;

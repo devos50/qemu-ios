@@ -233,7 +233,26 @@ static void synopsys_usb_service_all(synopsys_usb_state *_state)
 
 static void synopsys_usb_link_kick(void *_opaque)
 {
-	synopsys_usb_service_all(_opaque);
+	synopsys_usb_state *s = _opaque;
+	if (!s->deferred_endpoints || !timer_pending(s->endpoint_timer)) {
+		synopsys_usb_service_all(s);
+	}
+}
+
+static void synopsys_usb_endpoint_timer(void *opaque)
+{
+	synopsys_usb_service_all(opaque);
+}
+
+static void synopsys_usb_arm_service(synopsys_usb_state *s, bool in, uint8_t ep)
+{
+	if (s->deferred_endpoints) {
+		/* DMA cannot complete inside the register write that arms it. The
+		 * 1.x driver clears the previous interrupt just after enabling DMA. */
+		timer_mod(s->endpoint_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10000);
+	} else {
+		synopsys_usb_service(s, in, ep);
+	}
 }
 
 // A bus reset first raises USBRST and, once the guest acknowledges that,
@@ -331,7 +350,7 @@ static void synopsys_usb_update_in_ep(synopsys_usb_state *_state, uint8_t _ep)
 	if(eps->control & USB_EPCON_ENABLE)
 		trace_s5l_usb_otg_ep_enable("in", _ep, eps->tx_size, eps->dma_address);
 
-	synopsys_usb_service(_state, true, _ep);
+	synopsys_usb_arm_service(_state, true, _ep);
 }
 
 static void synopsys_usb_update_out_ep(synopsys_usb_state *_state, uint8_t _ep)
@@ -347,7 +366,7 @@ static void synopsys_usb_update_out_ep(synopsys_usb_state *_state, uint8_t _ep)
 			synopsys_usb_link_reset_done(_state, USB_LINK_OK);
 	}
 
-	synopsys_usb_service(_state, false, _ep);
+	synopsys_usb_arm_service(_state, false, _ep);
 }
 
 static uint32_t synopsys_usb_in_ep_read(synopsys_usb_state *_state, uint8_t _ep, hwaddr _addr)
@@ -824,12 +843,14 @@ static void s5l_usb_otg_realize(DeviceState *dev, Error **errp)
 	synopsys_usb_state *s = S5L_USB_OTG(dev);
 
 	s->link_reset_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, synopsys_usb_link_reset_timeout, s);
+	s->endpoint_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, synopsys_usb_endpoint_timer, s);
 	usb_link_init(&s->link, USB_NUM_ENDPOINTS, &synopsys_usb_link_ops, s);
 }
 
 static const Property s5l_usb_otg_properties[] = {
 	DEFINE_PROP_CHR("chardev", synopsys_usb_state, link.chr),
 	DEFINE_PROP_BOOL("cable-connected", synopsys_usb_state, cable_connected, false),
+	DEFINE_PROP_BOOL("deferred-endpoints", synopsys_usb_state, deferred_endpoints, false),
 };
 
 static void s5l_usb_otg_init1(Object *obj)
