@@ -23,8 +23,10 @@ typedef struct S5LUSBPhysState {
     uint32_t usb_ophyclk;
     uint32_t usb_orstcon;
     uint32_t usb_unknown1;
+    uint32_t control_offset;
     uint32_t usb_ophytune;
     bool cable_connected;
+    qemu_irq link_reset;
 } S5LUSBPhysState;
 
 #endif

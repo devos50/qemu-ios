@@ -254,6 +254,7 @@ typedef struct synopsys_usb_state
 	uint32_t gnptxfsiz;
 
 	uint32_t gotgctl;
+	bool cable_connected;
 	uint32_t gotgint;
 	uint32_t grstctl;
 	uint32_t gintmsk;

@@ -1,10 +1,15 @@
 #include "hw/arm/s5l_usb_phys.h"
 #include "migration/vmstate.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 
 static uint64_t s5l_usb_phys_read(void *opaque, hwaddr addr, unsigned size)
 {
     S5LUSBPhysState *s = (S5LUSBPhysState *) opaque;
 
+    if (addr == s->control_offset) {
+        return s->usb_unknown1;
+    }
     switch(addr)
     {
     case REG_OPHYPWR:
@@ -13,8 +18,6 @@ static uint64_t s5l_usb_phys_read(void *opaque, hwaddr addr, unsigned size)
         return s->usb_ophyclk;
     case REG_ORSTCON:
         return s->usb_orstcon;
-    case REG_UNKNOWN1:
-        return s->usb_unknown1;
     case REG_OPHYTUNE:
         return s->usb_ophytune;
     case REG_CABLE:
@@ -30,6 +33,10 @@ static void s5l_usb_phys_write(void *opaque, hwaddr addr, uint64_t val, unsigned
 {
     S5LUSBPhysState *s = (S5LUSBPhysState *) opaque;
 
+    if (addr == s->control_offset) {
+        s->usb_unknown1 = val;
+        return;
+    }
     switch(addr)
     {
     case REG_OPHYPWR:
@@ -40,9 +47,8 @@ static void s5l_usb_phys_write(void *opaque, hwaddr addr, uint64_t val, unsigned
         return;
     case REG_ORSTCON:
         s->usb_orstcon = val;
-        return;
-    case REG_UNKNOWN1:
-        s->usb_unknown1 = val;
+        /* ORSTCON: bit 1 resets the link, bit 2 resets PHY and link. */
+        qemu_set_irq(s->link_reset, (val & 6) != 0);
         return;
     case REG_OPHYTUNE:
         s->usb_ophytune = val;
@@ -67,6 +73,7 @@ static void s5l_usb_phys_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &s5l_usb_phys_ops, s, TYPE_S5L_USB_PHYS, 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->link_reset, "link-reset", 1);
 }
 
 static const VMStateDescription vmstate_s5l_usb_phys = {
@@ -83,11 +90,16 @@ static const VMStateDescription vmstate_s5l_usb_phys = {
     }
 };
 
+static const Property s5l_usb_phys_properties[] = {
+    DEFINE_PROP_UINT32("control-offset", S5LUSBPhysState, control_offset, REG_UNKNOWN1),
+};
+
 static void s5l_usb_phys_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_s5l_usb_phys;
+    device_class_set_props(dc, s5l_usb_phys_properties);
 }
 
 static const TypeInfo s5l_usb_phys_type_info = {

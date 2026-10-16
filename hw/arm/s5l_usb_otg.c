@@ -189,6 +189,10 @@ static bool synopsys_usb_service_ep(synopsys_usb_state *_state, bool _is_in, uin
 		_state->in_eps[_ep].control &= ~USB_EPCON_STALL;
 
 		synopsys_usb_ep_dma(_state, eps, req->data, 8, true);
+		/* 1.1.x derives the received SETUP length from DOEPTSIZ. */
+		uint32_t size = eps->tx_size & DEPTSIZ_XFERSIZ_MASK;
+		uint32_t packets = (eps->tx_size >> DEPTSIZ_PKTCNT_SHIFT) & DEPTSIZ_PKTCNT_MASK;
+		synopsys_usb_ep_update_tsiz(eps, size >= 8 ? size - 8 : 0, packets ? packets - 1 : 0);
 		eps->interrupt_status |= USB_EPINT_SetUp;
 		synopsys_usb_update_irq(_state);
 		req->actual = 8;
@@ -275,7 +279,10 @@ static void synopsys_usb_link_reset_step(synopsys_usb_state *_state)
 		_state->gintsts |= GINTMSK_ENUMDONE;
 		synopsys_usb_update_irq(_state);
 	}
-	else if(_state->link_reset_phase == USB_LINK_RESET_ENUMERATED && !(_state->gintsts & GINTMSK_ENUMDONE))
+	/* The 1.1.x device driver leaves ENUMDONE masked. Its acknowledgement
+	 * cannot be a prerequisite for the host's reset recovery interval. */
+	if(_state->link_reset_phase == USB_LINK_RESET_ENUMERATED &&
+		(!(_state->gintsts & GINTMSK_ENUMDONE) || !(_state->gintmsk & GINTMSK_ENUMDONE)))
 	{
 		_state->link_reset_phase = USB_LINK_RESET_RECOVERY;
 		timer_mod(_state->link_reset_timer,
@@ -432,7 +439,8 @@ static uint64_t synopsys_usb_read_reg(synopsys_usb_state *state, hwaddr _addr)
 		return state->pcgcctl;
 
 	case GOTGCTL:
-		return state->gotgctl;
+		/* B-session valid is a PHY input, not a software-controlled bit. */
+		return state->gotgctl | (state->cable_connected ? (1U << 19) : 0);
 
 	case GOTGINT:
 		return state->gotgint;
@@ -800,6 +808,17 @@ static void s5l_usb_otg_reset(DeviceState *d)
 	synopsys_usb_update_irq(state);
 }
 
+/* A PHY link reset also resets the power/clock gate left by the bootloader. */
+static void s5l_usb_otg_link_reset(void *opaque, int n, int level)
+{
+    if (level) {
+        synopsys_usb_state *s = opaque;
+        s5l_usb_otg_reset(DEVICE(s));
+        s->pcgcctl = 0;
+        synopsys_usb_update_irq(s);
+    }
+}
+
 static void s5l_usb_otg_realize(DeviceState *dev, Error **errp)
 {
 	synopsys_usb_state *s = S5L_USB_OTG(dev);
@@ -810,6 +829,7 @@ static void s5l_usb_otg_realize(DeviceState *dev, Error **errp)
 
 static const Property s5l_usb_otg_properties[] = {
 	DEFINE_PROP_CHR("chardev", synopsys_usb_state, link.chr),
+	DEFINE_PROP_BOOL("cable-connected", synopsys_usb_state, cable_connected, false),
 };
 
 static void s5l_usb_otg_init1(Object *obj)
@@ -820,6 +840,7 @@ static void s5l_usb_otg_init1(Object *obj)
     memory_region_init_io(&s->iomem, OBJECT(s), &usb_otg_ops, s, "usb_otg", 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
+    qdev_init_gpio_in_named(DEVICE(obj), s5l_usb_otg_link_reset, "link-reset", 1);
 }
 
 // Helper for adding to a machine
