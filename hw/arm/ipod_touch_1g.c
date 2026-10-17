@@ -669,13 +669,15 @@ static void it1g_machine_init(MachineState *machine)
     qdev_connect_gpio_out(dev, 0, qdev_get_gpio_in(nms->sysic, IT1G_GPIO_LIGHTSENSOR_IRQ));
     /*
      * The PMU is a PCF50635, with its backlight in the LED registers. ApplePCF50635PMUBacklight maps its brightness
-     * (0-127) to LEDOUT through a table that ends at 0x2e, which is full brightness here.
+     * (0-127) to LEDOUT through a table that ends at 0x2e, which is full brightness here. Its clock is in BCD
+     * registers, which the 1.1.5 kernel reads from 0x59 (the D1759's counter would read as 2003).
      */
     dev = DEVICE(i2c_slave_new("pcf50633", 0x73));
     PCF50633(dev)->usb_present = nms->usb_chardev != NULL;
     qdev_prop_set_uint8(dev, "backlight-level-reg", 0x28);
     qdev_prop_set_uint8(dev, "backlight-ctrl-reg", 0x29);
     qdev_prop_set_uint8(dev, "backlight-level-max", 0x2e);
+    qdev_prop_set_bit(dev, "rtc-bcd", true);
     i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c[1]->bus, &error_fatal);
     qdev_connect_gpio_out_named(dev, "backlight", 0, qdev_get_gpio_in_named(lcd, "backlight", 0));
 

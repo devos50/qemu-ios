@@ -29,6 +29,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(Pcf50633State, PCF50633)
 // counter plus an offset that the kernel keeps in scratch registers.
 #define PMU_RTC_COUNT 0x5C
 #define PMU_RTC_OFFSET 0x64
+// RTC of the iPod touch 1G's PCF50635 (rtc-bcd): BCD seconds, minutes, hours, weekday, day, month, year (from 2000)
+#define PMU_RTC_BCD 0x59
+#define PMU_RTC_BCD_LEN 7
 
 typedef struct Pcf50633State {
 	I2CSlave i2c;
@@ -37,6 +40,7 @@ typedef struct Pcf50633State {
 	bool usb_present;
 	uint32_t rtc_count;
 	uint8_t rtc_offset[4];
+	bool rtc_bcd;
 	uint8_t backlight_level;
 	uint8_t backlight_ctrl;
 	uint8_t backlight_level_reg;

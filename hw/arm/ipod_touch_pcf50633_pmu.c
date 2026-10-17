@@ -28,12 +28,41 @@ static int pcf50633_event(I2CSlave *i2c, enum i2c_event event)
     return 0;
 }
 
+static uint8_t to_bcd(int value)
+{
+    return ((value / 10) << 4) | (value % 10);
+}
+
+// A register of the BCD clock. Reading the seconds latches the time, so that a block read doesn't tear.
+static uint8_t pcf50633_rtc_bcd(Pcf50633State *s)
+{
+    struct tm tm;
+
+    if (s->cmd == PMU_RTC_BCD) {
+        qemu_get_timedate(&tm, 0);
+        s->rtc_count = mktimegm(&tm);
+    }
+    time_t t = s->rtc_count;
+    gmtime_r(&t, &tm);
+    switch (s->cmd - PMU_RTC_BCD) {
+    case 0: return to_bcd(tm.tm_sec);
+    case 1: return to_bcd(tm.tm_min);
+    case 2: return to_bcd(tm.tm_hour);
+    case 3: return tm.tm_wday;
+    case 4: return to_bcd(tm.tm_mday);
+    case 5: return to_bcd(tm.tm_mon + 1);
+    default: return to_bcd(tm.tm_year % 100);
+    }
+}
+
 static uint8_t pcf50633_recv(I2CSlave *i2c)
 {
     Pcf50633State *s = PCF50633(i2c);
     int res = 0;
 
-    if (s->cmd == s->backlight_level_reg) {
+    if (s->rtc_bcd && s->cmd >= PMU_RTC_BCD && s->cmd < PMU_RTC_BCD + PMU_RTC_BCD_LEN) {
+        res = pcf50633_rtc_bcd(s);
+    } else if (s->cmd == s->backlight_level_reg) {
         res = s->backlight_level;
     } else if (s->cmd == s->backlight_ctrl_reg) {
         res = s->backlight_ctrl;
@@ -119,7 +148,7 @@ static int pcf50633_post_load(void *opaque, int version_id)
     return 0;
 }
 
-// usb_present is board wiring. The RTC counter is reread from the QEMU RTC.
+// usb_present is board wiring. The RTC counter (or the latched BCD time) is reread from the QEMU RTC.
 static const VMStateDescription vmstate_pcf50633 = {
     .name = TYPE_PCF50633,
     .version_id = 1,
@@ -139,12 +168,14 @@ static const VMStateDescription vmstate_pcf50633 = {
 
 /*
  * Where the backlight is: the D1759's level and control registers by default. The iPod touch 1G's PCF50635 has its
- * level in LEDOUT (0x28) and switches it on with bit 0 of LEDENA (0x29).
+ * level in LEDOUT (0x28) and switches it on with bit 0 of LEDENA (0x29). rtc-bcd: the PCF50635's BCD clock registers
+ * (0x59-0x5f) instead of the D1759's seconds counter.
  */
 static const Property pcf50633_properties[] = {
     DEFINE_PROP_UINT8("backlight-level-reg", Pcf50633State, backlight_level_reg, PMU_BACKLIGHT_LEVEL),
     DEFINE_PROP_UINT8("backlight-ctrl-reg", Pcf50633State, backlight_ctrl_reg, PMU_BACKLIGHT_CTRL),
     DEFINE_PROP_UINT8("backlight-level-max", Pcf50633State, backlight_level_max, PMU_BACKLIGHT_LEVEL_MAX),
+    DEFINE_PROP_BOOL("rtc-bcd", Pcf50633State, rtc_bcd, false),
 };
 
 static void pcf50633_class_init(ObjectClass *klass, const void *data)
