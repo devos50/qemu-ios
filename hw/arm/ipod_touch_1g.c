@@ -21,6 +21,7 @@
 #include "system/physmem.h"
 #include "system/system.h"
 #include "system/reset.h"
+#include "migration/vmstate.h"
 #include "target/arm/cpregs.h"
 #include "ui/input.h"
 #include "standard-headers/linux/input-event-codes.h"
@@ -360,15 +361,18 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         error_reportf_err(err, "nor: ");
         exit(1);
     }
-    /* NOR programs one word at a time. Avoid an fdatasync for each word;
-     * the block backend is flushed when QEMU closes it. */
-    blk_set_enable_write_cache(blk, true);
     if (blk_getlength(blk) != IT1G_NOR_SIZE) {
         error_report("nor: %s isn't a %d byte NOR image", nms->nor_path, IT1G_NOR_SIZE);
         exit(1);
     }
     nms->nor = pflash_cfi02_register(IT1G_NOR_MEM_BASE, "nor", IT1G_NOR_SIZE, blk, 4096, 1, 2,
                                      0x00bf, 0x273f, 0, 0, 0x555, 0x2aa, 0);
+    /*
+     * The flash device wraps the image's node in a backend of its own (with the write cache on, so programming a
+     * word doesn't fdatasync), because qdev can't refer to an anonymous one. Drop this one: holding write
+     * permission without a device, it would make a suspend fail when the migration inactivates the images.
+     */
+    blk_unref(blk);
 
     // the blocks without a model yet
     static const struct { const char *name; hwaddr base; uint64_t size; } unimp_regions[] = {
@@ -385,6 +389,17 @@ static void it1g_memory_setup(IPodTouch1GMachineState *nms, MemoryRegion *sysmem
         create_unimplemented_device(unimp_regions[i].name, unimp_regions[i].base, unimp_regions[i].size);
     }
 }
+
+// The machine's own state: the cp15 register the CPU model lacks
+static const VMStateDescription vmstate_it1g_machine = {
+    .name = "ipodtouch1g.machine",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(periph_port_remap, IPodTouch1GMachineState),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static void it1g_machine_init(MachineState *machine)
 {
@@ -675,6 +690,7 @@ static void it1g_machine_init(MachineState *machine)
     gpio_set_on(nms->gpio_state->gpio_state, IT1G_GPIO_HP_DETECT);
 
     qemu_register_reset(it1g_cpu_reset, nms);
+    vmstate_register(NULL, 0, &vmstate_it1g_machine, nms);
 
     qemu_input_handler_activate(qemu_input_handler_register(nms->sysic, &it1g_key_handler));
     qemu_input_handler_activate(qemu_input_handler_register(DEVICE(nms->mt), &it1g_touch_handler));
